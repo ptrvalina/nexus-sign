@@ -27,7 +27,7 @@
     "seal-credential-baseline": "node dist/cli/sealCredentialBaseline.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "express": "^5.2.1",
     "pg": "^8.12.0",
     "ioredis": "^5.4.1",
     "zod": "^3.23.8",
@@ -39,7 +39,7 @@
     "prom-client": "^15.1.3"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.5.0",
     "@types/pg": "^8.11.6",
     "typescript": "^5.5.4"
