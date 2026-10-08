@@ -2,7 +2,7 @@
 
 # Build stage: compiles TypeScript and the native PKCS#11 binding (pkcs11js),
 # which needs a C++ toolchain. The toolchain never reaches the runtime image.
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
 # A reviewed lockfile is required: the build installs exactly what it pins and
@@ -13,7 +13,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 ENV NODE_ENV=production
 # HSM calls run on libuv worker threads, shared with DNS, file and scrypt
 # work; keep more threads than HSM_SESSION_POOL_SIZE.
