@@ -1,0 +1,22 @@
+{
+  "protocol_version": "1",
+  "domain": "NEXUS-SIGN/TRANSACTION-AUTH",
+  "authorization_id": "00000000-0000-4000-8000-000000000001",
+  "nexus_id": "123456789",
+  "credential_id": "00000000-0000-4000-8000-000000000002",
+  "transaction_reference": "BANK-2026-000001",
+  "operation_type": "transfer",
+  "amount_minor": "125000",
+  "currency": "EUR",
+  "beneficiary": {
+    "account": "DE89370400440532013000",
+    "name": "Example GmbH"
+  },
+  "policy_reference": "TRANSFER-DEFAULT",
+  "policy_version": "2026-09",
+  "issued_at": "2026-09-26T10:00:00.000Z",
+  "expires_at": "2026-09-26T10:02:00.000Z",
+  "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+  "_canonical_utf8_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiYWNjb3VudCI6IkRFODkzNzA0MDA0NDA1MzIwMTMwMDAiLCJuYW1lIjoiRXhhbXBsZSBHbWJIIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IkVVUiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI2LTAwMDAwMSJ9",
+  "_canonical_sha256": "c85409d1fb84f2328593568d90e53008be2c0db0235e0770ecf8f3e616feaef8"
+}

@@ -1,0 +1,1169 @@
+openapi: 3.0.3
+info:
+  title: NEXUS-SIGN Auth Core API
+  version: 2.0.0-rc.2
+  description: |
+    Bank integration API for cryptographic transaction authorization, adaptive
+    verification and independently verifiable evidence.
+
+    **Callers**
+    - *Bank backend*: OAuth 2.0 client credentials (`bankAuth`) through the
+      bank's mTLS gateway.
+    - *Embedded SDK* (`/v1/mobile/*`, recovery completion): an enrolled device
+      signs every request with its hardware authentication key
+      (`deviceSignature`); enrolment and recovery completion use single-use
+      tokens (`bootstrapToken`, `recoveryToken`). Exempt from gateway mTLS
+      because a customer's phone holds no bank client certificate.
+
+    **Errors** use the `Error` schema. 400 = invalid request or business rule,
+    401 = missing/invalid credentials, 403 = not permitted, 404 = not found for
+    this caller, 409 = state conflict (including idempotency conflicts),
+    410 = expired, 429 = throttled. 5xx means Auth Core could not process the
+    request and it may be retried with the same Idempotency-Key.
+
+    **Webhooks** (bank endpoint, optional): `POST` with JSON body
+    `{eventId, eventType, ...}` and headers `X-NEXUS-SIGN-Event-Id`,
+    `X-NEXUS-SIGN-Timestamp` (unix seconds) and
+    `X-NEXUS-SIGN-Signature: v1=<hex HMAC-SHA256(webhookSecret, "<timestamp>.<raw body>")>`.
+    Event types: `authorization.bank_transaction.commit_requested`,
+    `.committed`, `.failed`, `.cancelled`, and for secure push
+    `push.delivered`, `push.failed`, `push.timeout`. Deliveries are retried
+    (1 s, 5 s, 30 s, 5 min, 30 min); deduplicate on `eventId`.
+
+    **Secure push** (bank clients in push mode `NEXUS`): Auth Core delivers
+    authorization requests and the bank's messages to the bank app through
+    APNs and FCM, sealed for the device (docs/protocol/secure-push.md).
+servers:
+  - url: https://nexus-sign.example-bank.internal
+security:
+  - bankAuth: []
+tags:
+  - { name: OAuth }
+  - { name: Identities }
+  - { name: Credentials }
+  - { name: Authorizations }
+  - { name: Adaptive verification }
+  - { name: Bank transaction }
+  - { name: Evidence }
+  - { name: Secure push }
+  - { name: Mobile SDK }
+  - { name: Recovery }
+  - { name: Operations }
+
+paths:
+  /oauth/token:
+    post:
+      tags: [OAuth]
+      security: []
+      summary: Issue a bank backend access token (RFC 6749 §4.4)
+      description: Credentials in the form body, a JSON body, or HTTP Basic authentication. Failed attempts are throttled per source address.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: '#/components/schemas/ClientCredentialsRequest' }
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientCredentialsRequest' }
+      responses:
+        '200':
+          description: Token issued
+          content: { application/json: { schema: { $ref: '#/components/schemas/TokenResponse' } } }
+        '400':
+          description: invalid_request or unsupported_grant_type
+          content: { application/json: { schema: { $ref: '#/components/schemas/OAuthError' } } }
+        '401':
+          description: invalid_client
+          content: { application/json: { schema: { $ref: '#/components/schemas/OAuthError' } } }
+        '429': { $ref: '#/components/responses/Throttled' }
+
+  /v1/nexus-identities:
+    post:
+      tags: [Identities]
+      summary: Create a stable NEXUS ID for a bank customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bankCustomerRef]
+              properties:
+                bankCustomerRef: { type: string, minLength: 1, maxLength: 128, description: The bank's own customer reference }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nexusId: { $ref: '#/components/schemas/NexusId' }
+                  status: { $ref: '#/components/schemas/IdentityStatus' }
+                  createdAt: { type: string, format: date-time }
+        '409': { $ref: '#/components/responses/Conflict' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/nexus-identities/{nexusId}:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Identities]
+      summary: Get an identity
+      responses:
+        '200':
+          description: Identity
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nexusId: { $ref: '#/components/schemas/NexusId' }
+                  bankCustomerRef: { type: string }
+                  status: { $ref: '#/components/schemas/IdentityStatus' }
+                  createdAt: { type: string, format: date-time }
+                  lastUsedAt: { type: string, format: date-time, nullable: true }
+                  evidenceHead: { allOf: [{ $ref: '#/components/schemas/ChainPosition' }], nullable: true, description: Latest record of the identity's evidence chain; store it to detect later truncation }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/nexus-identities/{nexusId}/evidence:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Evidence]
+      summary: Export the identity's evidence chain (oldest first)
+      description: |
+        Verify offline with `node scripts/verify-evidence.mjs --expect-head=SEQ:HASH`, where the
+        head is the last position the bank stored (returned with every confirmation). Pages with
+        `after` (a chainSequence) and `limit`. See docs/protocol/evidence-format.md.
+      parameters:
+        - { in: query, name: after, schema: { type: integer, minimum: 0 }, description: Return records with a greater chainSequence }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 1000 } }
+      responses:
+        '200':
+          description: Evidence chain
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nexusId: { $ref: '#/components/schemas/NexusId' }
+                  records: { type: array, items: { $ref: '#/components/schemas/EvidenceRecord' } }
+                  head: { allOf: [{ $ref: '#/components/schemas/ChainPosition' }], nullable: true }
+                  evidencePublicKeyPem: { type: string, description: Current sealing key }
+                  evidencePublicKeys: { type: array, items: { type: string }, description: Current and retired sealing keys (PEM); records name theirs by sealKeyId }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/credentials/{credentialId}:
+    parameters: [{ $ref: '#/components/parameters/CredentialId' }]
+    get:
+      tags: [Credentials]
+      summary: Get a credential
+      responses:
+        '200':
+          description: Credential
+          content: { application/json: { schema: { $ref: '#/components/schemas/Credential' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/credentials/{credentialId}/revoke:
+    parameters: [{ $ref: '#/components/parameters/CredentialId' }]
+    post:
+      tags: [Credentials]
+      summary: Revoke a credential
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Reason' } } }
+      responses:
+        '200': { description: Revoked }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/authorizations:
+    post:
+      tags: [Authorizations]
+      summary: Create a transaction authorization
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: Required unless REQUIRE_IDEMPOTENCY_KEY=false. A retry with the same key and body returns the original authorization with 200.
+          schema: { type: string, maxLength: 128 }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AuthorizationRequest' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/AuthorizationCreated' } } }
+        '200':
+          description: Idempotent replay of an earlier identical request
+          content: { application/json: { schema: { $ref: '#/components/schemas/AuthorizationCreated' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/push-messages:
+    post:
+      tags: [Secure push]
+      summary: Send a message to the customer's device (push mode NEXUS)
+      description: |
+        Sealed for the device's push key before it is stored, then delivered
+        through APNs or FCM. The outcome arrives as webhook push.delivered or
+        push.failed. A retry with the same messageReference returns the
+        original message with 200.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PushMessageRequest' } } }
+      responses:
+        '202':
+          description: Queued
+          content: { application/json: { schema: { $ref: '#/components/schemas/PushMessage' } } }
+        '200':
+          description: Replay of an earlier request with the same messageReference
+          content: { application/json: { schema: { $ref: '#/components/schemas/PushMessage' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/push-messages/{messageId}:
+    parameters: [{ $ref: '#/components/parameters/MessageId' }]
+    get:
+      tags: [Secure push]
+      summary: Delivery status of a push message
+      responses:
+        '200':
+          description: Message status (never its content)
+          content: { application/json: { schema: { $ref: '#/components/schemas/PushMessage' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/authorizations/{authorizationId}:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Authorizations]
+      summary: Get an authorization
+      responses:
+        '200':
+          description: Authorization
+          content: { application/json: { schema: { $ref: '#/components/schemas/Authorization' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/authorizations/{authorizationId}/signature:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Authorizations]
+      summary: Submit a device signature relayed by the bank backend
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SignatureRequest' } } }
+      responses:
+        '200':
+          description: Verification result
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
+        '410':
+          description: Authorization expired
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/authorizations/{authorizationId}/offline-challenge:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Offline confirmation]
+      summary: QR content for confirming a pending authorization without network on the phone
+      description: |
+        Show `qrPayload` as a QR code on a bank screen. The phone verifies the canonical bytes it
+        contains, shows the transaction, and after biometric confirmation displays an 8-digit code.
+        Requires OFFLINE_CONFIRMATION_ENABLED and a device enrolled with an offline key.
+      responses:
+        '200':
+          description: QR content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorizationId: { type: string, format: uuid }
+                  qrPayload: { type: string, description: 'NXS1. + base64url(canonical authorization bytes)' }
+                  codeDigits: { type: integer, example: 8 }
+                  expiresAt: { type: string, format: date-time }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/authorizations/{authorizationId}/offline-confirmation:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Offline confirmation]
+      summary: Submit the code the customer read from the phone
+      description: A wrong code counts towards the same five-attempt limit as a wrong signature. The evidence record is sealed with confirmationMethod OFFLINE_CODE.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, pattern: '^[0-9]{8}$' }
+      responses:
+        '200':
+          description: Result
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
+        '410':
+          description: Authorization expired
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/authorizations/{authorizationId}/evidence:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Evidence]
+      summary: Export the sealed evidence of a VERIFIED authorization
+      responses:
+        '200':
+          description: Evidence record and the public key that verifies its seal
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/EvidenceRecord' }
+                  - type: object
+                    properties:
+                      evidencePublicKeyPem: { type: string }
+                      evidencePublicKeys: { type: array, items: { type: string } }
+                      credentialEnrolment: { allOf: [{ $ref: '#/components/schemas/EvidenceRecord' }], description: The sealed CREDENTIAL_ENROLLED record of the device key that signed }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/authorizations/{authorizationId}/verification-plan:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Adaptive verification]
+      summary: Get the verification plan
+      responses:
+        '200':
+          description: Plan
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationPlan' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/authorizations/{authorizationId}/verification/escalate:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Adaptive verification]
+      summary: Raise the required verification factor
+      description: Without requestedStep, the next enabled factor above the current requirement. A weaker or equal step is refused with 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [PUSH_NOT_DELIVERED, PUSH_TIMEOUT, HIGH_AMOUNT, RISK_POLICY, CLIENT_REQUEST, CHANNEL_FAILURE] }
+                requestedStep: { type: string, enum: [AUDIO, VIDEO] }
+      responses:
+        '200':
+          description: Updated plan
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationPlan' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/authorizations/{authorizationId}/verification-sessions:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Adaptive verification]
+      summary: Open an audio or video verification session for the current step
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/VerificationSessionRequest' } } }
+      responses:
+        '201':
+          description: Session opened; pass sessionId and nonce to the verification provider
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationSession' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/authorizations/{authorizationId}/verification-sessions/{sessionId}/complete:
+    parameters:
+      - { $ref: '#/components/parameters/AuthorizationId' }
+      - { in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Adaptive verification]
+      summary: Record the provider's result (bank verification gateway, mTLS)
+      description: A failed AUDIO check escalates to VIDEO when enabled; a failed final factor fails the plan and rejects the authorization. The assertion is stored as a SHA-256 hash in the evidence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionNonce, result, providerReference, assertion]
+              properties:
+                sessionNonce: { type: string, minLength: 20, maxLength: 128 }
+                result: { type: string, enum: [VERIFIED, FAILED] }
+                providerReference: { type: string, minLength: 1, maxLength: 128 }
+                assertion: { type: string, minLength: 1, maxLength: 4096, description: Provider assertion as received (e.g. a signed JWS) }
+      responses:
+        '200':
+          description: Updated plan
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationPlan' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/authorizations/{authorizationId}/bank-commit-request:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Bank transaction]
+      summary: Record that the bank is committing the transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bankTransactionReference]
+              properties:
+                bankTransactionReference: { type: string, minLength: 1, maxLength: 128 }
+      description: |
+        Refused (409) unless the authorization is VERIFIED, the identity and the credential that
+        confirmed it are ACTIVE (`code` IDENTITY_NOT_ACTIVE / CREDENTIAL_NOT_ACTIVE), and the
+        confirmation is at most BANK_COMMIT_MAX_AGE_SECONDS old (`code` CONFIRMATION_TOO_OLD).
+      responses:
+        '202':
+          description: Commit requested (idempotent for the same reference)
+          content: { application/json: { schema: { $ref: '#/components/schemas/BankTransaction' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/authorizations/{authorizationId}/bank-commit-result:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Bank transaction]
+      summary: Record the core-banking outcome
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: { type: string, enum: [COMMITTED, FAILED, CANCELLED] }
+                error: { type: string, maxLength: 256 }
+      responses:
+        '200':
+          description: Recorded (idempotent for the same state)
+          content: { application/json: { schema: { $ref: '#/components/schemas/BankTransaction' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/authorizations/{authorizationId}/bank-transaction:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Bank transaction]
+      summary: Current bank transaction state, for reconciliation
+      responses:
+        '200':
+          description: State
+          content: { application/json: { schema: { $ref: '#/components/schemas/BankTransaction' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/sessions:
+    post:
+      tags: [Mobile SDK]
+      summary: Issue a customer-scoped token for the embedded SDK (bank backend)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nexusId]
+              properties:
+                nexusId: { $ref: '#/components/schemas/NexusId' }
+                purpose:
+                  type: string
+                  enum: [BOOTSTRAP]
+                  default: BOOTSTRAP
+                  description: BOOTSTRAP (300 s, single use) enrols a device. Enrolled devices sign their requests and need no token; any other value is refused with 400.
+                replacement:
+                  type: object
+                  description: |
+                    Required for a BOOTSTRAP token when the customer already has an enrolled device:
+                    how the bank re-identified the customer, and its case reference. Without it the
+                    request is refused with 409 and `code` ACTIVE_CREDENTIAL_EXISTS. The enrolment that
+                    uses the token revokes the previous device, notifies it (secure push) and sends the
+                    `credential.replaced` webhook.
+                  required: [method, reference]
+                  properties:
+                    method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
+                    reference: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '201':
+          description: Token issued
+          content: { application/json: { schema: { $ref: '#/components/schemas/MobileToken' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/bootstrap:
+    post:
+      tags: [Mobile SDK]
+      security: [{ bootstrapToken: [] }]
+      summary: Enrol the device keys with attestation (BOOTSTRAP token)
+      description: |
+        The token is consumed. A BOOTSTRAP token issued with `replacement` replaces the previous
+        credential of the NEXUS ID; one issued without it enrols only an identity with no device.
+        `authPublicKeyPem` is required: the device signs every later request with it
+        (`deviceSignature` scheme) and receives no token. With `offlinePublicKeyPem` (and
+        OFFLINE_CONFIRMATION_ENABLED) the response carries the server half of the offline key
+        agreement. The attestation covers all keys (docs/security/attestation.md).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/CredentialRequest' }
+                - { $ref: '#/components/schemas/DeviceKeys' }
+                - type: object
+                  required: [authPublicKeyPem]
+                  properties:
+                    deviceAttestation: { type: object, additionalProperties: true, description: "App Attest (attestationObject, keyId), or Play Integrity (integrityToken) with Android Keystore attestation chains (keyAttestation: { signingKeyChain, authenticationKeyChain }, base64 DER, leaf first). platform and securityLevel are derived from verified attestation, not from the request." }
+      responses:
+        '201':
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nexusId: { $ref: '#/components/schemas/NexusId' }
+                  credentialId: { type: string, format: uuid }
+                  credentialState: { type: string, enum: [ACTIVE] }
+                  keyAlgorithm: { type: string, enum: [ES256] }
+                  keyVersion: { type: integer }
+                  attestationStatus: { type: string, enum: [UNKNOWN, VERIFIED, FAILED, EXPIRED] }
+                  requestAuthentication: { type: string, enum: [DEVICE_SIGNATURE] }
+                  offlineServerPublicKeyPem: { type: string, nullable: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/recovery/setup:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Recovery protocol 2 parameters for this device
+      responses:
+        '200':
+          description: Parameters, with the identity and credential the recovery key will be registered for
+          content: { application/json: { schema: { $ref: '#/components/schemas/RecoveryParameters' } } }
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Register a recovery key wrapped under the recovery phrase (recovery protocol 2)
+      description: |
+        The device generates a P-256 recovery key, wraps its private scalar with a key derived from
+        the phrase (PBKDF2 -> HKDF -> AES-256-GCM) and signs the registration with its biometric
+        signing key. Auth Core stores the public key and the wrapped key only, seals a
+        RECOVERY_CONFIGURED evidence record and sends the `recovery.configured` webhook.
+        Specification: docs/protocol/recovery-protocol-v2.md.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocol, salt, recoveryPublicKeyPem, wrappedRecoveryKey, signature]
+              properties:
+                protocol: { type: integer, enum: [2] }
+                salt: { type: string, description: base64 salt from GET (must be the issued one) }
+                recoveryPublicKeyPem: { type: string }
+                wrappedRecoveryKey: { type: string, description: "base64 iv(12) || AES-256-GCM ciphertext(32) || tag(16)" }
+                signature: { type: string, description: base64 DER ECDSA by the device signing key over the RECOVERY-SETUP/v2 input }
+      responses:
+        '204': { description: Stored }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/authorizations/{authorizationId}:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The authorization with the exact bytes to sign
+      responses:
+        '200':
+          description: Authorization. The SDK verifies every field against canonicalPayloadBase64 before display.
+          content: { application/json: { schema: { $ref: '#/components/schemas/MobileAuthorization' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/authorizations/{authorizationId}/verification-plan:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Verification plan
+      responses:
+        '200':
+          description: Plan
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationPlan' } } }
+
+  /v1/mobile/authorizations/{authorizationId}/verification/escalate:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer requests a stronger check
+      responses:
+        '200':
+          description: Updated plan
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationPlan' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/authorizations/{authorizationId}/verification-sessions:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Open an audio or video session from the device
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/VerificationSessionRequest' } } }
+      responses:
+        '201':
+          description: Session opened
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationSession' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/push-registration:
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Register or refresh this device's push token (push mode NEXUS)
+      description: |
+        With devicePublicKeyPem (an ephemeral P-256 key) a new push key is
+        agreed and serverPublicKeyPem is returned; queued messages sealed
+        under the previous key fail with PUSH_KEY_REPLACED. Without it only
+        the token is updated, and keyId must name the key Auth Core holds
+        (409 otherwise). APNs for iOS credentials, FCM for Android
+        credentials. 403 for a bank client in push mode BANK.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PushRegistrationRequest' } } }
+      responses:
+        '200':
+          description: Registered
+          content: { application/json: { schema: { $ref: '#/components/schemas/PushRegistration' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Stop push delivery to this device
+      responses:
+        '204': { description: Removed }
+
+  /v1/mobile/push-messages/{messageId}:
+    parameters: [{ $ref: '#/components/parameters/MessageId' }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The sealed envelope of a message for this device
+      responses:
+        '200':
+          description: Envelope, opened by the SDK with the device's push key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messageId: { type: string, format: uuid }
+                  status: { $ref: '#/components/schemas/PushStatus' }
+                  envelope: { $ref: '#/components/schemas/PushEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/push-receipts/{messageId}:
+    parameters: [{ $ref: '#/components/parameters/MessageId' }]
+    post:
+      tags: [Mobile SDK]
+      security: []
+      summary: Confirm that the device decrypted the message
+      description: |
+        Sent by the app or its notification extension, also while the phone
+        is locked. Authenticated by the receipt: base64url
+        HMAC-SHA256(push key, "NEXUS-SIGN/PUSH-RECEIPT/v1\n<messageId>\n<credentialId>").
+        Exempt from gateway mTLS like the other device routes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [credentialId, receipt]
+              properties:
+                credentialId: { type: string, format: uuid }
+                receipt: { type: string, pattern: '^[A-Za-z0-9_-]{43}$' }
+      responses:
+        '204': { description: Recorded (idempotent); the bank receives push.delivered once }
+        '404': { description: Unknown message or receipt that does not verify }
+
+  /v1/mobile/authorizations/{authorizationId}/signature:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Submit the device signature
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SignatureRequest' } } }
+      responses:
+        '200':
+          description: Verification result
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
+        '410':
+          description: Authorization expired
+          content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/recovery/sessions:
+    post:
+      tags: [Recovery]
+      summary: Open a recovery session after the bank has re-identified the customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bankCustomerRef]
+              properties:
+                bankCustomerRef: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '201':
+          description: Session; hand the whole response to the device unchanged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId: { type: string, format: uuid }
+                  nexusId: { $ref: '#/components/schemas/NexusId' }
+                  nonce: { type: string, description: base64, 32 bytes }
+                  accessToken: { type: string }
+                  parameters: { $ref: '#/components/schemas/RecoveryParameters' }
+                  recoveryPublicKeyPem: { type: string, description: The registered recovery public key }
+                  wrappedRecoveryKey: { type: string, description: base64; opened on the device with the phrase }
+                  expiresAt: { type: string, format: date-time }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Recovery not configured, or `code` RECOVERY_PROTOCOL_RETIRED, RECOVERY_LOCKED or RECOVERY_INTEGRITY (the stored recovery configuration does not match the identity's latest sealed record)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /v1/recovery/sessions/{sessionId}/complete:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Recovery]
+      security: [{ recoveryToken: [] }]
+      summary: Complete recovery from the device with the phrase proof and a new attested key
+      description: |
+        Five wrong proofs lock the session; ten failures within 24 hours lock recovery for the
+        identity (409, `code` RECOVERY_LOCKED, when the bank opens the next session). 409 `code`
+        RECOVERY_INTEGRITY when the stored recovery key does not match the identity's latest
+        sealed record. On success all credentials are revoked, open
+        authorizations cancelled, the new key registered and the `identity.recovered` webhook sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [proof, newPublicKeyPem, platform, securityLevel, authPublicKeyPem]
+              properties:
+                proof: { type: string, description: base64 DER ECDSA by the recovery key over the RECOVERY-PROOF/v2 input (session, nonce, identity and SHA-256 of the new signing key) }
+                newPublicKeyPem: { type: string }
+                platform: { type: string, enum: [IOS, ANDROID, OTHER] }
+                securityLevel: { type: string, maxLength: 32 }
+                authPublicKeyPem: { type: string }
+                offlinePublicKeyPem: { type: string }
+                deviceAttestation: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Recovered (includes offlineServerPublicKeyPem when an offline key was enrolled)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nexusId: { $ref: '#/components/schemas/NexusId' }
+                  credentialId: { type: string, format: uuid }
+                  keyVersion: { type: integer }
+                  requestAuthentication: { type: string, enum: [DEVICE_SIGNATURE] }
+                  offlineServerPublicKeyPem: { type: string, nullable: true }
+        '401': { description: Wrong proof or missing token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /healthz:
+    get:
+      tags: [Operations]
+      security: []
+      summary: Liveness
+      responses: { '200': { description: Process is up } }
+  /readyz:
+    get:
+      tags: [Operations]
+      security: []
+      summary: Readiness (PostgreSQL and Redis reachable)
+      responses: { '200': { description: Ready }, '503': { description: Not ready } }
+  /metrics:
+    get:
+      tags: [Operations]
+      security: []
+      summary: Prometheus metrics (gateway-restricted)
+      responses: { '200': { description: Metrics in Prometheus text format } }
+
+components:
+  securitySchemes:
+    bankAuth: { type: http, scheme: bearer, description: Access token from /oauth/token }
+    bootstrapToken: { type: http, scheme: bearer, description: Single-use BOOTSTRAP token from /v1/mobile/sessions (prefix ms_); only for /v1/mobile/bootstrap }
+    recoveryToken: { type: http, scheme: bearer, description: accessToken of a recovery session (prefix rc_) }
+    deviceSignature:
+      type: apiKey
+      in: header
+      name: X-NEXUS-Signature
+      description: |
+        Enrolled devices sign each request with their hardware authentication key instead of
+        sending a token. Headers X-NEXUS-Credential, X-NEXUS-Timestamp (unix seconds),
+        X-NEXUS-Nonce (16-64 base64url characters, single use) and X-NEXUS-Signature (base64 DER
+        ECDSA P-256/SHA-256) over the LF-joined lines NEXUS-SIGN/DEVICE-REQUEST/v1, METHOD, path
+        with query, timestamp, nonce, credential ID, hex SHA-256 of the body. See
+        docs/protocol/device-authentication-and-offline-confirmation.md.
+
+  parameters:
+    NexusId: { in: path, name: nexusId, required: true, schema: { $ref: '#/components/schemas/NexusId' } }
+    CredentialId: { in: path, name: credentialId, required: true, schema: { type: string, format: uuid } }
+    AuthorizationId: { in: path, name: authorizationId, required: true, schema: { type: string, format: uuid } }
+    MessageId: { in: path, name: messageId, required: true, schema: { type: string, format: uuid } }
+
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    BadRequest:
+      description: Invalid request or business-rule violation
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Not permitted
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Not found for this caller
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Conflicts with the current state
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Gone:
+      description: Expired
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Throttled:
+      description: Too many failed attempts
+      headers: { Retry-After: { schema: { type: integer } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string, description: "Machine-readable reason where callers branch on it, e.g. ACTIVE_CREDENTIAL_EXISTS, CREDENTIAL_NOT_ATTESTED, IDENTITY_NOT_ACTIVE, CREDENTIAL_NOT_ACTIVE, CONFIRMATION_TOO_OLD, RECOVERY_LOCKED, RECOVERY_PROTOCOL_RETIRED, RECOVERY_SETUP_EXPIRED, RECOVERY_INTEGRITY, APPROVAL_PENDING" }
+        details:
+          type: array
+          items: { type: object, properties: { path: { type: string }, message: { type: string } } }
+    OAuthError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, enum: [invalid_request, invalid_client, unsupported_grant_type] }
+        error_description: { type: string }
+    ClientCredentialsRequest:
+      type: object
+      required: [grant_type, client_id, client_secret]
+      properties:
+        grant_type: { type: string, enum: [client_credentials] }
+        client_id: { type: string }
+        client_secret: { type: string }
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer }
+    NexusId: { type: string, pattern: '^[0-9]{9}$' }
+    IdentityStatus: { type: string, enum: [ACTIVE, SUSPENDED, REVOKED] }
+    Reason:
+      type: object
+      required: [reason]
+      properties: { reason: { type: string, minLength: 1, maxLength: 256 } }
+    CredentialRequest:
+      type: object
+      required: [publicKeyPem, platform, securityLevel]
+      properties:
+        publicKeyPem: { type: string, description: ECDSA P-256 SubjectPublicKeyInfo (PEM), uncompressed point }
+        platform: { type: string, enum: [IOS, ANDROID, OTHER] }
+        securityLevel: { type: string, maxLength: 32, example: STRONGBOX }
+    Credential:
+      type: object
+      properties:
+        credentialId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        state: { type: string, enum: [ACTIVE, REVOKED] }
+        keyAlgorithm: { type: string, enum: [ES256] }
+        keyVersion: { type: integer }
+        attestationStatus: { type: string, enum: [UNKNOWN, VERIFIED, FAILED, EXPIRED] }
+        platform: { type: string, enum: [IOS, ANDROID, OTHER] }
+        securityLevel: { type: string }
+        offlineEnabled: { type: boolean, description: The device can confirm transactions with offline codes }
+        deviceSignedRequests: { type: boolean, description: The credential has a request authentication key. False only for credentials enrolled by SDKs before 1.2, which can no longer use the mobile API }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+    DeviceKeys:
+      type: object
+      properties:
+        authPublicKeyPem: { type: string, description: 'P-256 SPKI PEM; hardware key without user presence that signs device requests' }
+        offlinePublicKeyPem: { type: string, description: 'P-256 SPKI PEM; biometric-protected key-agreement key for offline confirmation' }
+    AuthorizationRequest:
+      type: object
+      required: [nexusId, credentialId, transactionReference, operationType, amountMinor, currency, beneficiary, policyReference, policyVersion]
+      properties:
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        credentialId: { type: string, format: uuid }
+        transactionReference: { type: string, minLength: 1, maxLength: 128, description: Unique per bank client }
+        operationType: { type: string, minLength: 1, maxLength: 32, example: transfer }
+        amountMinor: { type: string, pattern: '^(0|[1-9][0-9]{0,29})$', example: '125000' }
+        currency: { type: string, pattern: '^[A-Z]{3}$', example: PLN }
+        beneficiary:
+          type: object
+          maxProperties: 16
+          description: Keys match ^[a-z][a-z0-9_]{0,63}$; string values up to 512 characters.
+          additionalProperties: { type: string, maxLength: 512 }
+          example: { name: Jan Kowalski, iban: PL61109010140000071219812874 }
+        policyReference: { type: string, maxLength: 128 }
+        policyVersion: { type: string, maxLength: 64 }
+        verificationPolicy: { $ref: '#/components/schemas/VerificationPolicy' }
+        expiresInSeconds: { type: integer, minimum: 30, maximum: 900, default: 120 }
+        correlationId: { type: string, maxLength: 128 }
+        pushNotification:
+          type: object
+          description: Text of the secure push (push mode NEXUS); defaults to PUSH_AUTHORIZATION_TITLE / _BODY. The customer approves what the signed bytes show, not this text.
+          properties:
+            title: { type: string, minLength: 1, maxLength: 120 }
+            body: { type: string, maxLength: 600 }
+    VerificationPolicy:
+      type: object
+      properties:
+        requireAudio: { type: boolean }
+        requireVideo: { type: boolean }
+        highAmountThresholdMinor: { type: string, pattern: '^[0-9]{1,30}$', description: amountMinor at or above this requires AUDIO }
+        audioAvailable: { type: boolean, default: true, description: The bank operates audio verification (escalation target) }
+        videoAvailable: { type: boolean, default: true }
+        clientEscalationAllowed: { type: boolean, default: true }
+        pushTimeoutSeconds: { type: integer, minimum: 10, maximum: 300, default: 30, description: 'Push mode NEXUS: push.timeout is sent when the device has not confirmed receipt in time. Push mode BANK: informational for the bank''s push service, which escalates with PUSH_TIMEOUT' }
+    AuthorizationCreated:
+      type: object
+      properties:
+        authorizationId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        credentialId: { type: string, format: uuid }
+        transactionReference: { type: string }
+        canonicalPayloadHash: { type: string, description: lowercase hex SHA-256 of the canonical bytes }
+        issuedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        state: { $ref: '#/components/schemas/AuthorizationState' }
+        verificationPlan: { $ref: '#/components/schemas/VerificationPlan' }
+        push:
+          type: object
+          nullable: true
+          description: The secure push queued for this authorization (push mode NEXUS), otherwise null. FAILED with lastError NO_PUSH_REGISTRATION when the device has not registered for push.
+          properties:
+            messageId: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/PushStatus' }
+            lastError: { type: string, nullable: true }
+        protocolVersion: { type: string, enum: ['1'] }
+        domain: { type: string, enum: [NEXUS-SIGN/TRANSACTION-AUTH] }
+    PushStatus: { type: string, enum: [QUEUED, SENT, DELIVERED, FAILED, EXPIRED] }
+    PushMessageRequest:
+      type: object
+      required: [nexusId, category, title]
+      properties:
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        category: { type: string, enum: [INCOMING_PAYMENT, OUTGOING_PAYMENT, CARD_TRANSACTION, ACCOUNT, SECURITY, GENERAL] }
+        title: { type: string, minLength: 1, maxLength: 120, example: Incoming payment }
+        body: { type: string, maxLength: 600, example: '+ 1 200,00 PLN from Anna Nowak' }
+        data:
+          type: object
+          maxProperties: 16
+          description: Keys match ^[A-Za-z][A-Za-z0-9_]{0,31}$; string values up to 256 characters. Passed to the app with the decrypted message.
+          additionalProperties: { type: string, maxLength: 256 }
+        ttlSeconds: { type: integer, minimum: 60, maximum: 2419200, description: Capped by PUSH_MESSAGE_TTL_SECONDS }
+        messageReference: { type: string, maxLength: 128, description: The bank's ID for the message; unique per bank client }
+    PushMessage:
+      type: object
+      properties:
+        messageId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        category: { type: string }
+        authorizationId: { type: string, format: uuid, nullable: true }
+        messageReference: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/PushStatus' }
+        provider: { type: string, enum: [APNS, FCM], nullable: true }
+        retryCount: { type: integer }
+        lastError: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        sentAt: { type: string, format: date-time, nullable: true }
+        deliveredAt: { type: string, format: date-time, nullable: true, description: When the device confirmed it decrypted the message }
+        expiresAt: { type: string, format: date-time }
+    PushRegistrationRequest:
+      type: object
+      required: [provider, deviceToken]
+      properties:
+        provider: { type: string, enum: [APNS, FCM] }
+        deviceToken: { type: string, maxLength: 4096 }
+        apnsEnvironment: { type: string, enum: [PRODUCTION, DEVELOPMENT], description: Required for APNs }
+        devicePublicKeyPem: { type: string, description: Ephemeral P-256 SPKI PEM; agrees a new push key }
+        keyId: { type: string, pattern: '^[A-Za-z0-9_-]{22}$', description: 'Token refresh: ID of the push key the device holds; 409 if Auth Core holds another' }
+    PushRegistration:
+      type: object
+      properties:
+        status: { type: string, enum: [ACTIVE] }
+        provider: { type: string, enum: [APNS, FCM] }
+        serverPublicKeyPem: { type: string, nullable: true, description: Auth Core's half of the key agreement, when a key was agreed }
+        keyId: { type: string, description: 'base64url of the first 16 bytes of HMAC-SHA256(push key, "NEXUS-SIGN/PUSH-KEY-ID/v1")' }
+    PushEnvelope:
+      type: object
+      description: 'AES-256-GCM under the device push key; AAD "NEXUS-SIGN/PUSH/v1\n<id>\n<cid>"'
+      properties:
+        v: { type: integer, enum: [1] }
+        id: { type: string, format: uuid }
+        cid: { type: string, format: uuid, description: Credential ID }
+        iv: { type: string, description: base64url, 12 bytes }
+        ct: { type: string, description: base64url ciphertext followed by the 16-byte tag }
+    AuthorizationState: { type: string, enum: [PENDING_USER, VERIFIED, EXPIRED, REJECTED, CANCELLED] }
+    Authorization:
+      type: object
+      properties:
+        authorizationId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        credentialId: { type: string, format: uuid }
+        transactionReference: { type: string }
+        operationType: { type: string }
+        amountMinor: { type: string }
+        currency: { type: string }
+        beneficiary: { type: object, additionalProperties: { type: string } }
+        policyReference: { type: string }
+        policyVersion: { type: string }
+        canonicalPayloadHash: { type: string }
+        nonce: { type: string }
+        issuedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        state: { $ref: '#/components/schemas/AuthorizationState' }
+        signature: { type: string, nullable: true }
+        signatureAlgorithm: { type: string, enum: [ES256] }
+        signatureFormat: { type: string, enum: [der, raw], nullable: true }
+        verifiedAt: { type: string, format: date-time, nullable: true }
+        evidence: { allOf: [{ $ref: '#/components/schemas/ChainPosition' }], nullable: true, description: "VERIFIED only: the sealed record's chain position. Store it as the identity's chain head; compare canonicalPayloadHash with the value returned at creation before committing." }
+    MobileAuthorization:
+      allOf:
+        - { $ref: '#/components/schemas/Authorization' }
+        - type: object
+          properties:
+            canonicalPayloadBase64: { type: string, description: The exact bytes to sign (docs/protocol/authorization-protocol-v1.md) }
+    SignatureRequest:
+      type: object
+      required: [signature, signatureFormat]
+      properties:
+        signature: { type: string, description: base64 ECDSA P-256/SHA-256 signature over the canonical bytes }
+        signatureFormat: { type: string, enum: [der, raw] }
+    VerificationResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [VERIFIED, FAILED, EXPIRED] }
+        reason: { type: string, example: signature_verification_failed }
+        attempts: { type: integer, description: Invalid attempts so far (limit 5) }
+        evidence: { $ref: '#/components/schemas/ChainPosition' }
+    VerificationPlan:
+      type: object
+      properties:
+        authorizationId: { type: string, format: uuid }
+        policyVersion: { type: string }
+        requiredStep: { type: string, enum: [PUSH, AUDIO, VIDEO] }
+        currentStep: { type: string, enum: [PUSH, AUDIO, VIDEO] }
+        allowedSteps: { type: array, items: { type: string, enum: [PUSH, AUDIO, VIDEO] } }
+        audioEnabled: { type: boolean }
+        videoEnabled: { type: boolean }
+        pushTimeoutSeconds: { type: integer }
+        highAmountThresholdMinor: { type: string, nullable: true }
+        clientEscalationAllowed: { type: boolean }
+        status: { type: string, enum: [PENDING, IN_PROGRESS, VERIFIED, FAILED, EXPIRED, CANCELLED] }
+        lastEscalationReason: { type: string, nullable: true }
+    VerificationSessionRequest:
+      type: object
+      required: [channel]
+      properties: { channel: { type: string, enum: [AUDIO, VIDEO] } }
+    VerificationSession:
+      type: object
+      properties:
+        sessionId: { type: string, format: uuid }
+        nonce: { type: string }
+        expiresAt: { type: string, format: date-time }
+        channel: { type: string, enum: [AUDIO, VIDEO] }
+    BankTransaction:
+      type: object
+      properties:
+        authorizationId: { type: string, format: uuid }
+        authorizationState: { $ref: '#/components/schemas/AuthorizationState' }
+        bankTransactionState: { type: string, enum: [PENDING, COMMIT_REQUESTED, COMMITTED, FAILED, CANCELLED] }
+        bankTransactionReference: { type: string, nullable: true }
+        bankCommitAt: { type: string, format: date-time, nullable: true }
+        bankCommitError: { type: string, nullable: true }
+    EvidenceRecord:
+      type: object
+      properties:
+        evidenceId: { type: string, format: uuid }
+        authorizationId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        recordType: { type: string, enum: [AUTHORIZATION, CREDENTIAL_ENROLLED, RECOVERY_CONFIGURED] }
+        chainSequence: { type: integer, description: Position in the identity's chain, from 1 }
+        sealKeyId: { type: string, description: hex SHA-256 of the sealing key's SubjectPublicKeyInfo }
+        sealedPayload: { type: object, additionalProperties: true, description: "Schema version 3: record type, chain position and sealing key, and per type the device-signed bytes and signature, the enrolled keys with their attestation, or the recovery configuration. See docs/protocol/evidence-format.md." }
+        evidenceHash: { type: string, description: hex SHA-256 of the canonical JSON of sealedPayload }
+        previousEvidenceHash: { type: string, nullable: true }
+        hsmSignature: { type: string, description: base64 DER ECDSA P-256/SHA-256 over the 32 hash bytes }
+        hsmKeyVersion: { type: integer }
+        createdAt: { type: string, format: date-time }
+    MobileToken:
+      type: object
+      properties:
+        accessToken: { type: string }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        purpose: { type: string, enum: [BOOTSTRAP] }
+        attestationChallenge: { type: string, description: base64url SHA-256 of the token; the attestation challenge for enrolment }
+    ChainPosition:
+      type: object
+      properties:
+        evidenceId: { type: string, format: uuid }
+        chainSequence: { type: integer }
+        evidenceHash: { type: string }
+    RecoveryParameters:
+      type: object
+      properties:
+        protocol: { type: integer, enum: [2] }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        credentialId: { type: string, format: uuid, description: Setup only }
+        kdf: { type: string, enum: [PBKDF2-HMAC-SHA256] }
+        iterations: { type: integer, example: 210000 }
+        keyLength: { type: integer, example: 32 }
+        salt: { type: string, description: base64 }

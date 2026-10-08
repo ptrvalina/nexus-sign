@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No permissions required — biometric prompts and Keystore access
+         need none, and Play Integrity token requests use the app's
+         existing network permission from the host app. -->
+</manifest>

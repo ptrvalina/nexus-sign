@@ -1,0 +1,13 @@
+title = "NEXUS-SIGN secret scanning"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published protocol test vectors: fixed keys chosen for reproducibility, not secrets (exact paths only)"
+paths = [
+  '''^auth-core/test-vectors/device-protocols-v1\.json$''',
+  '''^auth-core/test-vectors/recovery-v2\.json$''',
+  '''^ios-sdk/Tests/NEXUSSignTests/Resources/(device-protocols-v1|recovery-v2)\.json$''',
+  '''^android-sdk/src/test/resources/(device-protocols-v1|recovery-v2)\.json$''',
+]

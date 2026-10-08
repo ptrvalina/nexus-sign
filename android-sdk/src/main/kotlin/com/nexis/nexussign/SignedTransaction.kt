@@ -1,0 +1,353 @@
+package com.nexis.nexussign
+
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.security.MessageDigest
+
+/**
+ * The transaction exactly as the device will sign it.
+ *
+ * Every value here is parsed from the canonical authorization bytes that go
+ * into the signature, never from the convenience fields of the JSON
+ * response. Host applications must render the confirmation screen from this
+ * object: it is the only representation that is guaranteed to be what the
+ * customer's key signs ("what you see is what you sign").
+ */
+data class NexusSignedTransaction(
+    val authorizationId: String,
+    val nexusId: String,
+    val credentialId: String,
+    val transactionReference: String,
+    val operationType: String,
+    /** Integer amount in minor units, e.g. "125000" for 1250.00 PLN. */
+    val amountMinor: String,
+    /** ISO 4217 currency code. */
+    val currency: String,
+    val beneficiary: Map<String, String>,
+    val policyReference: String,
+    val policyVersion: String,
+    /** RFC 3339 UTC timestamps exactly as signed. */
+    val issuedAt: String,
+    val expiresAt: String,
+    val nonce: String,
+) {
+    /** Amount in major units using the currency's ISO 4217 minor-unit count,
+     * computed with integer string arithmetic (no floating point). */
+    fun formattedAmount(): String = SignedPayload.formatMinorUnits(amountMinor, SignedPayload.fractionDigits(currency))
+
+    /** Beneficiary for display: well-known keys first, remaining keys sorted. */
+    fun beneficiaryDisplay(): String = SignedPayload.beneficiaryDisplay(beneficiary)
+
+    /** One-line summary suitable for the biometric prompt. */
+    fun confirmationText(): String = buildString {
+        append(operationType).append(": ").append(formattedAmount()).append(' ').append(currency)
+        val who = beneficiaryDisplay()
+        if (who.isNotEmpty()) append(" → ").append(who)
+        append(" • ").append(transactionReference)
+    }
+}
+
+/**
+ * Response fields the SDK cross-checks against the signed bytes. Plain values
+ * so the check stays independent of the HTTP/JSON layer and is unit-testable
+ * on a JVM without Android.
+ */
+internal data class AuthorizationEnvelope(
+    val authorizationId: String,
+    val nexusId: String,
+    val credentialId: String?,
+    val transactionReference: String,
+    val operationType: String,
+    val amountMinor: String,
+    val currency: String,
+    val beneficiary: Map<String, String>,
+    val policyReference: String,
+    val policyVersion: String,
+    val issuedAt: String,
+    val expiresAt: String,
+    val canonicalPayloadHash: String,
+    val canonicalPayloadBase64: String,
+)
+
+/**
+ * Strict parser for the v1 canonical authorization object.
+ *
+ * The bytes are accepted only if re-serializing the parsed object with Auth
+ * Core's canonicalization (recursively sorted keys, `JSON.stringify` string
+ * escaping, no whitespace) reproduces them exactly. This rejects duplicate
+ * keys, alternative escapings, whitespace, unsorted keys and trailing data,
+ * any of which could let one parser show a value another parser does not sign.
+ */
+internal object SignedPayload {
+    const val PROTOCOL_VERSION = "1"
+    const val DOMAIN = "NEXUS-SIGN/TRANSACTION-AUTH"
+
+    val FIELDS: Set<String> = setOf(
+        "amount_minor", "authorization_id", "beneficiary", "credential_id", "currency", "domain",
+        "expires_at", "issued_at", "nexus_id", "nonce", "operation_type", "policy_reference",
+        "policy_version", "protocol_version", "transaction_reference",
+    )
+
+    private val AMOUNT = Regex("^(0|[1-9][0-9]{0,29})$")
+    private val CURRENCY = Regex("^[A-Z]{3}$")
+    private val BENEFICIARY_KEY = Regex("^[a-z][a-z0-9_]{0,63}$")
+    private val TIMESTAMP = Regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$")
+
+    class Rejected(val reason: String, detail: String) : Exception("$reason: $detail")
+
+    fun parse(canonical: ByteArray): NexusSignedTransaction {
+        val text = decodeUtf8Strict(canonical)
+        val parsed = JsonReader(text).readDocument()
+        val obj = parsed as? Map<*, *> ?: throw Rejected("invalid_json", "top level is not an object")
+        if (!encode(obj).contentEquals(canonical)) throw Rejected("not_canonical", "bytes are not in canonical form")
+
+        val missing = FIELDS - obj.keys.map { it as String }.toSet()
+        if (missing.isNotEmpty()) throw Rejected("missing_field", missing.sorted().joinToString())
+        val unexpected = obj.keys.map { it as String }.toSet() - FIELDS
+        if (unexpected.isNotEmpty()) throw Rejected("unexpected_field", unexpected.sorted().joinToString())
+
+        fun str(key: String): String = obj[key] as? String ?: throw Rejected("invalid_value", "$key must be a string")
+        val beneficiaryRaw = obj["beneficiary"] as? Map<*, *> ?: throw Rejected("invalid_value", "beneficiary must be an object")
+        val beneficiary = beneficiaryRaw.entries.associate { (k, v) ->
+            val key = k as String
+            // Same rule as Auth Core: integer-like or non-identifier keys would make
+            // its JSON.stringify output differ from sorted order.
+            if (!BENEFICIARY_KEY.matches(key)) throw Rejected("invalid_value", "beneficiary key")
+            key to (v as? String ?: throw Rejected("invalid_value", "beneficiary.$key must be a string"))
+        }
+
+        if (str("protocol_version") != PROTOCOL_VERSION || str("domain") != DOMAIN) {
+            throw Rejected("wrong_protocol", "unsupported protocol_version/domain")
+        }
+        if (!AMOUNT.matches(str("amount_minor"))) throw Rejected("invalid_value", "amount_minor")
+        if (!CURRENCY.matches(str("currency"))) throw Rejected("invalid_value", "currency")
+        if (!TIMESTAMP.matches(str("issued_at")) || !TIMESTAMP.matches(str("expires_at"))) throw Rejected("invalid_value", "timestamps")
+        for ((key, value) in obj) {
+            if (value is String && !isDisplaySafe(value)) throw Rejected("invalid_value", "$key contains a control, format or separator character")
+        }
+        for ((key, value) in beneficiary) {
+            if (!isDisplaySafe(value)) throw Rejected("invalid_value", "beneficiary.$key contains a control, format or separator character")
+        }
+
+        return NexusSignedTransaction(
+            authorizationId = str("authorization_id"),
+            nexusId = str("nexus_id"),
+            credentialId = str("credential_id"),
+            transactionReference = str("transaction_reference"),
+            operationType = str("operation_type"),
+            amountMinor = str("amount_minor"),
+            currency = str("currency"),
+            beneficiary = beneficiary,
+            policyReference = str("policy_reference"),
+            policyVersion = str("policy_version"),
+            issuedAt = str("issued_at"),
+            expiresAt = str("expires_at"),
+            nonce = str("nonce"),
+        )
+    }
+
+    /**
+     * Parses the signed bytes and requires every response field the host app
+     * might display to agree with them. A disagreement means Auth Core, or
+     * something between it and the device, is showing the customer something
+     * other than what would be signed, so signing is refused.
+     */
+    fun verify(envelope: AuthorizationEnvelope): NexusSignedTransaction {
+        val bytes = try {
+            java.util.Base64.getDecoder().decode(envelope.canonicalPayloadBase64)
+        } catch (e: IllegalArgumentException) {
+            throw Rejected("invalid_json", "canonicalPayloadBase64 is not base64")
+        }
+        val signed = parse(bytes)
+        val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+        fun check(field: String, ok: Boolean) { if (!ok) throw Rejected("response_mismatch", field) }
+        check("canonicalPayloadHash", hash == envelope.canonicalPayloadHash.lowercase())
+        check("authorizationId", signed.authorizationId == envelope.authorizationId)
+        check("nexusId", signed.nexusId == envelope.nexusId)
+        check("credentialId", envelope.credentialId == null || signed.credentialId == envelope.credentialId)
+        check("transactionReference", signed.transactionReference == envelope.transactionReference)
+        check("operationType", signed.operationType == envelope.operationType)
+        check("amountMinor", signed.amountMinor == envelope.amountMinor)
+        check("currency", signed.currency == envelope.currency)
+        check("beneficiary", signed.beneficiary == envelope.beneficiary)
+        check("policyReference", signed.policyReference == envelope.policyReference)
+        check("policyVersion", signed.policyVersion == envelope.policyVersion)
+        check("issuedAt", signed.issuedAt == envelope.issuedAt)
+        check("expiresAt", signed.expiresAt == envelope.expiresAt)
+        return signed
+    }
+
+    fun formatMinorUnits(amountMinor: String, fractionDigits: Int): String {
+        require(AMOUNT.matches(amountMinor)) { "amountMinor must be a non-negative integer string" }
+        if (fractionDigits <= 0) return amountMinor
+        val padded = amountMinor.padStart(fractionDigits + 1, '0')
+        val split = padded.length - fractionDigits
+        return padded.substring(0, split) + "." + padded.substring(split)
+    }
+
+    /** ISO 4217 minor units for the currencies that do not use two. A fixed
+     * table rather than java.util.Currency: on Android that class follows
+     * CLDR, which differs from ISO 4217 for several currencies (RSD, IQD). */
+    private val MINOR_UNITS: Map<String, Int> =
+        listOf("BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF", "XPF").associateWith { 0 } +
+            listOf("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND").associateWith { 3 } +
+            listOf("CLF", "UYW").associateWith { 4 }
+
+    /** ISO 4217 minor units; every other code uses 2. */
+    fun fractionDigits(currency: String): Int = MINOR_UNITS[currency] ?: 2
+
+    private val DISPLAY_UNSAFE_TYPES: Set<Int> = setOf(
+        Character.CONTROL.toInt(), Character.FORMAT.toInt(),
+        Character.LINE_SEPARATOR.toInt(), Character.PARAGRAPH_SEPARATOR.toInt(),
+    )
+
+    /** False for text with control, format (bidi, zero-width) or separator
+     * characters, which could make the prompt read differently from the
+     * signed value. Auth Core applies the same rule. */
+    fun isDisplaySafe(value: String): Boolean = value.codePoints().noneMatch { Character.getType(it) in DISPLAY_UNSAFE_TYPES }
+
+    private val PREFERRED_BENEFICIARY_KEYS = listOf("name", "iban", "account", "account_number", "bic")
+
+    fun beneficiaryDisplay(beneficiary: Map<String, String>): String {
+        val ordered = PREFERRED_BENEFICIARY_KEYS.filter { it in beneficiary } +
+            beneficiary.keys.filter { it !in PREFERRED_BENEFICIARY_KEYS }.sorted()
+        return ordered.mapNotNull { beneficiary[it]?.takeIf(String::isNotBlank) }.joinToString(" · ")
+    }
+
+    // --- Canonical encoding ---
+    // Mirrors JSON.stringify over recursively sorted keys.
+
+    fun encode(value: Any?): ByteArray = StringBuilder().also { write(it, value) }.toString().toByteArray(Charsets.UTF_8)
+
+    private fun write(out: StringBuilder, value: Any?) {
+        when (value) {
+            is String -> writeString(out, value)
+            is Map<*, *> -> {
+                out.append('{')
+                // String.compareTo orders by UTF-16 code units, like Array.prototype.sort().
+                value.keys.map { it as String }.sorted().forEachIndexed { i, key ->
+                    if (i > 0) out.append(',')
+                    writeString(out, key)
+                    out.append(':')
+                    write(out, value[key])
+                }
+                out.append('}')
+            }
+            else -> throw Rejected("invalid_value", "only strings and objects are allowed")
+        }
+    }
+
+    private fun writeString(out: StringBuilder, s: String) {
+        out.append('"')
+        for (c in s) {
+            when {
+                c == '"' -> out.append("\\\"")
+                c == '\\' -> out.append("\\\\")
+                c == '\b' -> out.append("\\b")
+                c == '\u000C' -> out.append("\\f")
+                c == '\n' -> out.append("\\n")
+                c == '\r' -> out.append("\\r")
+                c == '\t' -> out.append("\\t")
+                c < ' ' -> out.append("\\u").append(String.format("%04x", c.code))
+                else -> out.append(c)
+            }
+        }
+        out.append('"')
+    }
+
+    private fun decodeUtf8Strict(bytes: ByteArray): String = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (e: CharacterCodingException) {
+        throw Rejected("invalid_json", "payload is not valid UTF-8")
+    }
+
+    /** Minimal RFC 8259 reader limited to objects and strings (the only types
+     * the v1 protocol uses). Numbers, arrays, booleans and null are rejected;
+     * duplicate keys are rejected explicitly. */
+    private class JsonReader(private val s: String) {
+        private var i = 0
+        private var depth = 0
+
+        fun readDocument(): Any {
+            skipWs()
+            val v = readValue()
+            skipWs()
+            if (i != s.length) throw Rejected("not_canonical", "trailing data")
+            return v
+        }
+
+        private fun readValue(): Any = when (s.getOrNull(i)) {
+            '{' -> readObject()
+            '"' -> readString()
+            '[' -> throw Rejected("invalid_json", "arrays are not allowed")
+            null -> throw Rejected("invalid_json", "unexpected end of input")
+            else -> throw Rejected("invalid_value", "only strings and objects are allowed")
+        }
+
+        private fun readObject(): Map<String, Any> {
+            if (++depth > 2) throw Rejected("invalid_value", "nesting too deep")
+            i++ // '{'
+            val map = LinkedHashMap<String, Any>()
+            skipWs()
+            if (s.getOrNull(i) == '}') { i++; depth--; return map }
+            while (true) {
+                skipWs()
+                if (s.getOrNull(i) != '"') throw Rejected("invalid_json", "expected key")
+                val key = readString()
+                skipWs()
+                if (s.getOrNull(i) != ':') throw Rejected("invalid_json", "expected ':'")
+                i++
+                skipWs()
+                val value = readValue()
+                if (map.containsKey(key)) throw Rejected("duplicate_key", key)
+                map[key] = value
+                skipWs()
+                when (s.getOrNull(i)) {
+                    ',' -> i++
+                    '}' -> { i++; depth--; return map }
+                    else -> throw Rejected("invalid_json", "expected ',' or '}'")
+                }
+            }
+        }
+
+        private fun readString(): String {
+            i++ // opening quote
+            val sb = StringBuilder()
+            while (true) {
+                val c = s.getOrNull(i++) ?: throw Rejected("invalid_json", "unterminated string")
+                when {
+                    c == '"' -> return sb.toString()
+                    c == '\\' -> {
+                        when (val e = s.getOrNull(i++)) {
+                            '"' -> sb.append('"'); '\\' -> sb.append('\\'); '/' -> sb.append('/')
+                            'b' -> sb.append('\b'); 'f' -> sb.append('\u000C'); 'n' -> sb.append('\n')
+                            'r' -> sb.append('\r'); 't' -> sb.append('\t')
+                            'u' -> sb.append(readHex4())
+                            else -> throw Rejected("invalid_json", "bad escape '\\$e'")
+                        }
+                    }
+                    c < ' ' -> throw Rejected("invalid_json", "unescaped control character")
+                    else -> sb.append(c)
+                }
+                // A lone surrogate from a \\u escape cannot be encoded as UTF-8,
+                // so the canonical re-encoding check in parse() rejects it.
+            }
+        }
+
+        private fun readHex4(): Char {
+            if (i + 4 > s.length) throw Rejected("invalid_json", "short \\u escape")
+            val hex = s.substring(i, i + 4)
+            if (!hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) throw Rejected("invalid_json", "bad \\u escape")
+            i += 4
+            return hex.toInt(16).toChar()
+        }
+
+        private fun skipWs() { while (i < s.length && s[i] in " \t\r\n") i++ }
+    }
+}

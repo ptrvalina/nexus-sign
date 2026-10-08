@@ -1,0 +1,7 @@
+{
+  "entries": {
+    "2b3eba002ab308157af014549df1c83b": { "status": "REVOKED", "reason": "KEY_COMPROMISE" },
+    "0a1b2c3d4e5f60718293a4b5c6d7e8f9": { "status": "SUSPENDED", "reason": "SOFTWARE_FLAW", "comment": "synthetic test entry" },
+    "6681152659205225093": { "status": "REVOKED", "reason": "KEY_COMPROMISE" }
+  }
+}

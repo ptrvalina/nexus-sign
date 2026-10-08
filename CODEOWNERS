@@ -1,0 +1,40 @@
+# Reviews required for each area. Changes to the signed protocol, key handling
+# or evidence also need a security reviewer.
+
+*                                   @nexis-platform
+
+/auth-core/                         @nexis-platform
+/auth-core/src/crypto/              @nexis-platform @nexis-security
+/auth-core/src/services/canonicalAuthorization.ts @nexis-platform @nexis-security
+/auth-core/src/services/deviceProtocol.ts         @nexis-platform @nexis-security
+/auth-core/src/services/evidenceService.ts        @nexis-platform @nexis-security
+/auth-core/src/middleware/                         @nexis-platform @nexis-security
+/auth-core/test-vectors/            @nexis-platform @nexis-mobile @nexis-security
+/auth-core/src/db/                  @nexis-platform @nexis-security
+/auth-core/migrations/              @nexis-platform @nexis-security
+/auth-core/scripts/db/              @nexis-platform @nexis-security
+/auth-core/src/config/              @nexis-platform @nexis-security
+/auth-core/src/routes/admin.ts      @nexis-platform @nexis-security
+/auth-core/src/services/adminAuthService.ts       @nexis-platform @nexis-security
+/auth-core/src/services/adminApprovalService.ts   @nexis-platform @nexis-security
+/auth-core/src/services/recoveryService.ts        @nexis-platform @nexis-security
+/auth-core/src/services/credentialIntegrity.ts    @nexis-platform @nexis-security
+/auth-core/src/services/androidKeyAttestation.ts  @nexis-platform @nexis-security
+/auth-core/scripts/public-material.txt            @nexis-security
+/auth-core/Dockerfile               @nexis-platform @nexis-security
+/.gitleaks.toml                     @nexis-security
+
+/ios-sdk/                           @nexis-mobile
+/android-sdk/                       @nexis-mobile
+/ios-sdk/Sources/NEXUSSign/KeyManager.swift          @nexis-mobile @nexis-security
+/android-sdk/src/main/kotlin/com/nexis/nexussign/KeyManager.kt @nexis-mobile @nexis-security
+/ios-sdk/Sources/NEXUSSign/RecoveryProtocol.swift    @nexis-mobile @nexis-security
+/android-sdk/src/main/kotlin/com/nexis/nexussign/RecoveryProtocol.kt @nexis-mobile @nexis-security
+/android-sdk/gradle/                @nexis-mobile @nexis-security
+
+/sandbox/                           @nexis-platform
+
+/docs/security/                     @nexis-security
+/docs/adr/                          @nexis-platform @nexis-security
+/.github/                           @nexis-platform @nexis-security
+/SECURITY.md                        @nexis-security
