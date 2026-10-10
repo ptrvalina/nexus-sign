@@ -223,7 +223,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4, also validates the wrapper checksum
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v4.4.4, also validates the wrapper checksum
       - name: Unit tests and release build
         run: sh ./gradlew --no-daemon testDebugUnitTest assembleRelease
 
