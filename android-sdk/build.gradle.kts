@@ -1,6 +1,6 @@
 plugins {
     id("com.android.library") version "8.5.2"
-    kotlin("android") version "1.9.24"
+    kotlin("android") version "2.4.20"
     kotlin("plugin.serialization") version "1.9.24"
     `maven-publish`
 }
