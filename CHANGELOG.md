@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ## [Unreleased]
 
+### Changed
+
+- iOS SDK tests: the recovery tests read the vector's iteration count as a number (the forced string cast stopped the test process).
+- Auth Core image: the runtime stage removes npm, npx, corepack and yarn shipped with the base image; the service runs with `node` only.
+- CI: CodeQL keeps its results as the `codeql-sarif` artifact and fails on any result with security severity 7.0 or higher; results are not uploaded to code scanning, which private repositories can use only with GitHub Code Security.
+- Secret scan: the gitleaks allowlist covers all shared test vectors and their iOS copies, the Android key attestation fixtures, `.env.example` templates and PKCS#11 constant names.
+
 ## [2.0.0-rc.2] - 2026-10-07
 
 Second release candidate. Removes compatibility paths and schema that only development or 1.x data used ([ADR 0016](docs/adr/0016-remove-compatibility-paths.md)). Upgrade steps, including from 2.0.0-rc.1: [docs/operations/upgrade-2.0.md](docs/operations/upgrade-2.0.md).
@@ -14,7 +21,7 @@ Second release candidate. Removes compatibility paths and schema that only devel
 - Recovery protocol 1 and `RECOVERY_V1_ACCEPTED`. Identities still on protocol 1 are always refused with 409 `RECOVERY_PROTOCOL_RETIRED` and set up a new phrase. Migration 018 drops the stored protocol 1 verifiers (`nexus_identities.recovery_verifier`).
 - `SESSION` mobile tokens and `MOBILE_SESSION_TTL_SECONDS`. `POST /v1/mobile/sessions` issues only `BOOTSTRAP` tokens (`purpose: SESSION` returns 400); enrolment and recovery require `authPublicKeyPem` and always answer `requestAuthentication: DEVICE_SIGNATURE`; tokens issued by earlier versions are refused. Devices enrolled by SDKs before 1.2 must be enrolled again through device replacement. SDKs: `NEXUSTokenPurpose` has only `BOOTSTRAP`.
 - Unused schema (migration 018): tables `attestation_records` and `policy_decisions`; authorization states `CREATED`, `DELIVERING`, `SIGNED`, `CONSUMED`; credential states `PENDING`, `SUSPENDED` and `credentials.suspended_at`. The migration stops, naming the rows, if data uses any of them.
-- Dependencies: `dotenv` (Auth Core reads only the process environment; development uses `node --env-file=.env`, Node.js 20.6 or later), `ts-node`, `ts-node-dev`; Android `androidx.core:core-ktx`, `kotlinx-coroutines-test`.
+- Dependencies: `dotenv` (Auth Core reads only the process environment; development uses `node --env-file=.env`), `ts-node`, `ts-node-dev`; Android `androidx.core:core-ktx`, `kotlinx-coroutines-test`.
 - Copies of the shared test vectors in the Android SDK and the sandbox, which now read `auth-core/test-vectors/` directly. The iOS copies remain and are checked by `test-vectors/check-vector-copies.mjs`.
 
 ### Changed
@@ -24,6 +31,8 @@ Second release candidate. Removes compatibility paths and schema that only devel
 - `unregisterPush()` (both SDKs) deletes the local push key even when the request to Auth Core fails.
 - `openapi.yaml` describes only the remaining authentication: device signatures for enrolled devices, single-use BOOTSTRAP and recovery tokens.
 - Repository hygiene refuses Redis snapshots (`*.rdb`).
+- Node.js 22 or later is required (Node.js 20 is end of life, and its test runner does not expand `test/*.test.mjs`, so `npm test` failed on it); CI tests Node.js 22 and 24.
+- Windows: the test harness, vector tools and route check resolve their own paths with `fileURLToPath` (a `URL.pathname` such as `/C:/...` is not a Windows path), and the test servers inherit `SystemRoot`, `TEMP` and `TMP`.
 - Tests: the evidence verifier's exit codes (0 with keys passed out of band, 3 with the export's own keys, 1 with a foreign key) are covered by a regression test; migration 018's refusals and the narrowed CHECK constraints are tested directly.
 - Documentation: protocol specifications in `docs/protocol/`; security model and threat model merged; attestation documents merged into `docs/security/attestation.md`; sandbox documents merged into `sandbox/README.md` and `sandbox/HOSTING.md`.
 

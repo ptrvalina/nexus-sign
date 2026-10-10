@@ -52,7 +52,7 @@ Transaction signing on a phone is established practice. NEXUS-SIGN concentrates 
 
 | Path | Contents |
 |---|---|
-| `auth-core/` | Auth Core service (TypeScript, Node.js 20.6+, PostgreSQL, Redis): authorization, credential lifecycle, device enrolment, attestation, recovery, adaptive verification, evidence, bank integration. API contract: `openapi.yaml` |
+| `auth-core/` | Auth Core service (TypeScript, Node.js 22+, PostgreSQL, Redis): authorization, credential lifecycle, device enrolment, attestation, recovery, adaptive verification, evidence, bank integration. API contract: `openapi.yaml` |
 | `ios-sdk/` | Native iOS SDK (Swift Package): Secure Enclave credential, App Attest, transaction signing |
 | `android-sdk/` | Native Android SDK (Kotlin library): Keystore / StrongBox credential, Play Integrity, transaction signing |
 | `sandbox/` | Sandbox for workshops and integration rehearsals (Python standard library only) |
@@ -68,7 +68,7 @@ cd sandbox && ./scripts/run.sh          # Windows: .\scripts\run.ps1
 # open http://127.0.0.1:8787
 ```
 
-**Auth Core.** Node.js 20.6+; PostgreSQL and Redis via Docker Compose.
+**Auth Core.** Node.js 22+; PostgreSQL and Redis via Docker Compose.
 
 ```bash
 cd auth-core
@@ -78,6 +78,8 @@ npm install --ignore-scripts        # the native PKCS#11 module is only needed w
 docker compose exec -T postgres psql -U nexus -d nexus_sign -v ON_ERROR_STOP=1 < src/db/schema.sql
 npm run dev                         # http://localhost:8080/readyz
 ```
+
+In Windows PowerShell, which has no `<` redirection, copy the schema into the container instead: `docker compose cp src/db/schema.sql postgres:/tmp/schema.sql`, then `docker compose exec postgres psql -U nexus -d nexus_sign -v ON_ERROR_STOP=1 -f /tmp/schema.sql`. Use `Copy-Item .env.example .env` for the first step.
 
 **Checks.**
 

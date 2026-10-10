@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTs } from './support/load-ts.mjs';
 import { canonicalJson, describeSignedTransaction, verifyEvidenceChain, verifyEvidenceRecord } from '../scripts/lib/evidence.mjs';
+import { fileURLToPath } from 'node:url';
 
 const stubs = { '../db/pool': { pool: {}, withTransaction: async () => { throw new Error('no database in unit tests'); } } };
 const { evidenceHash } = loadTs('services/evidenceService.ts', { stubs });
@@ -219,7 +220,7 @@ test('the verifier trusts only keys passed out of band: exit 0 with --public-key
   writeFileSync(exportFile, JSON.stringify({ nexusId: '123456789', records, evidencePublicKeyPem: key, evidencePublicKeys: [key] }));
   writeFileSync(join(dir, 'keys.pem'), key);
   writeFileSync(join(dir, 'other.pem'), await new SoftwareHsmAdapter().evidencePublicKeyPem());
-  const verify = (...extra) => spawnSync(process.execPath, [new URL('../scripts/verify-evidence.mjs', import.meta.url).pathname, exportFile, ...extra], { encoding: 'utf8' });
+  const verify = (...extra) => spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-evidence.mjs', import.meta.url)), exportFile, ...extra], { encoding: 'utf8' });
   const pinned = verify(`--public-keys=${join(dir, 'keys.pem')}`, `--expect-head=3:${records[2].evidenceHash}`);
   assert.equal(pinned.status, 0, pinned.stdout + pinned.stderr);
   assert.match(pinned.stdout, /^EVIDENCE_VALID /m);

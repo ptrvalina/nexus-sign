@@ -7,7 +7,7 @@
 // (audio, video, escalation, failure) -> offline confirmation with a QR code and
 // an 8-digit code -> recovery (protocol 2) -> rotated keys.
 //
-// No dependencies (Node 20+). Works on Linux, macOS and Windows PowerShell:
+// No dependencies (Node 22+). Works on Linux, macOS and Windows PowerShell:
 //
 //   node scripts/e2e-smoke.mjs http://localhost:8080
 //

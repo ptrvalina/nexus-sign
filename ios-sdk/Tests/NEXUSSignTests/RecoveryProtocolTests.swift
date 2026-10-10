@@ -24,7 +24,7 @@ final class RecoveryProtocolTests: XCTestCase {
     }
     private var phrase: [String] { v["phrase"] as! [String] }
     private var salt: Data { Data(base64Encoded: str("salt_b64"))! }
-    private var iterations: Int { Int(str("iterations"))! }
+    private var iterations: Int { (v["iterations"] as! NSNumber).intValue }
     private var recoverySPKI: Data { RecoveryProtocol.spki(fromPEM: str("recovery_public_key_pem"))! }
     private var proof: [String: String] { v["proof"] as! [String: String] }
     private func bytes(_ key: SymmetricKey) -> Data { key.withUnsafeBytes { Data($0) } }

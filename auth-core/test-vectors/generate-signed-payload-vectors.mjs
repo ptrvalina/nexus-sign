@@ -12,8 +12,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { writeVectors } from './vector-files.mjs';
+import { fileURLToPath } from 'node:url';
 
-const here = dirname(new URL(import.meta.url).pathname);
+const here = dirname(fileURLToPath(import.meta.url));
 
 // Same algorithm as src/services/canonicalAuthorization.ts (recursive key
 // sort, then JSON.stringify). check-signed-payload-vectors.mjs asserts the two

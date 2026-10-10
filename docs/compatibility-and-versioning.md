@@ -38,7 +38,7 @@ Bank backends ignore unknown fields in Auth Core responses and in webhook bodies
 
 | Component | Requirement | Source |
 |---|---|---|
-| Auth Core | Node.js 20.6 or later; CI builds and tests on Node.js 20 and 22 | `engines` in `auth-core/package.json`, `.github/workflows/ci.yml` |
+| Auth Core | Node.js 22 or later; CI builds and tests on Node.js 22 and 24 | `engines` in `auth-core/package.json`, `.github/workflows/ci.yml` |
 | PostgreSQL | 14 or later; CI runs PostgreSQL 16 | Header of `auth-core/src/db/schema.sql`, `auth-core/docker-compose.yml` |
 | Redis | CI runs Redis 7. Auth Core uses `GETDEL`, which requires Redis 6.2 or later | `auth-core/docker-compose.yml`, `auth-core/src/services/mobileSessionService.ts` |
 | iOS SDK | iOS 15 or later, Swift 5.9 (Xcode 15 or later), a device with a Secure Enclave and a device passcode. macOS 12 is declared only to run `swift test` | `ios-sdk/Package.swift` |

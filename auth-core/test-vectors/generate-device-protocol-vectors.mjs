@@ -15,8 +15,9 @@ import { createECDH, createHash, createHmac, createPrivateKey, hkdfSync, sign, v
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { writeVectors } from './vector-files.mjs';
+import { fileURLToPath } from 'node:url';
 
-const here = dirname(new URL(import.meta.url).pathname);
+const here = dirname(fileURLToPath(import.meta.url));
 
 /** A P-256 key pair from a fixed private scalar, so the vectors are stable. */
 function fixedKey(dHex) {

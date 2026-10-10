@@ -14,9 +14,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-export const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..', '..', '..');
+export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 const ADMIN_DB_URL = process.env.INTEGRATION_DATABASE_URL;
 const REDIS_URL = process.env.INTEGRATION_REDIS_URL;
@@ -97,6 +98,14 @@ async function emptyRedisDatabase() {
   return { url: url.toString(), client };
 }
 
+/** What a child process needs from the parent environment on every OS:
+ * PATH, and on Windows the system directory and temp paths, without which
+ * Node cannot initialise networking or crypto. Nothing else is inherited. */
+export function processEnvironment() {
+  const keep = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'windir', 'TEMP', 'TMP'];
+  return Object.fromEntries(keep.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
+}
+
 /** Environment every test server shares; tests override what they examine. */
 export function baseEnvironment() {
   return {
@@ -134,7 +143,7 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
   const redis = await emptyRedisDatabase();
   const port = await freePort();
   const env = {
-    PATH: process.env.PATH,
+    ...processEnvironment(),
     ...baseEnvironment(),
     DATABASE_URL: db.url,
     REDIS_URL: redis.url,
@@ -209,7 +218,7 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
 export async function startExpectingFailure(overrides, { database } = {}) {
   const db = database ?? await createDatabase();
   const redis = await emptyRedisDatabase();
-  const env = { PATH: process.env.PATH, ...baseEnvironment(), DATABASE_URL: db.url, REDIS_URL: redis.url, PORT: String(await freePort()), ...overrides };
+  const env = { ...processEnvironment(), ...baseEnvironment(), DATABASE_URL: db.url, REDIS_URL: redis.url, PORT: String(await freePort()), ...overrides };
   for (const [key, value] of Object.entries(env)) if (value === undefined) delete env[key];
   const child = spawn(process.execPath, [join(ROOT, 'dist/server.js')], { env, cwd: ROOT });
   let log = '';

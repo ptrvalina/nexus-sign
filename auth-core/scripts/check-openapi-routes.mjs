@@ -2,8 +2,9 @@
 // openapi.yaml, or when openapi.yaml documents a path that is not implemented.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('../', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../', import.meta.url));
 const read = (file) => readFileSync(join(root, file), 'utf8');
 
 const routeFiles = ['routes/nexusV1.ts', 'routes/mobileV1.ts', 'routes/recovery.ts', 'routes/oauth.ts'];

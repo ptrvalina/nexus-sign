@@ -25,6 +25,11 @@ COPY package.json ./
 COPY public ./public
 COPY src/db/schema.sql ./src/db/schema.sql
 COPY migrations ./migrations
+# The service runs with node only. The package managers bundled with the base
+# image are not needed at runtime and are removed so they are not shipped.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 
 RUN addgroup -S nexus && adduser -S nexus -G nexus
 USER nexus

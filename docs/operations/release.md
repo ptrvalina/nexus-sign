@@ -51,7 +51,7 @@ The Auth Core dependencies used for these runs were installed without a reviewed
 
 | Job | Checks |
 |---|---|
-| `auth-core / build and unit tests` | Fails when `package-lock.json` is missing; `npm ci`; typecheck and build on Node.js 20 and 22; `npm run check:all` (unit tests, vectors and the iOS copies, routes against `openapi.yaml`, repository hygiene, version consistency) |
+| `auth-core / build and unit tests` | Fails when `package-lock.json` is missing; `npm ci`; typecheck and build on Node.js 22 and 24; `npm run check:all` (unit tests, vectors and the iOS copies, routes against `openapi.yaml`, repository hygiene, version consistency) |
 | `auth-core / integration (PostgreSQL, Redis, SoftHSM)` | `schema.sql` plus every migration; `npm run test:integration` |
 | `auth-core / end-to-end (PostgreSQL, Redis)` | `schema.sql` twice and every migration; `scripts/db/roles.sql`; server as `nexus_app`; `scripts/e2e-smoke.mjs` |
 | `containers / build and health check` | Auth Core and sandbox images build; the sandbox passes its health check |
@@ -68,7 +68,7 @@ Completed by the release owner for every release, and by the bank before the fir
 ### Build
 
 - [ ] Lockfile generated with registry access, reviewed and committed; `npm audit --omit=dev --audit-level=high` reviewed.
-- [ ] All `ci.yml` and `security.yml` jobs green on the release commit, including both SDK jobs; CodeQL and Trivy findings reviewed; SBOM archived.
+- [ ] All `ci.yml` and `security.yml` jobs green on the release commit, including both SDK jobs; CodeQL results (`codeql-sarif` artifact) and Trivy findings reviewed; SBOM archived.
 - [ ] Release tag built by `release.yml`; provenance verified; image archive SHA-256 recorded.
 - [ ] Gradle checksums (NXS-039) and image digests (NXS-040) added, or the gaps accepted in writing.
 - [ ] `CHANGELOG.md` entry and `VERSION` consistent (`npm run check:repository`).

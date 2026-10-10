@@ -21,7 +21,7 @@ Production startup is fail-closed unless PKCS#11 HSM, device attestation, databa
 
 ## Development
 
-Node.js 20.6 or later. Auth Core reads only the process environment; `npm run dev` compiles (`tsc`) and starts `node --env-file=.env dist/server.js`. Copy `.env.example` to `.env` first.
+Node.js 22 or later (Node.js 20 has reached end of life, and its test runner does not expand the test file patterns). Auth Core reads only the process environment; `npm run dev` compiles (`tsc`) and starts `node --env-file=.env dist/server.js`. Copy `.env.example` to `.env` first.
 
 ## Database setup
 

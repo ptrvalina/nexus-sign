@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { X509Certificate, generateKeyPairSync } from 'node:crypto';
 import { loadTs } from './support/load-ts.mjs';
+import { fileURLToPath } from 'node:url';
 
 const { verifyAndroidKeyAttestation, keyAttestationChallenge, loadRevocationList } = loadTs('services/androidKeyAttestation.ts');
 const fixture = (name) => new URL(`./fixtures/android-key-attestation/${name}`, import.meta.url);
@@ -79,7 +80,7 @@ test('a broken, foreign, expired or revoked chain is refused', () => {
 });
 
 test('the revocation list is read in Google status list format', () => {
-  const { entries } = loadRevocationList(new URL('./fixtures/android-key-attestation/status-example.json', import.meta.url).pathname);
+  const { entries } = loadRevocationList(fileURLToPath(new URL('./fixtures/android-key-attestation/status-example.json', import.meta.url)));
   assert.equal(entries.get('a1b2c3d4e5f60718293a4b5c6d7e8f9'), 'SUSPENDED', 'leading zeros are removed');
   assert.throws(() => verifyAndroidKeyAttestation({ ...sample(TEE).expectation, revocations: entries }), /REVOKED/);
 });

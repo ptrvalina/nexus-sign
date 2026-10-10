@@ -9,8 +9,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { loadTs } from '../test/support/load-ts.mjs';
+import { fileURLToPath } from 'node:url';
 
-const here = dirname(new URL(import.meta.url).pathname);
+const here = dirname(fileURLToPath(import.meta.url));
 const fail = (msg) => { console.error(`error: ${msg}`); process.exit(1); };
 
 const master = readFileSync(join(here, 'signed-payload-v1.json'), 'utf8');

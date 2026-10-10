@@ -5,10 +5,11 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
-export const SRC = resolve(dirname(new URL(import.meta.url).pathname), '..', '..', 'src');
+export const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
 
 // Minimal configuration so src/config/env.ts validates in unit tests.
 process.env.NODE_ENV ??= 'test';

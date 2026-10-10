@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { loadTs } from './support/load-ts.mjs';
+import { processEnvironment } from './integration/support/harness.mjs';
 
 const { productionBlockers, configurationErrors } = loadTs('config/productionPosture.ts');
 
@@ -108,7 +109,7 @@ test('the service does not start without an explicit NODE_ENV', { skip: existsSy
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const root = fileURLToPath(new URL('..', import.meta.url));
-  const env = { PATH: process.env.PATH, DATABASE_URL: 'postgres://u:p@127.0.0.1:1/db', REDIS_URL: 'redis://127.0.0.1:1' };
+  const env = { ...processEnvironment(), DATABASE_URL: 'postgres://u:p@127.0.0.1:1/db', REDIS_URL: 'redis://127.0.0.1:1' };
   const run = spawnSync(process.execPath, ['-e', "require('./dist/config/env')"], { cwd: root, env, encoding: 'utf8' });
   assert.notEqual(run.status, 0, 'loading the configuration without NODE_ENV must fail');
   assert.match(run.stderr, /NODE_ENV/);
