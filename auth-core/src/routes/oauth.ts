@@ -41,7 +41,7 @@ export function buildOAuthRouter(): Router {
    */
   router.post('/oauth/token', express.urlencoded({ extended: false, limit: '4kb' }), throttle.guard, async (req, res, next) => {
     try {
-      const basic = /^Basic\s+(.+)$/i.exec(req.header('authorization') ?? '')?.[1];
+      const basic = /^Basic[ \t]+(\S+)$/i.exec(req.header('authorization') ?? '')?.[1];
       const fromBasic = basic ? decodeBasicCredentials(basic) : null;
       const input = {
         ...req.body,

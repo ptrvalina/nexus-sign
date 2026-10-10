@@ -8,7 +8,9 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 - iOS SDK tests: the recovery tests read the vector's iteration count as a number (the forced string cast stopped the test process).
 - Auth Core image: the runtime stage removes npm, npx, corepack and yarn shipped with the base image; the service runs with `node` only.
-- CI: CodeQL keeps its results as the `codeql-sarif` artifact and fails on any result with security severity 7.0 or higher; results are not uploaded to code scanning, which private repositories can use only with GitHub Code Security.
+- CI: CodeQL keeps its results as the `codeql-sarif` artifact and does not upload them to code scanning, which private repositories can use only with GitHub Code Security. `.github/codeql/gate.mjs` fails the job on any result of security severity 7.0 or higher that is not listed, with its reason, in `.github/codeql/reviewed-findings.tsv`.
+- Auth Core: the `Authorization` patterns for recovery Bearer tokens and OAuth Basic credentials match a single value without spaces in linear time (the previous patterns backtracked polynomially on long runs of spaces). The admin session cookie parser keeps cookie names in a `Map`, not as object properties.
+- Tests: the SoftHSM capability probe runs with a configuration of its own; its script did not parse, so the HSM suites ran, and failed with `CKR_MECHANISM_INVALID`, on SoftHSM builds without `CKM_ECDSA_SHA256` instead of being skipped.
 - Secret scan: the gitleaks allowlist covers all shared test vectors and their iOS copies, the Android key attestation fixtures, `.env.example` templates and PKCS#11 constant names.
 
 ## [2.0.0-rc.2] - 2026-10-07

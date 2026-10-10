@@ -9,9 +9,9 @@ export interface AdminRequest extends Request {
 
 /** Minimal parser for the one cookie this service sets, avoiding a
  * `cookie-parser` dependency. Request cookie headers are `key=value` pairs
- * separated by `; `. */
-function parseCookies(header: string | undefined): Record<string, string> {
-  const cookies: Record<string, string> = {};
+ * separated by `; `. A Map keeps cookie names out of object properties. */
+function parseCookies(header: string | undefined): Map<string, string> {
+  const cookies = new Map<string, string>();
   if (!header) return cookies;
   for (const pair of header.split(';')) {
     const separatorIndex = pair.indexOf('=');
@@ -20,7 +20,7 @@ function parseCookies(header: string | undefined): Record<string, string> {
     const value = pair.slice(separatorIndex + 1).trim();
     if (!key) continue;
     try {
-      cookies[key] = decodeURIComponent(value);
+      cookies.set(key, decodeURIComponent(value));
     } catch {
       // A malformed escape is ignored like an absent cookie.
     }
@@ -29,8 +29,7 @@ function parseCookies(header: string | undefined): Record<string, string> {
 }
 
 export function getSessionTokenFromRequest(req: Request): string | null {
-  const cookies = parseCookies(req.header('cookie'));
-  return cookies[ADMIN_SESSION_COOKIE] ?? null;
+  return parseCookies(req.header('cookie')).get(ADMIN_SESSION_COOKIE) ?? null;
 }
 
 /** Requires a valid admin session and attaches it to `req.adminSession`.

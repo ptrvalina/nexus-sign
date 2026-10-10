@@ -21,7 +21,8 @@ jobs:
     runs-on: ubuntu-24.04
     # Results are kept as a SARIF artifact rather than uploaded to code
     # scanning, which a private repository can use only with GitHub Code
-    # Security. The job fails on any high or critical result.
+    # Security. The gate fails on any result of security severity 7.0 or
+    # higher that is not listed in .github/codeql/reviewed-findings.tsv.
     permissions:
       contents: read
       actions: read
@@ -40,19 +41,8 @@ jobs:
         with:
           name: codeql-sarif
           path: codeql-results
-      - name: Fail on high or critical results
-        run: |
-          jq -r '.runs[]
-            | ((.tool.driver.rules // []) + [.tool.extensions[]?.rules[]?]) as $rules
-            | ($rules | map({(.id): (.properties["security-severity"] // "0")}) | add // {}) as $severity
-            | .results[]?
-            | "\($severity[.ruleId] // "0")\t\(.ruleId)\t\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)\t\(.message.text | split("\n")[0])"' \
-            codeql-results/*.sarif | sort -rn > findings.tsv
-          echo "CodeQL results (security severity, rule, location, message):"
-          cat findings.tsv
-          high=$(awk -F'\t' '$1 >= 7.0' findings.tsv | wc -l)
-          echo "high or critical: $high"
-          test "$high" -eq 0
+      - name: Gate on high and critical results
+        run: node .github/codeql/gate.mjs codeql-results
 
   sbom:
     name: SBOM (CycloneDX)

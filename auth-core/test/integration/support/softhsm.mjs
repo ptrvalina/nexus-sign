@@ -23,13 +23,20 @@ function softHsmSupportsEcdsaSha256() {
     p.load(process.env.MODULE);
     p.C_Initialize();
     try {
-      const slot = p.C_GetSlotList(false)[0];
-      if (slot === undefined) { console.log('unknown'); return; }
-      try { p.C_GetMechanismInfo(slot, pkcs11js.CKM_ECDSA_SHA256); console.log('yes'); }
-      catch (e) { console.log(/MECHANISM_INVALID/.test(String(e)) ? 'no' : 'unknown'); }
+      const slot = p.C_GetSlotList(true)[0];
+      if (slot === undefined) console.log('unknown');
+      else {
+        try { p.C_GetMechanismInfo(slot, pkcs11js.CKM_ECDSA_SHA256); console.log('yes'); }
+        catch (e) { console.log(/MECHANISM_INVALID/.test(String(e)) ? 'no' : 'unknown'); }
+      }
     } finally { p.C_Finalize(); }
   `;
-  const run = spawnSync(process.execPath, ['-e', script], { cwd: ROOT, env: { ...process.env, MODULE: SOFTHSM_MODULE }, encoding: 'utf8' });
+  // A configuration of its own: the default one (for example
+  // /etc/softhsm/softhsm2.conf) may point at a token directory this user
+  // cannot read, and then C_Initialize fails before the mechanism is checked.
+  const conf = softHsmDirectory();
+  initToken(conf, 'probe');
+  const run = spawnSync(process.execPath, ['-e', script], { cwd: ROOT, env: { ...process.env, MODULE: SOFTHSM_MODULE, SOFTHSM2_CONF: conf }, encoding: 'utf8' });
   return run.stdout.trim() !== 'no'; // only a definite "no" disables the suite
 }
 

@@ -44,7 +44,7 @@ export function buildRecoveryRouter(hsmAdapter: HsmAdapter): Router {
   /** Device: completes recovery with the phrase proof and a new attested key. */
   router.post('/v1/recovery/sessions/:sessionId/complete', async (req, res, next) => {
     try {
-      const token = /^Bearer\s+(.+)$/.exec(req.header('authorization') ?? '')?.[1];
+      const token = /^Bearer[ \t]+(\S+)$/.exec(req.header('authorization') ?? '')?.[1];
       if (!token) {
         res.status(401).json({ error: 'Recovery access token required' });
         return;
