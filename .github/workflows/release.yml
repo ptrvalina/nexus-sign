@@ -1,0 +1,49 @@
+name: Release
+
+# Builds the Auth Core image for a version tag, records its SBOM and a SLSA
+# build provenance attestation signed through GitHub's OIDC identity
+# (verifiable with `gh attestation verify`).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  auth-core-image:
+    name: Auth Core image, SBOM and provenance
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Lockfile is committed
+        run: test -f auth-core/package-lock.json
+      - name: Build image archive
+        run: |
+          docker build -t "nexus-sign/auth-core:${GITHUB_REF_NAME}" auth-core
+          docker save "nexus-sign/auth-core:${GITHUB_REF_NAME}" | gzip -n > "auth-core-${GITHUB_REF_NAME}.tar.gz"
+          sha256sum "auth-core-${GITHUB_REF_NAME}.tar.gz" > "auth-core-${GITHUB_REF_NAME}.tar.gz.sha256"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: SBOM
+        working-directory: auth-core
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --omit dev --output-format JSON --output-file "../auth-core-${GITHUB_REF_NAME}.cdx.json"
+      - name: Build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: auth-core-${{ github.ref_name }}.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: auth-core-${{ github.ref_name }}
+          path: |
+            auth-core-${{ github.ref_name }}.tar.gz
+            auth-core-${{ github.ref_name }}.tar.gz.sha256
+            auth-core-${{ github.ref_name }}.cdx.json

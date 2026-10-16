@@ -1,0 +1,46 @@
+import SwiftUI
+
+struct ContentView: View {
+    @StateObject private var model = DemoModel()
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    Text("Платёж подписывается ключом, который создан в Secure Enclave этого iPhone и не покидает его.")
+                        .font(.footnote)
+                }
+                Section("Сервер") {
+                    TextField("https://….trycloudflare.com", text: $model.serverAddress)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    Button("Подключиться") { model.connect() }
+                        .disabled(model.busy)
+                }
+                Section {
+                    Button(model.registered ? "Зарегистрировать телефон заново" : "Зарегистрировать телефон") { model.register() }
+                        .disabled(model.busy || !model.connected)
+                }
+                if let payment = model.payment {
+                    Section("Платёж на подтверждение") {
+                        Text("\(payment.formattedAmount) \(payment.currency)").font(.title2.bold())
+                        Text(payment.beneficiaryDisplay)
+                        Text("Референс: \(payment.transactionReference)").font(.footnote)
+                        Button("Подтвердить Face ID / Touch ID") { model.approve() }
+                            .disabled(model.busy)
+                    }
+                }
+                Section {
+                    Button("Создать фразу восстановления") { model.createRecoveryPhrase() }
+                        .disabled(model.busy || !model.registered)
+                }
+                Section("Статус") {
+                    Text(model.status).textSelection(.enabled)
+                }
+            }
+            .navigationTitle("NEXUS-SIGN · демо")
+        }
+        .navigationViewStyle(.stack)
+    }
+}

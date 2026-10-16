@@ -1,0 +1,12 @@
+{
+  "policy_reference": "TXN-AUTH-v4",
+  "policy_version": "4",
+  "authorization_ttl_seconds": 300,
+  "verification_max_age_seconds": 300,
+  "push_timeout_seconds": 20,
+  "high_value_threshold_minor": "5000000",
+  "max_signature_attempts": 5,
+  "verification_session_ttl_seconds": 120,
+  "webhook_clock_skew_seconds": 300,
+  "max_request_bytes": 65536
+}

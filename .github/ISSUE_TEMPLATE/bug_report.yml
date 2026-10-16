@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security vulnerabilities are not reported here. Follow SECURITY.md.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options: [Auth Core, iOS SDK, Android SDK, Sandbox, Documentation]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release from VERSION, or the commit.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove tokens, keys and customer data first. Include the X-Correlation-Id if there is one.
+      render: text

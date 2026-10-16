@@ -1,0 +1,295 @@
+openapi: 3.0.3
+info:
+  title: NEXUS-SIGN Sandbox API
+  version: 2.0.0-rc.2
+  description: |
+    Non-production sandbox. The authorization payload, its SHA-256 hash and
+    the device signature follow NEXUS-SIGN protocol v1 exactly. The
+    authorization representation carries the same fields as Auth Core's
+    GET /v1/mobile/authorizations/{id}. Endpoints marked "sandbox control"
+    have no production counterpart.
+
+    Authentication depends on the mode. Local mode (no SANDBOX_ACCESS_CODES)
+    has none and listens on 127.0.0.1 only. Hosted mode requires either the
+    session cookie set by POST /api/v1/session or `Authorization: Bearer
+    <access code>`; each code maps to its own isolated workspace. Failed codes
+    are rate limited per client address (429 TOO_MANY_ATTEMPTS).
+servers:
+  - url: http://127.0.0.1:8787
+    description: Local mode
+  - url: https://sandbox.example.com
+    description: Hosted mode behind the bundled reverse proxy (replace with your domain)
+security:
+  - {}
+  - accessCode: []
+  - sessionCookie: []
+paths:
+  /api/v1/health:
+    get:
+      security: []
+      responses: {'200': {description: 'Service status, protocol version and whether hosted mode is on'}}
+  /api/v1/session:
+    get:
+      summary: Current workspace for the presented credentials
+      responses:
+        '200': {description: '{workspace, hosted}'}
+        '401': {description: AUTHENTICATION_REQUIRED}
+    post:
+      summary: Exchange an access code for a session cookie (hosted mode)
+      security: []
+      requestBody:
+        content: {application/json: {schema: {type: object, required: [accessCode], properties: {accessCode: {type: string}}}}}
+      responses:
+        '200': {description: 'Signed in; sets an HttpOnly, SameSite=Strict session cookie. In local mode returns {workspace: local} without a cookie.'}
+        '401': {description: INVALID_ACCESS_CODE}
+        '429': {description: TOO_MANY_ATTEMPTS}
+  /api/v1/session/logout:
+    post:
+      summary: End the browser session; the cookie is revoked on the server
+      security: []
+      responses: {'200': {description: Signed out}}
+  /api/v1/policy:
+    get:
+      responses: {'200': {description: Active policy profile (config/policy.json)}}
+  /api/v1/state:
+    get:
+      summary: Sandbox control — snapshot of devices, authorizations, latest evidence and events
+      responses: {'200': {description: Snapshot}}
+  /api/v1/devices:
+    post:
+      summary: Sandbox control — enrol a device public key (production uses /v1/mobile/bootstrap with attestation)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publicKeySpkiBase64]
+              properties:
+                publicKeySpkiBase64: {type: string, description: DER SubjectPublicKeyInfo, P-256 uncompressed point, base64}
+                offlinePublicKeySpkiBase64: {type: string, description: 'Optional ECDH P-256 key for offline confirmation (same encoding)'}
+                label: {type: string, maxLength: 64}
+      responses:
+        '201':
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  credentialId: {type: string, format: uuid}
+                  nexusId: {type: string, pattern: '^[1-9][0-9]{8}$'}
+                  publicKeyPem: {type: string}
+                  algorithm: {type: string, enum: [ES256]}
+                  offlineServerPublicKeySpkiBase64: {type: string, description: Server half of the offline key agreement (only when an offline key was sent)}
+        '400': {$ref: '#/components/responses/Error'}
+  /api/v1/authorizations:
+    post:
+      summary: Create an authorization (bank side)
+      parameters:
+        - {in: header, name: Idempotency-Key, required: true, schema: {type: string, pattern: '^[A-Za-z0-9._:-]{8,128}$'}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/AuthorizationRequest'}}}
+      responses:
+        '201': {description: Created (state PENDING, or REJECTED when riskDecision is BLOCK), content: {application/json: {schema: {$ref: '#/components/schemas/Authorization'}}}}
+        '200': {description: Idempotent replay of an earlier identical request, content: {application/json: {schema: {$ref: '#/components/schemas/Authorization'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '404': {description: CREDENTIAL_NOT_FOUND}
+        '409': {description: IDEMPOTENCY_KEY_REUSED or TRANSACTION_REFERENCE_REUSED}
+        '413': {description: REQUEST_TOO_LARGE}
+  /api/v1/authorizations/{authorizationId}:
+    parameters: [{$ref: '#/components/parameters/AuthorizationId'}]
+    get:
+      responses:
+        '200': {description: Authorization, content: {application/json: {schema: {$ref: '#/components/schemas/Authorization'}}}}
+        '404': {description: AUTHORIZATION_NOT_FOUND}
+  /api/v1/authorizations/{authorizationId}/signature:
+    parameters: [{$ref: '#/components/parameters/AuthorizationId'}]
+    post:
+      summary: Submit the device signature (same body as Auth Core /v1/mobile/authorizations/{id}/signature)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signature, signatureFormat]
+              properties:
+                signature: {type: string, description: 'base64 ECDSA P-256/SHA-256 signature over the canonical bytes'}
+                signatureFormat: {type: string, enum: [der, raw], description: 'der: ASN.1 (Android, iOS derRepresentation); raw: r||s, 64 bytes (WebCrypto)'}
+      responses:
+        '200':
+          description: 'status VERIFIED, or FAILED with reason (signature_verification_failed | malformed_signature | signature_attempt_limit)'
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {description: 'AUTHORIZATION_NOT_PENDING or VERIFICATION_STEPS_INCOMPLETE'}
+        '410': {description: AUTHORIZATION_EXPIRED}
+  /api/v1/authorizations/{authorizationId}/advance:
+    parameters: [{$ref: '#/components/parameters/AuthorizationId'}]
+    post:
+      summary: Sandbox control — run the next server-side step (PUSH, AUDIO, VIDEO) or commit a VERIFIED authorization
+      responses:
+        '200': {description: Updated authorization}
+        '409': {description: 'DEVICE_SIGNATURE_REQUIRED (the next step belongs to the device), AUTHORIZATION_NOT_PENDING'}
+  /api/v1/authorizations/{authorizationId}/fault:
+    parameters: [{$ref: '#/components/parameters/AuthorizationId'}]
+    post:
+      summary: Sandbox control — run the current step with an injected failure
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type: {type: string, enum: [push_timeout, provider_failure]}
+      responses:
+        '200': {description: Updated authorization}
+        '409': {description: FAULT_NOT_APPLICABLE}
+  /api/v1/authorizations/{authorizationId}/offline-challenge:
+    parameters: [{$ref: '#/components/parameters/AuthorizationId'}]
+    get:
+      summary: QR content for offline confirmation (Auth Core GET /v1/authorizations/{id}/offline-challenge)
+      responses:
+        '200': {description: '{authorizationId, qrPayload: "NXS1." + base64url(canonical bytes), codeDigits: 8, expiresAt}'}
+        '409': {description: 'VERIFICATION_STEPS_INCOMPLETE, OFFLINE_CONFIRMATION_UNAVAILABLE, AUTHORIZATION_NOT_PENDING'}
+        '410': {description: AUTHORIZATION_EXPIRED}
+  /api/v1/authorizations/{authorizationId}/offline-confirmation:
+    parameters: [{$ref: '#/components/parameters/AuthorizationId'}]
+    post:
+      summary: Submit the 8-digit code the phone derived offline; shares the attempt limit with signatures
+      requestBody:
+        content: {application/json: {schema: {type: object, required: [code], properties: {code: {type: string, pattern: '^[0-9]{8}$'}}}}}
+      responses:
+        '200': {description: '{status: VERIFIED|FAILED, reason, attempts, authorization}'}
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {description: 'VERIFICATION_STEPS_INCOMPLETE, OFFLINE_CONFIRMATION_UNAVAILABLE, AUTHORIZATION_NOT_PENDING'}
+  /api/v1/authorizations/{authorizationId}/commit:
+    parameters: [{$ref: '#/components/parameters/AuthorizationId'}]
+    post:
+      summary: Bank commit of a VERIFIED authorization (simulated core banking)
+      responses:
+        '200': {description: Committed}
+        '409': {description: 'AUTHORIZATION_NOT_VERIFIED, ALREADY_COMMITTED, VERIFICATION_TOO_OLD'}
+  /api/v1/webhooks/provider:
+    post:
+      summary: Verification provider callback
+      description: 'Signature = "v1=" + hex(HMAC-SHA256(secret, timestamp + "." + raw request body)).'
+      parameters:
+        - {in: header, name: X-NEXUS-Timestamp, required: true, schema: {type: string, description: Unix seconds}}
+        - {in: header, name: X-NEXUS-Event-Id, required: true, schema: {type: string}}
+        - {in: header, name: X-NEXUS-Signature, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionId, nonce, result]
+              properties:
+                sessionId: {type: string, format: uuid}
+                nonce: {type: string}
+                result: {type: string, enum: [PASSED, FAILED]}
+      responses:
+        '200': {description: Accepted}
+        '401': {description: 'WEBHOOK_SIGNATURE_INVALID, WEBHOOK_TIMESTAMP_OUT_OF_WINDOW, VERIFICATION_SESSION_NONCE_MISMATCH'}
+        '409': {description: 'WEBHOOK_REPLAY, VERIFICATION_SESSION_ALREADY_USED, VERIFICATION_SESSION_STALE'}
+        '410': {description: VERIFICATION_SESSION_EXPIRED}
+  /api/v1/evidence:
+    get:
+      summary: Evidence chain and the public key of the sealing key
+      responses: {'200': {description: 'records[] and publicKeyPem'}}
+  /api/v1/evidence/verify:
+    get:
+      summary: Recompute every hash, check every seal and re-verify every customer signature from the sealed bytes and device key
+      responses: {'200': {description: '{valid, records, deviceSignatures, offlineCodes, head} or {valid: false, failedAt, reason}'}}
+  /api/v1/clock:
+    post:
+      summary: Sandbox control — move the sandbox clock forward
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {advanceSeconds: {type: integer, minimum: 1, maximum: 86400}}}}}
+      responses: {'200': {description: New sandbox time}}
+  /api/v1/reset:
+    post:
+      summary: Sandbox control — clear all state and regenerate the evidence key
+      responses: {'200': {description: Reset}}
+components:
+  securitySchemes:
+    accessCode:
+      type: http
+      scheme: bearer
+      description: The guest's access code (hosted mode)
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: nxs_session
+      description: Set by POST /api/v1/session; bound to the current access code
+  parameters:
+    AuthorizationId: {in: path, name: authorizationId, required: true, schema: {type: string, format: uuid}}
+  responses:
+    Error:
+      description: Validation or protocol error
+      content:
+        application/json:
+          schema: {type: object, properties: {error: {type: string}, detail: {type: string}}}
+  schemas:
+    AuthorizationRequest:
+      type: object
+      required: [credentialId, amountMinor, currency, beneficiary]
+      properties:
+        credentialId: {type: string, format: uuid}
+        amountMinor: {type: string, pattern: '^[1-9][0-9]{0,29}$', description: Integer amount in minor units as a string}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        beneficiary:
+          type: object
+          required: [name]
+          maxProperties: 16
+          description: 'Keys ^[a-z][a-z0-9_]{0,63}$, string values up to 512 characters (same rule as Auth Core).'
+          additionalProperties: {type: string, maxLength: 512}
+        operationType: {type: string, pattern: '^[a-z][a-z0-9_]{0,31}$', default: transfer}
+        transactionReference: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'}
+        scenario: {type: string, enum: [standard, push-timeout, high-value, user-request, failure], default: standard}
+        riskDecision: {type: string, enum: [ALLOW, STEP_UP, BLOCK], default: ALLOW}
+    Authorization:
+      type: object
+      properties:
+        authorizationId: {type: string, format: uuid}
+        nexusId: {type: string}
+        credentialId: {type: string, format: uuid}
+        transactionReference: {type: string}
+        operationType: {type: string}
+        amountMinor: {type: string}
+        currency: {type: string}
+        beneficiary: {type: object, additionalProperties: {type: string}}
+        policyReference: {type: string}
+        policyVersion: {type: string}
+        canonicalPayloadHash: {type: string, description: lowercase hex SHA-256 of the canonical bytes}
+        canonicalPayloadBase64: {type: string, description: The exact bytes the device signs}
+        nonce: {type: string}
+        issuedAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        state: {type: string, enum: [PENDING, VERIFIED, COMMITTED, REJECTED, EXPIRED]}
+        terminalReason: {type: string, nullable: true}
+        signature: {type: string, nullable: true}
+        signatureAlgorithm: {type: string, enum: [ES256]}
+        signatureFormat: {type: string, enum: [der, raw], nullable: true}
+        signatureAttempts: {type: integer}
+        verifiedAt: {type: string, format: date-time, nullable: true}
+        consumedAt: {type: string, format: date-time, nullable: true}
+        verificationPlan:
+          type: object
+          properties:
+            steps:
+              type: array
+              items:
+                type: object
+                properties:
+                  factor: {type: string, enum: [PUSH, AUDIO, VIDEO, SIGNATURE, VERIFY, COMMIT]}
+                  status: {type: string, enum: [PENDING, COMPLETED, FAILED, TIMED_OUT]}
+            reasons: {type: array, items: {type: string}}
+        bankTransaction:
+          type: object
+          nullable: true
+          properties:
+            state: {type: string}
+            reference: {type: string}
+            committedAt: {type: string, format: date-time}

@@ -1,0 +1,24 @@
+{
+  "_comment": "P-256/SHA-256 signatures produced by independent implementations over the same message. Regenerate only if the verifier changes; the keys are throwaway.",
+  "message": "{\"amount_minor\":\"125000\",\"currency\":\"PLN\",\"domain\":\"interop-test\"}",
+  "signatures": [
+    {
+      "producer": "OpenSSL 3.0 (openssl dgst -sha256 -sign)",
+      "format": "der",
+      "public_key_spki_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMBJUpmz7eqorLDq1AueaXhY4xV/vezo25bF2ikrKx9Z/qL9OmRa8WO+IcK9L7YxnZF7aDU2gwEREwsrmisOGpA==",
+      "signature_base64": "MEYCIQDeFOQ0Hc/T91zevYUyA+prtdhzZGFzBZBgB844v14WQQIhAJ6iYNfDSYL9QmbpmQA0A/SQidQgBHyngBlQz2xP7jnH"
+    },
+    {
+      "producer": "WebCrypto (Node.js crypto.subtle)",
+      "format": "raw",
+      "public_key_spki_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7VTrxz8IUy+ERBrzDX/jnD9jQ1W1Ni5RmaiVDLTEfN4orNmZTZniAcDJwOdyGM+XB3J5GNA1GS++5OYnNV6FZA==",
+      "signature_base64": "2pr+ynP1a2NtVV6nKjMBoL3D7X12vaFK2xm2AQvkPLwnDXwICCZBwBC+ECqvI2/NB81NWYfFl72omwgk2TwSaw=="
+    },
+    {
+      "producer": "JVM (SHA256withECDSA, SunEC)",
+      "format": "der",
+      "public_key_spki_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGf2KpvmluEPScBLNhqRLo+BWzFEGF9ssrvaO24XAX4b6dBIIsB1zfgrW0t2p1RTe3c6mo9d4XD/puMzxiypyFw==",
+      "signature_base64": "MEYCIQC/tl+g5G7G5ON4RQSGfnD9wrvOYtEgD+/pOXW5FxXvoQIhAOc758ouTdIyoqDPmC6dZdcwfU+3msi3ByTEESeVFx2J"
+    }
+  ]
+}

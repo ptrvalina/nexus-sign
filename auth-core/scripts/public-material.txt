@@ -1,0 +1,6 @@
+# Public material that check-repository.sh would otherwise flag by file
+# extension: exact repository paths, one per line. Each must contain no
+# private key (checked). Add a path only after review by @nexis-security.
+auth-core/test/fixtures/android-key-attestation/caiman_sdk36_TEE_EC_RKP.pem
+auth-core/test/fixtures/android-key-attestation/frankel_sdk37_TEE_EC_2026.pem
+auth-core/test/fixtures/android-key-attestation/tegu_sdk36_SB_EC_2026_ROOT.pem
