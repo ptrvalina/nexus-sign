@@ -373,7 +373,7 @@ An offline code is computed with a key that Auth Core also holds. Auth Core can 
 |---|---|
 | `requireAudio`, `requireVideo` | Minimum factor AUDIO or VIDEO |
 | `highAmountThresholdMinor` | `amountMinor` at or above this value requires AUDIO |
-| `audioAvailable`, `videoAvailable` | Whether the bank operates the channel (default `true`); a required channel is always enabled |
+| `audioAvailable`, `videoAvailable` | Set `false` to leave out a channel for this authorization. A channel is offered only if the bank can verify it: a provider key registered for it, or operator verification enabled for it (`cli/verificationSetup.js`, below). A requirement no enabled channel can meet is refused with 409 `VERIFICATION_CHANNEL_UNAVAILABLE` |
 | `clientEscalationAllowed` | Whether the customer may request a stronger check from the app (default `true`) |
 | `pushTimeoutSeconds` | 10-300, default 30, informational |
 
@@ -395,15 +395,28 @@ curl -s -X POST "$BASE/v1/authorizations/$AUTHORIZATION_ID/verification-sessions
   -H 'Content-Type: application/json' -d '{"channel":"AUDIO"}'
 ```
 
-The bank's verification gateway reports the provider's result. With `REQUIRE_MTLS_HEADER=true` this call requires gateway mTLS like every bank endpoint.
+Who may close a session is configured by the Auth Core operator, not through the bank API, so a compromised bank backend cannot register a verifier of its own:
+
+```bash
+# A verification provider's ES256 public key, for the channels it verifies
+node dist/cli/verificationSetup.js provider-add <clientId> <providerId> <keyId> AUDIO,VIDEO provider-public.pem
+# Calls answered by the bank's operators in the admin console
+node dist/cli/verificationSetup.js operator <clientId> AUDIO,VIDEO
+```
+
+**Provider result.** The provider signs a verification result v1 token ([specification](../protocol/verification-result-v1.md)) that names this bank, the session, the authorization, the transaction terms (`canonical_payload_hash`), the device credential and the SHA-256 of the session nonce. The bank's verification gateway relays it unchanged; with `REQUIRE_MTLS_HEADER=true` this call requires gateway mTLS like every bank endpoint:
 
 ```bash
 curl -s -X POST "$BASE/v1/authorizations/$AUTHORIZATION_ID/verification-sessions/$SESSION_ID/complete" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"sessionNonce":"'"$SESSION_NONCE"'","result":"VERIFIED","providerReference":"prov-5521","assertion":"<provider JWS>"}'
+  -d '{"resultToken":"'"$PROVIDER_RESULT_JWS"'"}'
 ```
 
-Auth Core stores the SHA-256 of `assertion` and includes the factor in the evidence. Auth Core does not verify the assertion: the AUDIO or VIDEO factor in the evidence is the bank's (or its provider's) statement, bound to the session nonce, not a cryptographic proof that Auth Core checked (NXS-019, open). Validating the provider's assertion is the gateway's task. A failed AUDIO check escalates to VIDEO when VIDEO is enabled; a failed last factor sets the plan to `FAILED` and the authorization to `REJECTED`. The model is specified in [adaptive verification](../architecture/adaptive-verification.md).
+Auth Core verifies the signature with the registered key, every binding, the lifetime (at most 600 s) and that the token's `jti` was not used before. A token that fails any check returns 403, is written to the audit log (`verification_result_rejected`) and leaves the session open. The evidence lists the factor with `method: PROVIDER`, the issuing key (`issuer`, `<providerId>/<keyId>`) and the SHA-256 of the token, so an auditor can obtain the token from the provider and check it.
+
+**Operator result.** With operator verification enabled, the customer's in-app call is answered in the admin console by an operator of the bank (password and TOTP), who records the outcome; the evidence lists `method: OPERATOR` and the operator's username.
+
+A failed AUDIO check escalates to VIDEO when VIDEO is enabled; a failed last factor sets the plan to `FAILED` and the authorization to `REJECTED`. The model is specified in [adaptive verification](../architecture/adaptive-verification.md).
 
 ## 12. Retrieve and verify evidence
 

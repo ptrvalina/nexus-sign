@@ -13,6 +13,7 @@ describe('authorization expiry', { skip: skipWithoutServices }, () => {
   before(async () => {
     server = await startAuthCore({ env: { AUTHORIZATION_EXPIRY_SWEEP_MS: '500' } });
     bank = await bankSession(server, await server.registerBank('bank-expiry', { webhookUrl: 'https://hooks.bank.example/nexus' }));
+    await server.verificationSetup('operator', 'bank-expiry', 'AUDIO,VIDEO');
     device = await bank.enrolDevice((await bank.createIdentity()).nexusId);
   });
   after(async () => { await server?.stop(); });

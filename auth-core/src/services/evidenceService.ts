@@ -205,12 +205,17 @@ async function appendRecord(
 
 /** Seals a confirmed authorization, in the transaction that consumes it. */
 export async function sealAuthorizationEvidence(tx: PoolClient, hsm: HsmAdapter, input: AuthorizationEvidenceInput): Promise<ChainPosition> {
-  const factors = await tx.query<{ channel: string; status: string; provider_reference: string | null; assertion_hash: string | null; completed_at: Date | null }>(
-    `SELECT channel, status, provider_reference, assertion_hash, completed_at
+  const factors = await tx.query<{ channel: string; status: string; provider_reference: string | null; assertion_hash: string | null; completed_at: Date | null; result_method: string | null; result_issuer: string | null }>(
+    `SELECT channel, status, provider_reference, assertion_hash, completed_at, result_method, result_issuer
      FROM verification_sessions WHERE authorization_id = $1 ORDER BY created_at ASC`, [input.authorizationId]);
+  // method: PROVIDER (signed result token; issuer "<providerId>/<keyId>",
+  // assertionHash = SHA-256 of the token) or OPERATOR (issuer = the bank
+  // operator's username). Sessions closed without a result have neither.
   const verificationFactors = factors.rows.map((row) => ({
     channel: row.channel,
     status: row.status,
+    method: row.result_method,
+    issuer: row.result_issuer,
     providerReference: row.provider_reference,
     assertionHash: row.assertion_hash,
     completedAt: row.completed_at?.toISOString() ?? null,

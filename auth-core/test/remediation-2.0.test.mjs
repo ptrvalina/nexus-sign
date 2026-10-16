@@ -63,3 +63,25 @@ test('FI-015: repeated ID collisions end with an allocation error, not a duplica
   const { service } = identityStore([pkey, pkey, pkey]);
   await assert.rejects(service.createNexusIdentity('bank-a', 'customer-1'), /Unable to allocate a unique 9-digit NEXUS ID/);
 });
+
+test('FI-002: the result-token parser accepts ES256 only and never a key from the token', async () => {
+  const { generateKeyPairSync, sign } = await import('node:crypto');
+  const { parseEs256Jws, verifyEs256 } = loadTs('crypto/jws.ts');
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const make = (header, payload = { a: 1 }) => {
+    const input = `${b64(header)}.${b64(payload)}`;
+    return `${input}.${sign('sha256', Buffer.from(input), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
+  };
+  const good = parseEs256Jws(make({ alg: 'ES256' }));
+  assert.equal(verifyEs256(good, publicKey.export({ type: 'spki', format: 'pem' })), true);
+  for (const header of [{ alg: 'none' }, { alg: 'HS256' }, { alg: 'ES384' }, { alg: 'ES256', jwk: {} }, { alg: 'ES256', x5c: [] }, { alg: 'ES256', jku: 'https://x' }, { alg: 'ES256', crit: ['x'] }]) {
+    assert.throws(() => parseEs256Jws(make(header)), /JwsError|alg|not accepted/, JSON.stringify(header));
+  }
+  assert.throws(() => parseEs256Jws(`${b64({ alg: 'ES256' })}.${b64({})}.`), /compact JWS/);
+  assert.throws(() => parseEs256Jws(`${b64({ alg: 'ES256' })}.${b64({})}.${Buffer.alloc(70).toString('base64url')}`), /64 bytes/, 'DER-encoded signatures are refused');
+  const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' });
+  assert.throws(() => verifyEs256(good, rsa), /not a P-256 key/);
+  const otherKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({ type: 'spki', format: 'pem' });
+  assert.equal(verifyEs256(good, otherKey), false);
+});

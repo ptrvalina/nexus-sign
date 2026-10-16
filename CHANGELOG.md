@@ -10,10 +10,15 @@ All notable changes to this project are documented here. Versions follow [Semant
 - `auth-core/scripts/run-local.sh`: runs Auth Core with PostgreSQL and Redis from `docker-compose.yml` on one machine in development mode (fresh database, schema and roles, bank client, admin account with TOTP, service on port 8080).
 - Auth Core: webhooks `authorization.verified` (with the evidence position and the chain head the bank keeps for truncation checks), `authorization.rejected` and `authorization.expired` (FI-013, FI-019).
 - Auth Core: a periodic sweep moves `PENDING_USER` authorizations past their expiry to `EXPIRED`, with their verification plan and open sessions (`AUTHORIZATION_EXPIRY_SWEEP_MS`, FI-013).
+- Auth Core: audio and video results are accepted only as a provider result token (ES256 JWS) that Auth Core verifies against a key registered for the bank, bound to the session, authorization, transaction terms, device credential and session nonce, fresh and single-use ([verification result v1](docs/protocol/verification-result-v1.md), FI-002); or as an operator decision in the admin console. Migration `019_verification_results.sql`; operator CLI `verificationSetup.js`.
+- Auth Core: a verification channel is offered only if the bank has a verifier for it; a requirement no channel can meet is refused with 409 `VERIFICATION_CHANNEL_UNAVAILABLE` (FI-017).
 - Demo bank: the demo app's calls need the pairing code shown on the operator page; the iOS and Android demo apps ask for it (FI-016). CI job `demo-bank` tests it.
 
 ### Changed
 
+- **Breaking:** `POST /v1/authorizations/{id}/verification-sessions/{sessionId}/complete` takes `{ "resultToken": "<JWS>" }`. The previous body (`sessionNonce`, `result`, `providerReference`, `assertion`), whose assertion Auth Core did not verify, is refused with 400. `scripts/e2e-smoke.mjs` needs `NEXUS_SIGN_SMOKE_PROVIDER_KEY`.
+- **Breaking:** `audioAvailable`/`videoAvailable` no longer default to available: a channel needs a registered provider key or operator verification (`verificationSetup.js`).
+- Evidence: verification factors carry `method` (`PROVIDER` or `OPERATOR`) and `issuer`.
 - Auth Core: `GET /v1/authorizations/{id}` and `GET /v1/mobile/authorizations/{id}` report `EXPIRED` as soon as `expiresAt` has passed, instead of `PENDING_USER` until the next confirmation attempt (FI-013).
 - Auth Core: shutdown waits up to `SHUTDOWN_DRAIN_MS` for requests in flight before closing the HSM, database and Redis (FI-014).
 - Auth Core: a NEXUS ID collision between concurrent identity creations retries with a new ID instead of reporting a duplicate customer (FI-015).

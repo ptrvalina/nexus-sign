@@ -14,19 +14,32 @@
 // Requires a registered bank client (npm run register-client -- <id>) and
 // REQUIRE_VALID_ATTESTATION=false (the local default), since a script cannot
 // produce genuine App Attest / Play Integrity evidence.
-import { createHash, createHmac, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign } from 'node:crypto';
+import { createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, sign } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { verifyEvidenceChain, verifyEvidenceRecord } from './lib/evidence.mjs';
 import { createRecoveryKey, openRecoveryKey, proofSigningInput, setupSigningInput, signDerB64 } from './lib/recovery.mjs';
 
 const BASE_URL = (process.argv[2] ?? process.env.NEXUS_SIGN_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '');
 const CLIENT_ID = process.env.NEXUS_SIGN_SMOKE_CLIENT_ID ?? 'smoke-test-bank';
 const CLIENT_SECRET = process.env.NEXUS_SIGN_SMOKE_CLIENT_SECRET;
+// A verification provider key registered for the client with
+//   node dist/cli/verificationSetup.js provider-add <client> <providerId> <keyId> AUDIO,VIDEO <public.pem>
+// The script signs audio/video result tokens with the private key (FI-002).
+const PROVIDER_KEY_FILE = process.env.NEXUS_SIGN_SMOKE_PROVIDER_KEY;
+const PROVIDER_ID = process.env.NEXUS_SIGN_SMOKE_PROVIDER_ID ?? 'smoke-provider';
+const PROVIDER_KEY_ID = process.env.NEXUS_SIGN_SMOKE_PROVIDER_KEY_ID ?? 'k1';
 if (!CLIENT_SECRET) {
   console.error('Set NEXUS_SIGN_SMOKE_CLIENT_SECRET to the client_secret printed by `npm run register-client`.');
   console.error('  PowerShell: $env:NEXUS_SIGN_SMOKE_CLIENT_SECRET = "<secret>"');
   console.error('  bash:       export NEXUS_SIGN_SMOKE_CLIENT_SECRET=<secret>');
   process.exit(2);
 }
+if (!PROVIDER_KEY_FILE) {
+  console.error('Set NEXUS_SIGN_SMOKE_PROVIDER_KEY to the PEM private key of a verification provider registered for the client');
+  console.error('(node dist/cli/verificationSetup.js provider-add <client> smoke-provider k1 AUDIO,VIDEO <public.pem>).');
+  process.exit(2);
+}
+const PROVIDER_PRIVATE_KEY = createPrivateKey(readFileSync(PROVIDER_KEY_FILE, 'utf8'));
 
 let passed = 0;
 const pass = (msg) => { passed += 1; console.log(`PASS  ${msg}`); };
@@ -304,12 +317,25 @@ const newAuthorization = async (suffix, verificationPolicy) => {
   });
   if (response.status !== 201) fail(`authorization ${suffix} created`, response.text);
   const got = await call('GET', `/v1/mobile/authorizations/${response.json.authorizationId}`, { device: MOBILE });
-  return { id: response.json.authorizationId, plan: response.json.verificationPlan, bytes: Buffer.from(got.json.canonicalPayloadBase64, 'base64') };
+  return { id: response.json.authorizationId, plan: response.json.verificationPlan, hash: response.json.canonicalPayloadHash, bytes: Buffer.from(got.json.canonicalPayloadBase64, 'base64') };
 };
 const openSession = (id, channel) => call('POST', `/v1/mobile/authorizations/${id}/verification-sessions`, { device: MOBILE, body: { channel } });
-const completeSession = (id, session, result) => call('POST', `/v1/authorizations/${id}/verification-sessions/${session.sessionId}/complete`, {
-  token: BANK, body: { sessionNonce: session.nonce, result, providerReference: `prov-${randomBytes(4).toString('hex')}`, assertion: `assertion-${result}` },
+// Verification result v1 (docs/protocol/verification-result-v1.md), as a provider signs it.
+const resultToken = (auth, session, result, overrides = {}) => {
+  const now = Math.floor(Date.now() / 1000);
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const input = `${b64({ alg: 'ES256', typ: 'nexus-verification-result+jwt', kid: PROVIDER_KEY_ID })}.${b64({
+    iss: PROVIDER_ID, aud: `nexus-sign:${CLIENT_ID}`, sub: session.sessionId, authorization_id: auth.id,
+    canonical_payload_hash: auth.hash, credential_id: CREDENTIAL_ID, channel: session.channel, result,
+    session_nonce_sha256: createHash('sha256').update(session.nonce).digest('hex'),
+    iat: now, exp: now + 120, jti: `e2e-${randomBytes(12).toString('hex')}`, ...overrides,
+  })}`;
+  return `${input}.${sign('sha256', Buffer.from(input), { key: PROVIDER_PRIVATE_KEY, dsaEncoding: 'ieee-p1363' }).toString('base64url')}`;
+};
+const completeWith = (auth, session, token) => call('POST', `/v1/authorizations/${auth.id}/verification-sessions/${session.sessionId}/complete`, {
+  token: BANK, body: { resultToken: token },
 });
+const completeSession = (auth, session, result) => completeWith(auth, session, resultToken(auth, session, result));
 const signWith = (id, key, bytes) => call('POST', `/v1/mobile/authorizations/${id}/signature`, { device: MOBILE, body: { signature: signBytes(key, bytes), signatureFormat: 'der' } });
 
 {
@@ -319,13 +345,22 @@ const signWith = (id, key, bytes) => call('POST', `/v1/mobile/authorizations/${i
   expect(early.json?.status === 'FAILED', 'a valid signature is not accepted before the AUDIO check', early.text);
   const session = await openSession(a.id, 'AUDIO');
   expect(session.status === 201 && session.json?.nonce, 'AUDIO verification session opened', session.text);
-  const done = await completeSession(a.id, session.json, 'VERIFIED');
-  expect(done.status === 200 && done.json?.status === 'VERIFIED', 'provider result recorded, plan VERIFIED', done.text);
+  const unsigned = await call('POST', `/v1/authorizations/${a.id}/verification-sessions/${session.json.sessionId}/complete`, {
+    token: BANK, body: { resultToken: `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from('{"result":"VERIFIED"}').toString('base64url')}.` },
+  });
+  expect(unsigned.status === 403 || unsigned.status === 400, 'an unsigned "VERIFIED" from the gateway is refused', unsigned.text);
+  const otherTransaction = await completeWith(a, session.json, resultToken(a, session.json, 'VERIFIED', { canonical_payload_hash: '0'.repeat(64) }));
+  expect(otherTransaction.status === 403, 'a provider result for other transaction terms is refused', otherTransaction.text);
+  const done = await completeSession(a, session.json, 'VERIFIED');
+  expect(done.status === 200 && done.json?.status === 'VERIFIED', 'signed provider result verified, plan VERIFIED', done.text);
+  const replay = await completeSession(a, session.json, 'VERIFIED');
+  expect(replay.status === 409, 'a second result for the same session is refused', replay.text);
   const signed = await signWith(a.id, device, a.bytes);
   expect(signed.json?.status === 'VERIFIED', 'signature accepted after the AUDIO check', signed.text);
   const evidence = await call('GET', `/v1/authorizations/${a.id}/evidence`, { token: BANK });
-  expect(evidence.json?.sealedPayload?.verificationFactors?.some((f) => f.channel === 'AUDIO' && f.status === 'VERIFIED'),
-    'evidence records the AUDIO factor', evidence.text);
+  expect(evidence.json?.sealedPayload?.verificationFactors?.some((f) => f.channel === 'AUDIO' && f.status === 'VERIFIED'
+    && f.method === 'PROVIDER' && f.issuer === `${PROVIDER_ID}/${PROVIDER_KEY_ID}`),
+    'evidence records the AUDIO factor and the provider key that signed it', evidence.text);
 }
 
 {
@@ -333,12 +368,12 @@ const signWith = (id, key, bytes) => call('POST', `/v1/mobile/authorizations/${i
   const escalated = await call('POST', `/v1/authorizations/${b.id}/verification/escalate`, { token: BANK, body: { reason: 'PUSH_TIMEOUT' } });
   expect(escalated.status === 200 && escalated.json?.requiredStep === 'AUDIO', 'push timeout escalates PUSH → AUDIO', escalated.text);
   const audio = await openSession(b.id, 'AUDIO');
-  const failed = await completeSession(b.id, audio.json, 'FAILED');
+  const failed = await completeSession(b, audio.json, 'FAILED');
   expect(failed.json?.requiredStep === 'VIDEO' && failed.json?.currentStep === 'VIDEO', 'a failed AUDIO check escalates to VIDEO, never down', failed.text);
   const downgrade = await call('POST', `/v1/authorizations/${b.id}/verification/escalate`, { token: BANK, body: { reason: 'RISK_POLICY', requestedStep: 'AUDIO' } });
   expect(downgrade.status === 409, 'requesting a weaker step is refused (409)', downgrade.text);
   const video = await openSession(b.id, 'VIDEO');
-  const videoFailed = await completeSession(b.id, video.json, 'FAILED');
+  const videoFailed = await completeSession(b, video.json, 'FAILED');
   expect(videoFailed.json?.status === 'FAILED', 'a failed VIDEO check fails the plan', videoFailed.text);
   const auth = await call('GET', `/v1/authorizations/${b.id}`, { token: BANK });
   expect(auth.json?.state === 'REJECTED', 'and rejects the authorization', auth.text);

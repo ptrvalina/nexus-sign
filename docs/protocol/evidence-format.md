@@ -12,7 +12,7 @@ A valid chain shows five things, each checkable offline:
 2. **That key was the one enrolled for the customer.** The `AUTHORIZATION` record names the `CREDENTIAL_ENROLLED` record of its credential, which sealed the device keys and the attestation that admitted them when the credential was registered.
 3. **The bank sealed the records.** The bank's HSM signed the hash of each record, and the record names the HSM key (`sealKeyId`).
 4. **No record has been removed, reordered or inserted.** Records of one NEXUS ID form a numbered hash chain, and the bank keeps the latest position it received (the chain head), so records removed from the end are detected as well.
-5. **Which verification factors were completed.** Audio and video checks are listed with the provider reference and the hash of the provider assertion. The assertion is the bank's or the provider's statement; Auth Core stores its hash, not a verification of it.
+5. **Which verification factors were completed.** Audio and video checks are listed with how they were closed: `method: PROVIDER` with the issuing provider key (`issuer`), the token's `jti` (`providerReference`) and the SHA-256 of the result token, which Auth Core verified before accepting it ([verification result v1](verification-result-v1.md)); or `method: OPERATOR` with the bank operator's username. The factor records who stated the result, not how it was reached. Records sealed before 2.0.0 list factors without `method`; their assertion was not verified by Auth Core.
 
 The HSM seal and the customer signature are independent. The holder of the HSM key can seal any record, but cannot produce a customer signature over terms the customer did not sign. The holder of a device key can sign, but cannot place a record in the bank's sealed chain. Point 2 closes the gap between them: someone who can write to the database cannot swap a credential's public key for their own and have the resulting approval verify, because the key no longer matches the sealed enrolment.
 
@@ -82,7 +82,7 @@ hsmSignature = base64(DER(ECDSA-P256-SHA256(evidence key, the 32 bytes of eviden
     "result": "VERIFIED",
     "correlationId": null,
     "verificationFactors": [
-      { "channel": "AUDIO", "status": "VERIFIED", "providerReference": "…", "assertionHash": "<hex>", "completedAt": "…" }
+      { "channel": "AUDIO", "status": "VERIFIED", "method": "PROVIDER", "issuer": "<providerId>/<keyId>", "providerReference": "<jti>", "assertionHash": "<hex>", "completedAt": "…" }
     ]
   },
   "evidenceHash": "<hex>",

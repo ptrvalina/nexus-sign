@@ -386,20 +386,23 @@ paths:
       - { in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }
     post:
       tags: [Adaptive verification]
-      summary: Record the provider's result (bank verification gateway, mTLS)
-      description: A failed AUDIO check escalates to VIDEO when enabled; a failed final factor fails the plan and rejects the authorization. The assertion is stored as a SHA-256 hash in the evidence.
+      summary: Record a provider's signed result (relayed by the bank verification gateway, mTLS)
+      description: |
+        `resultToken` is a verification result v1 token (compact JWS, ES256) signed by a provider key registered for this bank with
+        `cli/verificationSetup.js` (docs/protocol/verification-result-v1.md). Auth Core verifies the signature, the binding to this bank,
+        session, authorization, transaction terms (`canonical_payload_hash`), device credential and session nonce, freshness (lifetime at
+        most 600 s) and single use (`jti`). A refused token returns 403 and leaves the session open. A failed AUDIO check escalates to VIDEO
+        when enabled; a failed final factor fails the plan and rejects the authorization. The SHA-256 of the token is kept in the evidence.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [sessionNonce, result, providerReference, assertion]
+              additionalProperties: false
+              required: [resultToken]
               properties:
-                sessionNonce: { type: string, minLength: 20, maxLength: 128 }
-                result: { type: string, enum: [VERIFIED, FAILED] }
-                providerReference: { type: string, minLength: 1, maxLength: 128 }
-                assertion: { type: string, minLength: 1, maxLength: 4096, description: Provider assertion as received (e.g. a signed JWS) }
+                resultToken: { type: string, minLength: 1, maxLength: 8192 }
       responses:
         '200':
           description: Updated plan

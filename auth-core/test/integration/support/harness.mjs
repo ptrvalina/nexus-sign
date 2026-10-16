@@ -190,6 +190,10 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
       if (!secret) throw new Error(`registerClient printed no secret:\n${output}`);
       return { clientId, secret, webhookSecret };
     },
+    /** Runs cli/verificationSetup.js (provider-add, provider-retire, operator, show). */
+    async verificationSetup(...args) {
+      return runCli('verificationSetup.js', args, env);
+    },
     /** Creates an admin with the operator CLI; returns password and TOTP secret. */
     async createAdmin(username, role, { clientId, password } = {}) {
       const args = [username, role];

@@ -166,6 +166,12 @@ jobs:
           echo "::add-mask::$SECRET"
           echo "client_secret=$SECRET" >> "$GITHUB_OUTPUT"
 
+      - name: Register a throwaway verification provider key (signs the audio/video results of the e2e flow)
+        run: |
+          openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out "$RUNNER_TEMP/provider.pem"
+          openssl ec -in "$RUNNER_TEMP/provider.pem" -pubout -out "$RUNNER_TEMP/provider.pub"
+          node dist/cli/verificationSetup.js provider-add e2e-bank smoke-provider k1 AUDIO,VIDEO "$RUNNER_TEMP/provider.pub"
+
       - name: Start Auth Core
         run: |
           nohup npm run start > server.log 2>&1 &
@@ -181,6 +187,7 @@ jobs:
         env:
           NEXUS_SIGN_SMOKE_CLIENT_ID: e2e-bank
           NEXUS_SIGN_SMOKE_CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
+          NEXUS_SIGN_SMOKE_PROVIDER_KEY: ${{ runner.temp }}/provider.pem
 
       - name: Server log
         if: always()

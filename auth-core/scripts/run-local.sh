@@ -85,7 +85,7 @@ ADMIN_COOKIE_SECURE=false
 ADMIN_MFA_REQUIRED=true
 EOF
 
-step "Registering the bank client 'local-bank' and the admin account 'admin'"
+step "Registering the bank client 'local-bank', its audio/video verifiers and the admin account 'admin'"
 client_output=$(node --env-file="$ENV_FILE" dist/cli/registerClient.js local-bank)
 client_secret=$(printf '%s\n' "$client_output" | awk '/client_secret:/ {print $2}')
 [ -n "$client_secret" ] || { printf '%s\n' "$client_output"; fail "no client_secret in the output"; }
@@ -94,7 +94,15 @@ admin_password=$(printf '%s\n' "$admin_output" | awk '/ password:/ {print $2}')
 totp_secret=$(printf '%s\n' "$admin_output" | awk '/ totp_secret:/ {print $2}')
 [ -n "$admin_password" ] && [ -n "$totp_secret" ] || { printf '%s\n' "$admin_output"; fail "no admin password or TOTP secret in the output"; }
 
+# Audio/video results: a throwaway provider key for the end-to-end script,
+# and operator verification (calls answered in the admin console).
 umask 077
+provider_key="${CREDENTIALS%.txt}-provider.pem"
+openssl ecparam -name prime256v1 -genkey -noout 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$provider_key"
+openssl ec -in "$provider_key" -pubout -out "$provider_key.pub" 2>/dev/null
+node --env-file="$ENV_FILE" dist/cli/verificationSetup.js provider-add local-bank local-provider k1 AUDIO,VIDEO "$provider_key.pub" >/dev/null
+node --env-file="$ENV_FILE" dist/cli/verificationSetup.js operator local-bank AUDIO,VIDEO >/dev/null
+
 cat > "$CREDENTIALS" <<EOF
 NEXUS-SIGN Auth Core, local development run ($(date '+%Y-%m-%d %H:%M'))
 Service:        http://localhost:$PORT
@@ -109,7 +117,7 @@ Bank client:    local-bank
   client_secret: $client_secret
 
 End-to-end flow, in a second terminal (from auth-core/):
-  NEXUS_SIGN_SMOKE_CLIENT_ID=local-bank NEXUS_SIGN_SMOKE_CLIENT_SECRET=$client_secret node scripts/e2e-smoke.mjs http://localhost:$PORT
+  NEXUS_SIGN_SMOKE_CLIENT_ID=local-bank NEXUS_SIGN_SMOKE_CLIENT_SECRET=$client_secret NEXUS_SIGN_SMOKE_PROVIDER_ID=local-provider NEXUS_SIGN_SMOKE_PROVIDER_KEY=$provider_key node scripts/e2e-smoke.mjs http://localhost:$PORT
 EOF
 
 step "Starting Auth Core"
