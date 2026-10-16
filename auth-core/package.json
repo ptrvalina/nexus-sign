@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.mjs\"",
     "test:integration": "node --test --test-concurrency=1 \"test/integration/*.test.mjs\"",
+    "test:media": "node --test --test-concurrency=1 \"test/media/*.test.mjs\"",
     "test:vectors": "node test-vectors/check-signed-payload-vectors.mjs && node test-vectors/check-vector-copies.mjs",
     "check:openapi": "node scripts/check-openapi-routes.mjs",
     "check:repository": "bash scripts/check-repository.sh",

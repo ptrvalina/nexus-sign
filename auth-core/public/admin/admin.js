@@ -312,7 +312,7 @@ async function loadStats() {
 }
 
 async function loadEverything() {
-  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries()]);
+  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries(), loadCalls()]);
 }
 
 function reportError(error) {

@@ -67,6 +67,18 @@ const envSchema = z.object({
    * EXPIRED (and the bank's webhook is notified). Read paths report EXPIRED
    * immediately regardless of this interval. */
   AUTHORIZATION_EXPIRY_SWEEP_MS: z.coerce.number().int().min(500).max(300_000).default(10_000),
+  // --- In-app audio/video calls (ADR 0017) ---
+  /** STUN servers for the device and the operator console, e.g.
+   * `stun:turn.bank.example:3478` (comma-separated). */
+  WEBRTC_STUN_URLS: z.string().optional().transform((v) => (v ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
+  /** TURN servers of the bank (coturn with `use-auth-secret`), e.g.
+   * `turns:turn.bank.example:5349?transport=tcp` (comma-separated). */
+  WEBRTC_TURN_URLS: z.string().optional().transform((v) => (v ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
+  /** The coturn `static-auth-secret`; Auth Core derives per-session TURN
+   * credentials from it (TURN REST convention). */
+  WEBRTC_TURN_SECRET: optional(z.string().min(16)),
+  WEBRTC_TURN_CREDENTIAL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
+
   /** How long a shutdown waits for requests in flight before closing them. */
   SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(120_000).default(15_000),
 

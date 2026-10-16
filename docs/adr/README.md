@@ -20,3 +20,4 @@ Each record states one decision, its context and its consequences.
 | [0014](0014-admin-scope-mfa-four-eyes.md) | Admin accounts scoped to a bank, TOTP login, four-eyes revoke and reactivate, session version and idle timeout | Accepted | 2026-10-06 |
 | [0015](0015-client-certificate-binding.md) | Bank token issuance and use bound to the registered client certificate fingerprints | Accepted | 2026-10-06 |
 | [0016](0016-remove-compatibility-paths.md) | Remove bank-side provisioning and rotation, recovery protocol 1 and its verifiers, `SESSION` tokens and the unused schema | Accepted | 2026-10-07 |
+| [0017](0017-in-app-audio-video-calls.md) | In-app audio and video calls over WebRTC, signalling relayed by Auth Core, answered by bank operators or closed by signed provider results; bank TURN; no recording | Accepted (WebRTC binaries in the SDKs pending owner approval) | 2026-10-16 |

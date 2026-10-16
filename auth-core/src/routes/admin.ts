@@ -10,6 +10,8 @@ import { recordAuditEvent } from '../services/auditService';
 import { setRequestActor } from '../services/requestContext';
 import type { AdminSession } from '../services/adminAuthService';
 import { byBodyField, byIp, loginThrottle } from '../middleware/bruteForceProtection';
+import { assertClaimedBy, claimCall, listCalls, operatorSignal, operatorSignals, sendBye } from '../services/verificationCall';
+import { recordOperatorDecision } from '../services/adaptiveVerificationService';
 
 const loginSchema = z.object({
   username: z.string().min(1).max(64),
@@ -230,6 +232,50 @@ export function buildAdminRouter(options: { cookieSecure: boolean }): Router {
       }
     });
   }
+
+  // --- In-app verification calls (ADR 0017) ---
+  // An operator of the bank answers the customer's audio or video call in the
+  // browser, checks the transaction with the customer and records the result.
+  const operatorOf = (req: Request) => ({ username: sessionOf(req as AdminRequest).username, clientId: sessionOf(req as AdminRequest).clientId });
+  const callParam = z.string().uuid();
+
+  router.get('/admin/api/verification-calls', requireRole('operator'), async (req, res, next) => {
+    try {
+      res.status(200).json(await listCalls(operatorOf(req)));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/admin/api/verification-calls/:sessionId/claim', requireRole('operator'), async (req, res, next) => {
+    try {
+      res.status(200).json(await claimCall(callParam.parse(req.params.sessionId), operatorOf(req)));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/admin/api/verification-calls/:sessionId/signals', requireRole('operator'), async (req, res, next) => {
+    try {
+      const body = z.object({ type: z.string(), payload: z.unknown().optional() }).strict().parse(req.body);
+      res.status(201).json(await operatorSignal(callParam.parse(req.params.sessionId), operatorOf(req), body.type, body.payload ?? null));
+    } catch (error) { next(error); }
+  });
+
+  router.get('/admin/api/verification-calls/:sessionId/signals', requireRole('operator'), async (req, res, next) => {
+    try {
+      const query = z.object({ after: z.coerce.number().int().nonnegative().default(0), waitMs: z.coerce.number().int().min(0).max(20_000).default(0) }).parse(req.query);
+      res.status(200).json(await operatorSignals(callParam.parse(req.params.sessionId), operatorOf(req), query.after, query.waitMs));
+    } catch (error) { next(error); }
+  });
+
+  /** The operator's result. Only the operator who claimed the call decides. */
+  router.post('/admin/api/verification-calls/:sessionId/decision', requireRole('operator'), async (req, res, next) => {
+    try {
+      const sessionId = callParam.parse(req.params.sessionId);
+      const body = z.object({ result: z.enum(['VERIFIED', 'FAILED']) }).strict().parse(req.body);
+      await assertClaimedBy(sessionId, operatorOf(req));
+      const plan = await recordOperatorDecision(sessionId, operatorOf(req), body.result);
+      await sendBye(sessionId, 'operator', `decided:${body.result}`).catch(() => undefined);
+      res.status(200).json(plan);
+    } catch (error) { next(error); }
+  });
 
   return router;
 }

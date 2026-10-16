@@ -92,6 +92,52 @@ jobs:
       - name: Integration suites (concurrency, tenant isolation, replay, HSM, evidence, recovery, admin, mTLS)
         run: npm run test:integration
 
+  auth-core-media:
+    name: auth-core / real WebRTC call (PostgreSQL, Redis, Chromium)
+    runs-on: ubuntu-24.04
+    needs: auth-core
+    defaults:
+      run:
+        working-directory: auth-core
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      INTEGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      INTEGRATION_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: auth-core/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - name: Playwright and Chromium (test tooling only, not a dependency of Auth Core)
+        run: |
+          npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Device and operator console in two browsers, media over DTLS-SRTP
+        run: npm run test:media
+
   auth-core-e2e:
     name: auth-core / end-to-end (PostgreSQL, Redis)
     runs-on: ubuntu-24.04

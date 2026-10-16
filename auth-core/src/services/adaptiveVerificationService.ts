@@ -61,6 +61,8 @@ export interface CreatePlanInput extends VerificationPolicyInput {
 const STEPS: VerificationStep[] = ['PUSH', 'AUDIO', 'VIDEO'];
 const TERMINAL: VerificationStatus[] = ['FAILED', 'EXPIRED', 'CANCELLED'];
 const SESSION_TTL_MS = 5 * 60_000;
+/** Sessions (open, cancelled, expired or closed) per channel and authorization. */
+export const MAX_SESSIONS_PER_CHANNEL = 3;
 
 type Runner = Pick<PoolClient, 'query'>;
 
@@ -148,6 +150,13 @@ export async function openVerificationSession(authorizationId: string, clientId:
     if (rank(plan.required_step) < rank(channel)) throw new ConflictError(`${channel} is not required; escalate first`);
     if (channel !== plan.current_step) throw new ConflictError(`The next verification step is ${plan.current_step}`);
 
+    // A customer who declines or misses calls can retry, a limited number of
+    // times per channel; then the bank escalates or cancels.
+    const attempts = await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM verification_sessions WHERE authorization_id=$1 AND channel=$2`, [authorizationId, channel]);
+    if ((attempts.rows[0]?.n ?? 0) >= MAX_SESSIONS_PER_CHANNEL) {
+      throw new ConflictError(`${channel} verification was attempted ${MAX_SESSIONS_PER_CHANNEL} times for this authorization`, 'VERIFICATION_ATTEMPTS_EXHAUSTED');
+    }
     // Only one session per authorization can be open; a new one supersedes it.
     await tx.query(`UPDATE verification_sessions SET status='CANCELLED' WHERE authorization_id=$1 AND status='IN_PROGRESS'`, [authorizationId]);
     const sessionId = randomUUID();
@@ -269,6 +278,7 @@ async function closeSession(authorizationId: string, clientId: string, sessionId
     if (Date.now() >= new Date(session.expires_at).getTime()) {
       // Committed before the error is raised, so the session stays EXPIRED.
       await tx.query(`UPDATE verification_sessions SET status='EXPIRED' WHERE session_id=$1`, [sessionId]);
+      await tx.query(`UPDATE authorization_verification_plans SET status='PENDING', updated_at=now() WHERE authorization_id=$1 AND status='IN_PROGRESS'`, [authorizationId]);
       return 'EXPIRED';
     }
     const auth = await tx.query<{ state: string; expires_at: Date; canonical_payload_hash: string; credential_id: string | null }>(

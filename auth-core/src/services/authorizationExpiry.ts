@@ -61,3 +61,27 @@ export async function expireOverdueAuthorizations(limit = 200): Promise<number> 
     return overdue.rows.length;
   });
 }
+
+/**
+ * Closes audio/video sessions whose five minutes passed without a result
+ * (nobody answered, or the call dropped and was not resumed). The plan goes
+ * back to PENDING: an unanswered call verifies nothing and fails nothing; the
+ * customer may open another session, up to MAX_SESSIONS_PER_CHANNEL.
+ */
+export async function expireOverdueVerificationSessions(limit = 200): Promise<number> {
+  return withTransaction(async (tx) => {
+    const overdue = await tx.query<{ session_id: string; authorization_id: string; nexus_id: string; client_id: string; channel: string }>(
+      `SELECT s.session_id, s.authorization_id, s.nexus_id, s.client_id, s.channel
+       FROM verification_sessions s
+       WHERE s.status = 'IN_PROGRESS' AND s.expires_at <= now()
+       ORDER BY s.expires_at LIMIT $1
+       FOR UPDATE SKIP LOCKED`, [limit]);
+    for (const row of overdue.rows) {
+      await tx.query(`UPDATE verification_sessions SET status = 'EXPIRED' WHERE session_id = $1`, [row.session_id]);
+      await tx.query(`UPDATE authorization_verification_plans SET status = 'PENDING', updated_at = now() WHERE authorization_id = $1 AND status = 'IN_PROGRESS'`, [row.authorization_id]);
+      await recordAuditEvent('verification_session_expired', { nexusId: row.nexus_id, clientId: row.client_id, actor: 'system:expiry' },
+        { sessionId: row.session_id, authorizationId: row.authorization_id, channel: row.channel }, tx);
+    }
+    return overdue.rows.length;
+  });
+}

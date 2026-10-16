@@ -637,6 +637,75 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/VerificationSession' } } }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /v1/mobile/verification-sessions/{sessionId}/call:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: ICE servers and state of an in-app audio/video call of this device (ADR 0017)
+      description: Only the enrolled device of the session's authorization. TURN credentials are derived per session and expire with it.
+      responses:
+        '200':
+          description: Call
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId: { type: string, format: uuid }
+                  channel: { type: string, enum: [AUDIO, VIDEO] }
+                  expiresAt: { type: string, format: date-time }
+                  operatorJoined: { type: boolean }
+                  iceServers: { type: array, items: { $ref: '#/components/schemas/IceServer' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/mobile/verification-sessions/{sessionId}/signals:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Send a WebRTC signalling message to the operator
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalRequest' } } }
+      responses:
+        '201': { description: Queued, content: { application/json: { schema: { type: object, properties: { seq: { type: integer } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Signalling messages from the operator (long poll)
+      parameters:
+        - { in: query, name: after, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: waitMs, schema: { type: integer, minimum: 0, maximum: 20000, default: 0 } }
+      responses:
+        '200':
+          description: Messages with seq greater than `after`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next: { type: integer }
+                  signals: { type: array, items: { $ref: '#/components/schemas/CallSignal' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/verification-sessions/{sessionId}/cancel:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer ends or declines the call (session CANCELLED, plan back to PENDING)
+      responses:
+        '204': { description: Cancelled }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /v1/mobile/push-registration:
     post:
       tags: [Mobile SDK]
@@ -874,6 +943,28 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    IceServer:
+      type: object
+      required: [urls]
+      properties:
+        urls: { type: array, items: { type: string } }
+        username: { type: string }
+        credential: { type: string }
+    CallSignalRequest:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [offer, answer, candidate, bye] }
+        payload: { description: '`{ sdp }` for offer and answer (at most 16 384 characters), an RTCIceCandidateInit for candidate (at most 2 048), `{ reason }` for bye' }
+    CallSignal:
+      type: object
+      properties:
+        seq: { type: integer }
+        from: { type: string, enum: [device, operator] }
+        type: { type: string, enum: [offer, answer, candidate, bye] }
+        payload: {}
+        at: { type: string, format: date-time }
     Error:
       type: object
       required: [error]

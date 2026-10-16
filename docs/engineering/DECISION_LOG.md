@@ -37,3 +37,15 @@ Options considered: (a) keep trusting the mTLS gateway; (b) HMAC with a secret s
 ## D-009 Sandbox keeps its simulated provider path
 
 `sandbox/` is a Python reference server for integrators that simulates audio and video providers through an HMAC-signed webhook (`sandbox/README.md`). It is not changed in this batch and does not implement verification result v1; this difference is listed in `REMAINING_RISKS.md` until the sandbox is aligned.
+
+## D-010 WebRTC with signalling relayed by Auth Core; operators in the admin console (FI-001, ADR 0017)
+
+Default chosen without a paid provider and inside the bank's infrastructure: WebRTC (DTLS-SRTP by the stacks, no custom crypto), signalling over the existing authenticated HTTPS APIs with a long poll (no WebSocket dependency), the bank's coturn with per-session TURN REST credentials, operators answering in the admin console. External providers remain possible through signed result tokens (D-007). Recording is out of scope. Pending owner decisions: the WebRTC binary used in the SDKs, operator staffing, whether a provider is used for VIDEO.
+
+## D-011 Declined and unanswered calls are neither success nor failure
+
+A customer who declines or an operator queue that does not answer verifies nothing. Treating it as FAILED would let call availability reject payments; treating it as success would bypass the step. The plan returns to PENDING, three sessions per channel and authorization at most, then the bank escalates or cancels.
+
+## D-012 ICE candidates are buffered around descriptions
+
+Found by the real-media test: a peer gathers candidates as soon as it sets its local description, so its candidates can be relayed before its offer or answer, and the other side cannot apply a candidate before the remote description. Senders hold candidates until their description is posted; receivers hold candidates until the remote description is applied. The SDKs must follow the same rule.
