@@ -26,6 +26,8 @@ Development settings apply: software HSM, device attestation not required (`REQU
 2. In a second terminal, the demo bank: `node demo/bank-backend/demo-bank.mjs`. It reads the bank client secret from `~/nexus-local-credentials.txt`.
 3. Open the operator page on the computer: `http://localhost:8090/`.
 
+The demo app's calls to the demo bank (`/app/*`) need the pairing code shown on the operator page: anyone who can reach the device port could otherwise obtain an enrolment or replacement token for the demo customer (FI-016). The code changes at every start and after ten wrong attempts. The demo bank holds no real customer data; do not leave the device port reachable from a network after the demo.
+
 `run-local.sh` starts every time with an empty database. After restarting it, restart the demo bank and tap "Зарегистрировать телефон заново" in the app.
 
 ## iPhone
@@ -57,7 +59,7 @@ Needs a Mac with Xcode 15 or later, a free Apple ID, and an iPhone with iOS 15 o
 3. Xcode → Settings → Accounts: add the Apple ID. Select the target NEXUSSignDemo → Signing & Capabilities → Team: your Personal Team. If Xcode says the bundle identifier is not available, change it to something unique, for example `com.<yourname>.nexussign.demo`.
 4. Connect the iPhone by cable, unlock it and choose it as the run destination. On iOS 16 or later turn on Settings → Privacy & Security → Developer Mode (the iPhone restarts). Press Run.
 5. The first launch is refused until the developer is trusted: on the iPhone, Settings → General → VPN & Device Management → your Apple ID → Trust. Run again.
-6. In the app, enter the server address and tap "Подключиться", then "Зарегистрировать телефон".
+6. In the app, enter the server address and the 8-digit pairing code shown on the operator page (and printed by the demo bank at start), tap "Подключиться", then "Зарегистрировать телефон".
 7. On the operator page, send a payment. Within a few seconds it appears in the app; check the amount and the beneficiary, tap "Подтвердить Face ID / Touch ID" and confirm. The operator page shows the payment as confirmed by signature; the admin console (`http://localhost:8080/admin/`) shows the credential, the authorization and the audit trail.
 
 With a free Apple ID the app runs for seven days; run it again from Xcode after that.
@@ -76,7 +78,7 @@ Needs an Android 9 or later phone with a screen lock and a fingerprint or face e
    ```
 
    `adb reverse` lasts until the cable is unplugged; run it again after reconnecting.
-3. On the phone, open NEXUS-SIGN Demo and tap "Зарегистрировать телефон".
+3. On the phone, open NEXUS-SIGN Demo, enter the pairing code from the operator page and tap "Зарегистрировать телефон".
 4. On the operator page, send a payment, then confirm it in the app with "Подтвердить биометрией".
 
 To build the APK locally (JDK 17 and the Android SDK): `cd demo/android && sh ../../android-sdk/gradlew assembleDebug`; the APK is `app/build/outputs/apk/debug/app-debug.apk`.

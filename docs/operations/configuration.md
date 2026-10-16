@@ -23,6 +23,8 @@ Boolean variables are compared as exact, case-sensitive strings. Opt-in flags ar
 | `OAUTH_TOKEN_TTL_SECONDS` | `3600` | None | Integer from 60 to 86 400. Lifetime of bank backend access tokens issued by `POST /oauth/token`. |
 | `REQUIRE_IDEMPOTENCY_KEY` | on | None | Opt-out flag. When on, `POST /v1/authorizations` without an `Idempotency-Key` header is rejected with 400. |
 | `BANK_COMMIT_MAX_AGE_SECONDS` | `3600` | None | Integer from 60 to 604 800 (7 days). `POST /v1/authorizations/{id}/bank-commit-request` is refused with 409 `CONFIRMATION_TOO_OLD` when the customer's confirmation (`verified_at`) is older. |
+| `AUTHORIZATION_EXPIRY_SWEEP_MS` | `10000` | None | Integer from 500 to 300 000. Interval of the sweep that moves `PENDING_USER` authorizations past `expiresAt` to `EXPIRED` and sends `authorization.expired`. Read paths report `EXPIRED` immediately regardless. |
+| `SHUTDOWN_DRAIN_MS` | `15000` | None | Integer from 0 to 120 000. On `SIGTERM`/`SIGINT` Auth Core stops accepting connections and waits this long for requests in flight before closing them, the HSM sessions, the database pool and Redis. |
 
 ## Database and Redis
 

@@ -24,7 +24,7 @@
 // auth-core/scripts/run-local.sh).
 import { createServer, request as httpRequest } from 'node:http';
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -46,6 +46,29 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET ?? fromCredentialsFile(/client_s
 if (!CLIENT_SECRET) {
   console.error(`No client secret: set CLIENT_SECRET, or start Auth Core with auth-core/scripts/run-local.sh (it writes ${credentialsFile}).`);
   process.exit(2);
+}
+
+// Pairing code (FI-016). The device port can be reachable from the whole
+// Wi-Fi network, and /app/bootstrap-token hands out enrolment and replacement
+// tokens. The app must send the code shown on the operator page; it changes on
+// every start and after too many wrong attempts.
+const PAIRING_HEADER = 'x-demo-pairing-code';
+const MAX_PAIRING_FAILURES = 10;
+let pairingCode = newPairingCode();
+let pairingFailures = 0;
+function newPairingCode() { return String(randomInt(0, 100_000_000)).padStart(8, '0'); }
+function displayPairingCode() { return `${pairingCode.slice(0, 4)} ${pairingCode.slice(4)}`; }
+function checkPairingCode(req) {
+  const given = Buffer.from(String(req.headers[PAIRING_HEADER] ?? '').replace(/\D/g, ''), 'utf8');
+  const expected = Buffer.from(pairingCode, 'utf8');
+  if (given.length === expected.length && timingSafeEqual(given, expected)) return;
+  pairingFailures += 1;
+  if (pairingFailures >= MAX_PAIRING_FAILURES) {
+    pairingCode = newPairingCode();
+    pairingFailures = 0;
+    log(`too many wrong pairing codes: new pairing code ${displayPairingCode()}`);
+  }
+  throw new HttpError(401, 'Pairing code missing or wrong: enter the code shown on the demo bank page');
 }
 
 // One demo customer, enrolled from the phone.
@@ -164,6 +187,7 @@ button{padding:8px 16px;border:0;border-radius:6px;background:#1f6feb;color:#fff
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e3eaf3}
 .ok{color:#127a3e;font-weight:600}.wait{color:#9a6700;font-weight:600}.bad{color:#b42318;font-weight:600}.msg{padding:8px 12px;border-radius:6px;background:#fff4d6}</style></head><body>
 <h1>Демо-банк · оператор</h1>
+<p>Код сопряжения для демо-приложения: <b style="font-size:20px;letter-spacing:2px">${displayPairingCode()}</b></p>
 <p>Auth Core: <code>${escape(AUTH_CORE)}</code> · банк <code>${escape(CLIENT_ID)}</code><br>
 Клиент: ${customer.nexusId ? `NEXUS ID <b>${escape(customer.nexusId)}</b>, ${customer.credentialId ? `телефон зарегистрирован (<code>${escape(customer.credentialId)}</code>)` : 'телефон ещё не зарегистрирован'}` : 'ещё не зарегистрирован: откройте демо-приложение и нажмите «Зарегистрировать телефон»'}</p>
 ${message ? `<p class="msg">${escape(message)}</p>` : ''}
@@ -202,6 +226,8 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
 
 /** The demo app's calls to its bank. Answers true when the request was one of them. */
 async function appRoutes(req, res, pathname) {
+  if (!pathname.startsWith('/app/')) return false;
+  checkPairingCode(req);
   if (req.method === 'POST' && pathname === '/app/bootstrap-token') { send(res, 200, await bootstrapToken()); return true; }
   if (req.method === 'POST' && pathname === '/app/registered') {
     const { credentialId } = await readBody(req);
@@ -301,5 +327,6 @@ operator.listen(PORT, '127.0.0.1', async () => {
   }
   device.listen(DEVICE_PORT, DEVICE_HOST, () => {
     log(`demo bank: operator page http://127.0.0.1:${PORT}, device port ${DEVICE_HTTPS ? 'https' : 'http'}://${DEVICE_HOST}:${DEVICE_PORT}; Auth Core ${AUTH_CORE}, bank client ${CLIENT_ID}`);
+    log(`pairing code for the demo app: ${displayPairingCode()}`);
   });
 });

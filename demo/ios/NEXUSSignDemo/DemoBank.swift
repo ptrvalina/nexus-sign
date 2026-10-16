@@ -8,6 +8,9 @@ import Foundation
 /// the bank's push or NEXUS-SIGN secure push).
 struct DemoBank {
     let baseURL: URL
+    /// The code shown on the demo bank's operator page; without it the demo
+    /// bank issues no enrolment token (FI-016).
+    let pairingCode: String
 
     struct Failure: LocalizedError {
         let message: String
@@ -31,6 +34,7 @@ struct DemoBank {
     private func request(_ method: String, _ path: String, body: Data?) async throws -> [String: Any] {
         var request = URLRequest(url: baseURL.appendingPathComponent(path), timeoutInterval: 10)
         request.httpMethod = method
+        request.setValue(pairingCode, forHTTPHeaderField: "X-Demo-Pairing-Code")
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

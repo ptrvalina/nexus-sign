@@ -22,6 +22,9 @@ import {
   type AuthorizationRow,
 } from './authorizationRecord';
 import { ConflictError } from './errors';
+import { markExpired } from './authorizationExpiry';
+import { enqueueWebhook } from './webhookService';
+import { getChainHead } from './evidenceService';
 
 const MAX_SIGNATURE_ATTEMPTS = 5;
 
@@ -200,8 +203,13 @@ async function countFailedAttempt(tx: PoolClient, id: string, credentialId: stri
   const context = { ...auditContext, nexusId };
   await recordAuditEvent('authorization_rejected', context, { authorizationId: id, attempt, reason }, tx);
   if (attempt < MAX_SIGNATURE_ATTEMPTS) return { status: 'FAILED', reason, attempts: attempt };
-  await tx.query(`UPDATE authorization_requests SET state = 'REJECTED' WHERE authorization_id = $1 AND state = 'PENDING_USER'`, [id]);
+  const rejected = await tx.query<{ client_id: string; transaction_reference: string }>(
+    `UPDATE authorization_requests SET state = 'REJECTED' WHERE authorization_id = $1 AND state = 'PENDING_USER' RETURNING client_id, transaction_reference`, [id]);
   await recordAuditEvent('authorization_rejected', context, { authorizationId: id, reason: 'REJECTED' }, tx);
+  if (rejected.rows[0]) {
+    await enqueueWebhook(rejected.rows[0].client_id, 'authorization.rejected', {
+      authorizationId: id, nexusId, transactionReference: rejected.rows[0].transaction_reference, reason: 'signature_attempt_limit' }, tx);
+  }
   return { status: 'FAILED', reason: 'signature_attempt_limit', attempts: attempt };
 }
 
@@ -230,15 +238,19 @@ async function transitionTerminal(id: string, clientId: string, state: 'VERIFIED
     if (!auth || FINAL_STATES.includes(auth.state)) return { ok: false, reason: 'Authorization was finalized concurrently' };
     const context: AuditContext = { ...auditContext, nexusId: auth.nexus_id };
 
+    if (state === 'EXPIRED') {
+      await markExpired(tx, auth, auditContext);
+      return { ok: true };
+    }
     if (state !== 'VERIFIED' || !verified) {
       await tx.query(`UPDATE authorization_requests SET state = $2 WHERE authorization_id = $1`, [id, state]);
-      await recordAuditEvent(state === 'EXPIRED' ? 'authorization_expired' : 'authorization_rejected', context, { authorizationId: id, reason: state }, tx);
+      await recordAuditEvent('authorization_rejected', context, { authorizationId: id, reason: state }, tx);
+      await enqueueWebhook(clientId, 'authorization.rejected', { authorizationId: id, nexusId: auth.nexus_id, transactionReference: auth.transaction_reference, reason: state }, tx);
       return { ok: true };
     }
     if (planGap) return { ok: false, reason: planGap };
     if (Date.now() >= new Date(auth.expires_at).getTime()) {
-      await tx.query(`UPDATE authorization_requests SET state = 'EXPIRED' WHERE authorization_id = $1`, [id]);
-      await recordAuditEvent('authorization_expired', context, { authorizationId: id, reason: 'EXPIRED' }, tx);
+      await markExpired(tx, auth, auditContext);
       return { ok: false, reason: 'expired' };
     }
     if (auth.credential_id !== verified.credentialId) return { ok: false, reason: 'Credential is not valid for this authorization' };
@@ -267,6 +279,16 @@ async function transitionTerminal(id: string, clientId: string, state: 'VERIFIED
       [id, verified.credentialId, auditContext.ipAddress ?? null, auditContext.userAgent ?? null]);
     await recordAuditEvent('authorization_consumed', context, { authorizationId: id, transactionReference: auth.transaction_reference }, tx);
     const evidence = await recordEvidence(tx, verified, row, context);
+    // The bank keeps the chain head it receives here; a verifier given that
+    // head detects records removed from the end of the chain (FI-019).
+    await enqueueWebhook(clientId, 'authorization.verified', {
+      authorizationId: id,
+      nexusId: auth.nexus_id,
+      transactionReference: auth.transaction_reference,
+      confirmationMethod: verified.confirmationMethod,
+      evidence,
+      evidenceHead: await getChainHead(tx, auth.nexus_id),
+    }, tx);
     return { ok: true, evidence };
   });
 }

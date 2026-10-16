@@ -8,9 +8,16 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 - `demo/`: demo host apps for iPhone (`demo/ios`, Xcode project; CI job `ios-demo` builds it) and Android (`demo/android`; CI job `android-demo` builds the `nexus-sign-demo-apk` artifact), and a demo bank backend (`demo/bank-backend/demo-bank.mjs`) with an operator page and a device port that forwards only the device endpoints of Auth Core, for trying enrolment and payment signing on a real phone ([demo/README.md](demo/README.md)).
 - `auth-core/scripts/run-local.sh`: runs Auth Core with PostgreSQL and Redis from `docker-compose.yml` on one machine in development mode (fresh database, schema and roles, bank client, admin account with TOTP, service on port 8080).
+- Auth Core: webhooks `authorization.verified` (with the evidence position and the chain head the bank keeps for truncation checks), `authorization.rejected` and `authorization.expired` (FI-013, FI-019).
+- Auth Core: a periodic sweep moves `PENDING_USER` authorizations past their expiry to `EXPIRED`, with their verification plan and open sessions (`AUTHORIZATION_EXPIRY_SWEEP_MS`, FI-013).
+- Demo bank: the demo app's calls need the pairing code shown on the operator page; the iOS and Android demo apps ask for it (FI-016). CI job `demo-bank` tests it.
 
 ### Changed
 
+- Auth Core: `GET /v1/authorizations/{id}` and `GET /v1/mobile/authorizations/{id}` report `EXPIRED` as soon as `expiresAt` has passed, instead of `PENDING_USER` until the next confirmation attempt (FI-013).
+- Auth Core: shutdown waits up to `SHUTDOWN_DRAIN_MS` for requests in flight before closing the HSM, database and Redis (FI-014).
+- Auth Core: a NEXUS ID collision between concurrent identity creations retries with a new ID instead of reporting a duplicate customer (FI-015).
+- Auth Core: the webhook destination check runs in the caller's transaction, so a webhook queued while row locks are held does not need a second pool connection.
 - iOS SDK tests: the recovery tests read the vector's iteration count as a number (the forced string cast stopped the test process).
 - Auth Core image: the runtime stage removes npm, npx, corepack and yarn shipped with the base image; the service runs with `node` only.
 - CI: CodeQL keeps its results as the `codeql-sarif` artifact and does not upload them to code scanning, which private repositories can use only with GitHub Code Security. `.github/codeql/gate.mjs` fails the job on any result of security severity 7.0 or higher that is not listed, with its reason, in `.github/codeql/reviewed-findings.tsv`.

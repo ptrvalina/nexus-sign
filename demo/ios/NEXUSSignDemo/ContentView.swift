@@ -11,10 +11,12 @@ struct ContentView: View {
                         .font(.footnote)
                 }
                 Section("Сервер") {
-                    TextField("https://….trycloudflare.com", text: $model.serverAddress)
+                    TextField("https://192.168.1.23:8443", text: $model.serverAddress)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
+                    TextField("Код сопряжения (8 цифр)", text: $model.pairingCode)
+                        .keyboardType(.numberPad)
                     Button("Подключиться") { model.connect() }
                         .disabled(model.busy)
                 }

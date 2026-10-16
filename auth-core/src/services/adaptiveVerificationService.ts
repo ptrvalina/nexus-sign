@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { pool, withTransaction } from '../db/pool';
 import { recordAuditEvent } from './auditService';
 import { ConflictError, ForbiddenError, GoneError, NotFoundError, ValidationError } from './errors';
+import { enqueueWebhook } from './webhookService';
 
 /**
  * Adaptive verification plan of one authorization.
@@ -196,7 +197,12 @@ export async function completeVerificationSession(authorizationId: string, clien
       }
       const failed = await tx.query<VerificationPlanRow>(
         `UPDATE authorization_verification_plans SET status='FAILED', updated_at=now() WHERE authorization_id=$1 RETURNING *`, [authorizationId]);
-      await tx.query(`UPDATE authorization_requests SET state='REJECTED' WHERE authorization_id=$1 AND state='PENDING_USER'`, [authorizationId]);
+      const rejected = await tx.query<{ transaction_reference: string }>(
+        `UPDATE authorization_requests SET state='REJECTED' WHERE authorization_id=$1 AND state='PENDING_USER' RETURNING transaction_reference`, [authorizationId]);
+      if (rejected.rows[0]) {
+        await enqueueWebhook(clientId, 'authorization.rejected', {
+          authorizationId, nexusId: plan.nexus_id, transactionReference: rejected.rows[0].transaction_reference, reason: 'verification_failed' }, tx);
+      }
       await recordAuditEvent('verification_failed', { nexusId: plan.nexus_id },
         { authorizationId, sessionId, channel: session.channel, providerReference, authorizationState: 'REJECTED' }, tx);
       return mapPlan(failed.rows[0]);

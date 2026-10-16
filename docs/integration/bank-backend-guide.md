@@ -245,10 +245,13 @@ The transition to `EXPIRED` is recorded when a confirmation is attempted. Until 
 
 ### Webhooks
 
-Webhooks report bank transaction state changes (step 9), device and recovery changes, and, in push mode `NEXUS`, push delivery. Auth Core sends `POST` requests with a JSON body to the registered URL. A receiver must accept event types it does not process; answering them with an error makes the delivery fail and be retried:
+Webhooks report the outcome of each authorization, bank transaction state changes (step 9), device and recovery changes, and, in push mode `NEXUS`, push delivery. Auth Core sends `POST` requests with a JSON body to the registered URL. A receiver must accept event types it does not process; answering them with an error makes the delivery fail and be retried:
 
 | `eventType` | Body fields besides `eventId`, `eventType` |
 |---|---|
+| `authorization.verified` | `authorizationId`, `nexusId`, `transactionReference`, `confirmationMethod`, `evidence` (`evidenceId`, `chainSequence`, `evidenceHash`), `evidenceHead`. Keep `evidenceHead`: a verifier given the latest head the bank holds (`verify-evidence.mjs --expect-head`) detects records removed from the end of the chain |
+| `authorization.rejected` | `authorizationId`, `nexusId`, `transactionReference`, `reason` (`signature_attempt_limit`, `verification_failed`, `REJECTED`) |
+| `authorization.expired` | `authorizationId`, `nexusId`, `transactionReference`, `expiresAt`. Sent once, when the authorization is moved to `EXPIRED` by a late confirmation attempt or by the periodic sweep (`AUTHORIZATION_EXPIRY_SWEEP_MS`). `GET /v1/authorizations/{id}` reports `EXPIRED` as soon as `expiresAt` has passed |
 | `authorization.bank_transaction.commit_requested` | `authorizationId`, `bankTransactionReference` |
 | `authorization.bank_transaction.committed` | `authorizationId`, `state`, `error` |
 | `authorization.bank_transaction.failed` | `authorizationId`, `state`, `error` |

@@ -63,6 +63,12 @@ const envSchema = z.object({
   /** How long after the customer's confirmation the bank may request the
    * commit of a transaction (NXS-030). */
   BANK_COMMIT_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(7 * 24 * 3600).default(3600),
+  /** How often PENDING_USER authorizations past their expiry are moved to
+   * EXPIRED (and the bank's webhook is notified). Read paths report EXPIRED
+   * immediately regardless of this interval. */
+  AUTHORIZATION_EXPIRY_SWEEP_MS: z.coerce.number().int().min(500).max(300_000).default(10_000),
+  /** How long a shutdown waits for requests in flight before closing them. */
+  SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(120_000).default(15_000),
 
   /** Path prefix the gateway removes before forwarding (e.g. `/nexus-sign`
    * when the SDK base URL is https://api.bank.example/nexus-sign). Devices

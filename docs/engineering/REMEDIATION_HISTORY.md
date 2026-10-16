@@ -1,0 +1,12 @@
+# Remediation history
+
+Per finding of the forensic inventory 2026-10-16. Status values: OPEN, FIXED (implemented, regression test passes, full regression green), PARTIAL, BLOCKED, ACCEPTED (documented residual risk, owner decision pending).
+
+| Finding | Status | Change | Regression evidence | Batch / commit |
+|---|---|---|---|---|
+| FI-013 Expired authorizations reported as pending | FIXED | `services/authorizationExpiry.ts` (`reportedState`, `markExpired`, sweep), `workers/expiryWorker.ts`, read paths in `routes/nexusV1.ts` and `routes/mobileV1.ts`, `authorization.expired` webhook | Reproduced before the fix (GET 33 s after a 30 s expiry returned `PENDING_USER`). `test/integration/expiry.test.mjs` 4/4; `test/remediation-2.0.test.mjs` | Batch 1 |
+| FI-014 Shutdown cuts requests in flight | FIXED | `server.ts`: stop workers, `server.close` with drain timeout `SHUTDOWN_DRAIN_MS`, then close HSM, pool, Redis; idempotent on a second signal | Code review; no automated test (the harness stops servers with SIGTERM in every suite, all pass) | Batch 1 |
+| FI-015 NEXUS ID collision misreported | FIXED | `nexusIdentityService.ts`: retry on `nexus_identities_pkey`, duplicate customer only on the customer index | `test/remediation-2.0.test.mjs` (3 tests; 2 fail against the previous code) | Batch 1 |
+| FI-016 Demo bank issues tokens to anyone on the network | FIXED (demo) | `demo/bank-backend/demo-bank.mjs` pairing code; iOS and Android demo apps send it; README warning | Reproduced before the fix (unauthenticated POST returned a token). `demo/bank-backend/test/pairing.test.mjs` 5/5 (0/5 against the previous code); demo flow with the phone simulator passes; unauthenticated request now 401 | Batch 1 |
+| FI-019 Truncation needs bank-held heads | PARTIAL | `authorization.verified` webhook carries the chain head | `expiry.test.mjs` "a confirmation notifies the bank with the evidence position and the chain head" | Batch 1 |
+| FI-010 HSM | PARTIAL (correction) | None. SoftHSM 2.7.0 was available; HSM suite 10/10 | Baseline run | — |

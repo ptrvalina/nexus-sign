@@ -87,8 +87,11 @@ export async function getWebhookDestination(clientId: string): Promise<WebhookDe
 
 /** True when the client has a webhook configured. Does not decrypt the
  * secret, so recording an event never depends on the encryption key. */
-export async function hasWebhookDestination(clientId: string): Promise<boolean> {
-  const result = await pool.query(
+/** `runner` is the caller's transaction when there is one: taking a second
+ * pool connection while holding row locks can exhaust the pool under
+ * concurrency (every waiting transaction holds a connection too). */
+export async function hasWebhookDestination(clientId: string, runner: Pick<typeof pool, 'query'> = pool): Promise<boolean> {
+  const result = await runner.query(
     `SELECT 1 FROM bank_clients WHERE client_id = $1 AND status = 'ACTIVE' AND webhook_url IS NOT NULL AND webhook_secret_encrypted IS NOT NULL`,
     [clientId],
   );

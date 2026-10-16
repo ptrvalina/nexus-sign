@@ -5,6 +5,7 @@ import { createNexusIdentity, getNexusIdentityForClient } from '../services/nexu
 import { getCredentialForClient, revokeCredentialForClient } from '../services/credentialService';
 import { createAuthorization } from '../services/authorizationService';
 import { getAuthorizationForClient } from '../services/authorizationRecord';
+import { reportedState } from '../services/authorizationExpiry';
 import { confirmAuthorizationOffline, getOfflineChallenge, verifyAuthorization } from '../services/authorizationConfirmation';
 import { finalizeBankTransaction, getBankTransactionState, requestCommit } from '../services/bankTransactionService';
 import { completeVerificationSession, escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
@@ -196,6 +197,7 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
       const auth = await getAuthorizationForClient(uuidSchema.parse(req.params.authorizationId), clientIdOf(req));
       res.json({
         ...auth,
+        state: reportedState(auth),
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,

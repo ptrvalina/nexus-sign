@@ -14,7 +14,11 @@ import org.json.JSONObject
  * which authorization the customer should review (here by polling; in
  * production by the bank's push or by NEXUS-SIGN secure push).
  */
-class DemoBank(private val baseUrl: String) {
+class DemoBank(
+    private val baseUrl: String,
+    /** The code shown on the demo bank's operator page (FI-016). */
+    private val pairingCode: () -> String,
+) {
 
     suspend fun bootstrapToken(): String =
         JSONObject(request("POST", "/app/bootstrap-token", "{}")).getString("token")
@@ -29,6 +33,7 @@ class DemoBank(private val baseUrl: String) {
     private suspend fun request(method: String, path: String, body: String?): String = withContext(Dispatchers.IO) {
         val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
+            setRequestProperty("X-Demo-Pairing-Code", pairingCode())
             connectTimeout = 5_000
             readTimeout = 10_000
             if (body != null) {

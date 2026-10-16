@@ -3,7 +3,11 @@ package com.nexis.nexussign.demo
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.View
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -30,7 +34,11 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
 
     private lateinit var sdk: NEXUSSignSDK
-    private val bank = DemoBank(DEMO_BANK_URL)
+    // Read by DemoBank on an I/O thread, so it is copied out of the view.
+    @Volatile private var pairingCode = ""
+    private val bank = DemoBank(DEMO_BANK_URL) { pairingCode }
+
+    private lateinit var pairingField: EditText
 
     private lateinit var registerButton: Button
     private lateinit var paymentCard: LinearLayout
@@ -189,7 +197,7 @@ class MainActivity : AppCompatActivity() {
                 is NEXUSSignError.NetworkUnavailable ->
                     "Нет связи с сервером. Телефон подключён кабелем, и выполнен ли adb reverse tcp:8091 tcp:8091?"
                 is java.io.IOException ->
-                    "Нет связи с демо-банком: ${error.message}. Он запущен, и выполнен ли adb reverse tcp:8091 tcp:8091?"
+                    "Нет связи с демо-банком: ${error.message}. Он запущен, верен ли код сопряжения, выполнен ли adb reverse tcp:8091 tcp:8091?"
                 else -> "${error::class.java.simpleName}: ${error.message}"
             },
         )
@@ -216,6 +224,16 @@ class MainActivity : AppCompatActivity() {
             textSize = 14f
             setPadding(0, pad / 2, 0, pad)
         })
+        pairingField = EditText(this).apply {
+            hint = "Код сопряжения со страницы демо-банка (8 цифр)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: Editable?) { pairingCode = s?.toString().orEmpty().filter(Char::isDigit) }
+            })
+        }
+        root.addView(pairingField)
         registerButton = Button(this).apply { setOnClickListener { register() } }
         root.addView(registerButton)
 

@@ -13,6 +13,7 @@ import { env } from '../config/env';
 import { authorizationObjectOf, getAuthorizationForClient, type AuthorizationRecord } from '../services/authorizationRecord';
 import { verifyAuthorization } from '../services/authorizationConfirmation';
 import { canonicalizeAuthorization } from '../services/canonicalAuthorization';
+import { reportedState } from '../services/authorizationExpiry';
 import { beginRecoverySetup, completeRecoverySetup } from '../services/recoveryService';
 import { escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
 import { buildAttestationBinding } from '../services/attestationBinding';
@@ -257,7 +258,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
         nonce: auth.nonce,
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
-        state: auth.state,
+        state: reportedState(auth),
         signatureAlgorithm: auth.signatureAlgorithm,
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,
         canonicalPayloadBase64: canonicalizeAuthorization(authorizationObjectOf(auth)).toString('base64'),

@@ -7,11 +7,12 @@ import NEXUSSign
 @MainActor
 final class DemoModel: ObservableObject {
     @Published var serverAddress: String = UserDefaults.standard.string(forKey: DemoModel.addressKey) ?? ""
+    @Published var pairingCode: String = ""
     @Published private(set) var connected = false
     @Published private(set) var registered = false
     @Published private(set) var busy = false
     @Published private(set) var payment: NexusSignedTransaction?
-    @Published private(set) var status = "Введите адрес сервера (https://….trycloudflare.com) и нажмите «Подключиться»."
+    @Published private(set) var status = "Введите адрес сервера (https://IP-компьютера:8443) и код сопряжения со страницы демо-банка, затем нажмите «Подключиться»."
 
     private static let addressKey = "serverAddress"
     private var sdk: NEXUSSignSDK?
@@ -22,11 +23,16 @@ final class DemoModel: ObservableObject {
     func connect() {
         let text = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: text), url.scheme == "https", let host = url.host, !host.isEmpty else {
-            status = "Адрес должен начинаться с https:// (например https://word-word-word.trycloudflare.com)."
+            status = "Адрес должен начинаться с https:// (например https://192.168.1.23:8443)."
+            return
+        }
+        let code = pairingCode.filter(\.isNumber)
+        guard code.count == 8 else {
+            status = "Введите 8-значный код сопряжения со страницы демо-банка."
             return
         }
         UserDefaults.standard.set(text, forKey: Self.addressKey)
-        let bank = DemoBank(baseURL: url)
+        let bank = DemoBank(baseURL: url, pairingCode: code)
         self.bank = bank
         sdk = NEXUSSignSDK(config: NEXUSSignConfig(
             bankID: "local-bank",
@@ -133,7 +139,7 @@ final class DemoModel: ObservableObject {
 
     private func show(_ error: Error) {
         guard let error = error as? NEXUSSignError else {
-            status = "Нет связи с демо-банком: \(error.localizedDescription). Запущены ли демо-банк и туннель?"
+            status = "Нет связи с демо-банком: \(error.localizedDescription). Запущен ли демо-банк, верны ли адрес и код сопряжения?"
             return
         }
         switch error {
@@ -150,7 +156,7 @@ final class DemoModel: ObservableObject {
             status = statusCode == 401
                 ? "Сервер не знает это устройство (база создана заново). Нажмите «Зарегистрировать телефон заново»."
                 : "Сервер отклонил запрос (\(statusCode)): \(message ?? "")"
-        case .networkUnavailable: status = "Нет связи с сервером. Запущены ли Auth Core, демо-банк и туннель, и верен ли адрес?"
+        case .networkUnavailable: status = "Нет связи с сервером. Запущены ли Auth Core и демо-банк, и верен ли адрес?"
         default: status = error.localizedDescription
         }
     }
