@@ -243,8 +243,8 @@ components:
           type: object
           required: [name]
           maxProperties: 16
-          description: 'Keys ^[a-z][a-z0-9_]{0,63}$, string values up to 512 characters (same rule as Auth Core).'
-          additionalProperties: {type: string, maxLength: 512}
+          description: 'Keys ^[a-z][a-z0-9_]{0,63}$, string values of 1 to 140 characters without leading or trailing space (same rule as Auth Core).'
+          additionalProperties: {type: string, minLength: 1, maxLength: 140}
         operationType: {type: string, pattern: '^[a-z][a-z0-9_]{0,31}$', default: transfer}
         transactionReference: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'}
         scenario: {type: string, enum: [standard, push-timeout, high-value, user-request, failure], default: standard}

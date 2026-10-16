@@ -39,12 +39,17 @@ data class NexusSignedTransaction(
     /** Beneficiary for display: well-known keys first, remaining keys sorted. */
     fun beneficiaryDisplay(): String = SignedPayload.beneficiaryDisplay(beneficiary)
 
-    /** One-line summary suitable for the biometric prompt. */
+    /**
+     * Text of the biometric prompt (FI-003). The first line carries the amount
+     * and the account identifier, so a long payee name cannot push the account
+     * out of the visible part of the prompt; the second line names the
+     * operation and the reference. Shared vectors fix the exact text.
+     */
     fun confirmationText(): String = buildString {
-        append(operationType).append(": ").append(formattedAmount()).append(' ').append(currency)
+        append(formattedAmount()).append(' ').append(currency)
         val who = beneficiaryDisplay()
         if (who.isNotEmpty()) append(" → ").append(who)
-        append(" • ").append(transactionReference)
+        append('\n').append(operationType).append(" • ").append(transactionReference)
     }
 }
 
@@ -126,8 +131,13 @@ internal object SignedPayload {
         for ((key, value) in obj) {
             if (value is String && !isDisplaySafe(value)) throw Rejected("invalid_value", "$key contains a control, format or separator character")
         }
+        if (beneficiary.size > BENEFICIARY_MAX_FIELDS) throw Rejected("invalid_value", "more than $BENEFICIARY_MAX_FIELDS beneficiary fields")
         for ((key, value) in beneficiary) {
             if (!isDisplaySafe(value)) throw Rejected("invalid_value", "beneficiary.$key contains a control, format or separator character")
+            if (value.isEmpty() || value.length > BENEFICIARY_MAX_VALUE_LENGTH) throw Rejected("invalid_value", "beneficiary.$key must be 1 to $BENEFICIARY_MAX_VALUE_LENGTH characters")
+            if (isSpaceSeparator(value.codePointAt(0)) || isSpaceSeparator(value.codePointBefore(value.length))) {
+                throw Rejected("invalid_value", "beneficiary.$key has leading or trailing space")
+            }
         }
 
         return NexusSignedTransaction(
@@ -208,12 +218,21 @@ internal object SignedPayload {
      * signed value. Auth Core applies the same rule. */
     fun isDisplaySafe(value: String): Boolean = value.codePoints().noneMatch { Character.getType(it) in DISPLAY_UNSAFE_TYPES }
 
-    private val PREFERRED_BENEFICIARY_KEYS = listOf("name", "iban", "account", "account_number", "bic")
+    /** ISO 20022 Max140Text, in UTF-16 code units; Auth Core applies the same limit. */
+    const val BENEFICIARY_MAX_VALUE_LENGTH = 140
+    const val BENEFICIARY_MAX_FIELDS = 16
 
+    private fun isSpaceSeparator(codePoint: Int): Boolean = Character.getType(codePoint) == Character.SPACE_SEPARATOR.toInt()
+
+    private val ACCOUNT_KEYS = listOf("iban", "account", "account_number")
+
+    /** Account identifier first (the first of iban, account, account_number),
+     * then name and bic, then the other fields by key. */
     fun beneficiaryDisplay(beneficiary: Map<String, String>): String {
-        val ordered = PREFERRED_BENEFICIARY_KEYS.filter { it in beneficiary } +
-            beneficiary.keys.filter { it !in PREFERRED_BENEFICIARY_KEYS }.sorted()
-        return ordered.mapNotNull { beneficiary[it]?.takeIf(String::isNotBlank) }.joinToString(" · ")
+        val account = ACCOUNT_KEYS.firstOrNull { it in beneficiary }
+        val ordered = listOfNotNull(account, "name", "bic").filter { it in beneficiary }
+        val rest = beneficiary.keys.filter { it !in ordered }.sorted()
+        return (ordered + rest).map { beneficiary.getValue(it) }.joinToString(" · ")
     }
 
     // --- Canonical encoding ---

@@ -28,9 +28,9 @@ final class NetworkClient {
     /// Auth Core time minus device time, learned from a rejected timestamp.
     private var clockOffset: Int64 = 0
 
-    init(config: NEXUSSignConfig, session: URLSession = .shared) {
+    init(config: NEXUSSignConfig, session: URLSession? = nil) {
         self.config = config
-        self.session = session
+        self.session = session ?? CertificatePinning.session(pins: config.certificatePins)
     }
 
     /// Set once the device is enrolled; every device request is signed with it.

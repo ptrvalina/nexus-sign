@@ -24,12 +24,14 @@
         "issued_at": "2026-09-26T10:00:00.000Z",
         "expires_at": "2026-09-26T10:02:00.000Z",
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-      }
+      },
+      "beneficiary_display": "PL61109010140000071219812874 · Jan Kowalski",
+      "confirmation_text": "1250.00 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001"
     },
     {
       "name": "unicode, quotes, backslash and slash in beneficiary",
-      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiYmVuZWZpY2lhcnkiOnsiYWRkcmVzc19saW5lXzEiOiJ1bC4gTWFyc3phxYJrb3dza2EgMS8yIiwiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiWmHFvMOzxYLEhyBnxJnFm2zEhSBqYcW6xYQgXCJTcC4geiBvLm8uXCIgXFwg4pyTIPCfmIAiLCJub3RlIjoiRmFrdHVyYSAyMDI2LzA5IDxyZWY+ICYgw6kgIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI2LTAwMDAwMSJ9",
-      "canonical_sha256": "ba678506251abef9eb716a31414379c5becb50d535c105ef5e9b883d46c4d0b4",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiYmVuZWZpY2lhcnkiOnsiYWRkcmVzc19saW5lXzEiOiJ1bC4gTWFyc3phxYJrb3dza2EgMS8yIiwiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiWmHFvMOzxYLEhyBnxJnFm2zEhSBqYcW6xYQgXCJTcC4geiBvLm8uXCIgXFwg4pyTIPCfmIAiLCJub3RlIjoiRmFrdHVyYSAyMDI2LzA5IDxyZWY+ICYgw6kifSwiY3JlZGVudGlhbF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImN1cnJlbmN5IjoiUExOIiwiZG9tYWluIjoiTkVYVVMtU0lHTi9UUkFOU0FDVElPTi1BVVRIIiwiZXhwaXJlc19hdCI6IjIwMjYtMDktMjZUMTA6MDI6MDAuMDAwWiIsImlzc3VlZF9hdCI6IjIwMjYtMDktMjZUMTA6MDA6MDAuMDAwWiIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwib3BlcmF0aW9uX3R5cGUiOiJ0cmFuc2ZlciIsInBvbGljeV9yZWZlcmVuY2UiOiJUUkFOU0ZFUi1ERUZBVUxUIiwicG9saWN5X3ZlcnNpb24iOiIyMDI2LTA5IiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0cmFuc2FjdGlvbl9yZWZlcmVuY2UiOiJCQU5LLTIwMjYtMDAwMDAxIn0=",
+      "canonical_sha256": "914adca3001ae91c3d4b6dbd72e7211cd07ad8a11b1e54232be8835157466ee5",
       "fields": {
         "protocol_version": "1",
         "domain": "NEXUS-SIGN/TRANSACTION-AUTH",
@@ -43,7 +45,7 @@
         "beneficiary": {
           "name": "Zażółć gęślą jaźń \"Sp. z o.o.\" \\ ✓ 😀",
           "address_line_1": "ul. Marszałkowska 1/2",
-          "note": "Faktura 2026/09 <ref> & é ",
+          "note": "Faktura 2026/09 <ref> & é",
           "iban": "PL61109010140000071219812874"
         },
         "policy_reference": "TRANSFER-DEFAULT",
@@ -51,7 +53,9 @@
         "issued_at": "2026-09-26T10:00:00.000Z",
         "expires_at": "2026-09-26T10:02:00.000Z",
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-      }
+      },
+      "beneficiary_display": "PL61109010140000071219812874 · Zażółć gęślą jaźń \"Sp. z o.o.\" \\ ✓ 😀 · ul. Marszałkowska 1/2 · Faktura 2026/09 <ref> & é",
+      "confirmation_text": "1250.00 PLN → PL61109010140000071219812874 · Zażółć gęślą jaźń \"Sp. z o.o.\" \\ ✓ 😀 · ul. Marszałkowska 1/2 · Faktura 2026/09 <ref> & é\ntransfer • BANK-2026-000001"
     },
     {
       "name": "zero amount and a currency without minor units",
@@ -76,7 +80,9 @@
         "issued_at": "2026-09-26T10:00:00.000Z",
         "expires_at": "2026-09-26T10:02:00.000Z",
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-      }
+      },
+      "beneficiary_display": "1234567 · Tanaka",
+      "confirmation_text": "0 JPY → 1234567 · Tanaka\ntransfer • BANK-2026-000001"
     },
     {
       "name": "large amount (30 digits)",
@@ -101,7 +107,9 @@
         "issued_at": "2026-09-26T10:00:00.000Z",
         "expires_at": "2026-09-26T10:02:00.000Z",
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-      }
+      },
+      "beneficiary_display": "PL61109010140000071219812874 · Jan Kowalski",
+      "confirmation_text": "1234567890123456789012345678.90 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001"
     },
     {
       "name": "empty beneficiary",
@@ -123,7 +131,37 @@
         "issued_at": "2026-09-26T10:00:00.000Z",
         "expires_at": "2026-09-26T10:02:00.000Z",
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-      }
+      },
+      "beneficiary_display": "",
+      "confirmation_text": "1250.00 PLN\ntransfer • BANK-2026-000001"
+    },
+    {
+      "name": "payee name of 140 characters (the maximum) is shown after the account",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA3IiwiYmVuZWZpY2lhcnkiOnsiYmljIjoiQ09CQURFRkZYWFgiLCJpYmFuIjoiREU4OTM3MDQwMDQ0MDUzMjAxMzAwMCIsIm5hbWUiOiJBQ01FIE5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk4gR21iSCJ9LCJjcmVkZW50aWFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY3VycmVuY3kiOiJQTE4iLCJkb21haW4iOiJORVhVUy1TSUdOL1RSQU5TQUNUSU9OLUFVVEgiLCJleHBpcmVzX2F0IjoiMjAyNi0wOS0yNlQxMDowMjowMC4wMDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0wOS0yNlQxMDowMDowMC4wMDBaIiwibmV4dXNfaWQiOiIxMjM0NTY3ODkiLCJub25jZSI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYiLCJvcGVyYXRpb25fdHlwZSI6InRyYW5zZmVyIiwicG9saWN5X3JlZmVyZW5jZSI6IlRSQU5TRkVSLURFRkFVTFQiLCJwb2xpY3lfdmVyc2lvbiI6IjIwMjYtMDkiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRyYW5zYWN0aW9uX3JlZmVyZW5jZSI6IkJBTkstMjAyNi0wMDAwMDEifQ==",
+      "canonical_sha256": "a7ff015234636bec045586e3a96b97e8d50149d7b4a97f1769974556bf652863",
+      "fields": {
+        "protocol_version": "1",
+        "domain": "NEXUS-SIGN/TRANSACTION-AUTH",
+        "authorization_id": "00000000-0000-4000-8000-000000000007",
+        "nexus_id": "123456789",
+        "credential_id": "00000000-0000-4000-8000-000000000002",
+        "transaction_reference": "BANK-2026-000001",
+        "operation_type": "transfer",
+        "amount_minor": "125000",
+        "currency": "PLN",
+        "beneficiary": {
+          "name": "ACME NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN GmbH",
+          "iban": "DE89370400440532013000",
+          "bic": "COBADEFFXXX"
+        },
+        "policy_reference": "TRANSFER-DEFAULT",
+        "policy_version": "2026-09",
+        "issued_at": "2026-09-26T10:00:00.000Z",
+        "expires_at": "2026-09-26T10:02:00.000Z",
+        "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      },
+      "beneficiary_display": "DE89370400440532013000 · ACME NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN GmbH · COBADEFFXXX",
+      "confirmation_text": "1250.00 PLN → DE89370400440532013000 · ACME NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN GmbH · COBADEFFXXX\ntransfer • BANK-2026-000001"
     }
   ],
   "invalid": [
@@ -226,6 +264,36 @@
       "name": "zero-width space in transaction reference",
       "reason": "invalid_value",
       "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiSmFuIEtvd2Fsc2tpIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI24oCLLTAwMDAwMSJ9"
+    },
+    {
+      "name": "beneficiary value of 141 characters",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI2LTAwMDAwMSJ9"
+    },
+    {
+      "name": "empty beneficiary value",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI2LTAwMDAwMSJ9"
+    },
+    {
+      "name": "beneficiary value of spaces only",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiICAgIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI2LTAwMDAwMSJ9"
+    },
+    {
+      "name": "leading space in beneficiary value",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiIEphbiBLb3dhbHNraSJ9LCJjcmVkZW50aWFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY3VycmVuY3kiOiJQTE4iLCJkb21haW4iOiJORVhVUy1TSUdOL1RSQU5TQUNUSU9OLUFVVEgiLCJleHBpcmVzX2F0IjoiMjAyNi0wOS0yNlQxMDowMjowMC4wMDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0wOS0yNlQxMDowMDowMC4wMDBaIiwibmV4dXNfaWQiOiIxMjM0NTY3ODkiLCJub25jZSI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYiLCJvcGVyYXRpb25fdHlwZSI6InRyYW5zZmVyIiwicG9saWN5X3JlZmVyZW5jZSI6IlRSQU5TRkVSLURFRkFVTFQiLCJwb2xpY3lfdmVyc2lvbiI6IjIwMjYtMDkiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRyYW5zYWN0aW9uX3JlZmVyZW5jZSI6IkJBTkstMjAyNi0wMDAwMDEifQ=="
+    },
+    {
+      "name": "trailing no-break space in beneficiary value",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiSmFuIEtvd2Fsc2tpwqAifSwiY3JlZGVudGlhbF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImN1cnJlbmN5IjoiUExOIiwiZG9tYWluIjoiTkVYVVMtU0lHTi9UUkFOU0FDVElPTi1BVVRIIiwiZXhwaXJlc19hdCI6IjIwMjYtMDktMjZUMTA6MDI6MDAuMDAwWiIsImlzc3VlZF9hdCI6IjIwMjYtMDktMjZUMTA6MDA6MDAuMDAwWiIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwib3BlcmF0aW9uX3R5cGUiOiJ0cmFuc2ZlciIsInBvbGljeV9yZWZlcmVuY2UiOiJUUkFOU0ZFUi1ERUZBVUxUIiwicG9saWN5X3ZlcnNpb24iOiIyMDI2LTA5IiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0cmFuc2FjdGlvbl9yZWZlcmVuY2UiOiJCQU5LLTIwMjYtMDAwMDAxIn0="
+    },
+    {
+      "name": "17 beneficiary fields",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiZjAwIjoieCIsImYwMSI6IngiLCJmMDIiOiJ4IiwiZjAzIjoieCIsImYwNCI6IngiLCJmMDUiOiJ4IiwiZjA2IjoieCIsImYwNyI6IngiLCJmMDgiOiJ4IiwiZjA5IjoieCIsImYxMCI6IngiLCJmMTEiOiJ4IiwiZjEyIjoieCIsImYxMyI6IngiLCJmMTQiOiJ4IiwiZjE1IjoieCIsImYxNiI6IngifSwiY3JlZGVudGlhbF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImN1cnJlbmN5IjoiUExOIiwiZG9tYWluIjoiTkVYVVMtU0lHTi9UUkFOU0FDVElPTi1BVVRIIiwiZXhwaXJlc19hdCI6IjIwMjYtMDktMjZUMTA6MDI6MDAuMDAwWiIsImlzc3VlZF9hdCI6IjIwMjYtMDktMjZUMTA6MDA6MDAuMDAwWiIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwib3BlcmF0aW9uX3R5cGUiOiJ0cmFuc2ZlciIsInBvbGljeV9yZWZlcmVuY2UiOiJUUkFOU0ZFUi1ERUZBVUxUIiwicG9saWN5X3ZlcnNpb24iOiIyMDI2LTA5IiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0cmFuc2FjdGlvbl9yZWZlcmVuY2UiOiJCQU5LLTIwMjYtMDAwMDAxIn0="
     },
     {
       "name": "top level is an array",

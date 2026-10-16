@@ -43,6 +43,7 @@ val sdk = NEXUSSignSDK(context, NEXUSSignConfig(
 | `recoverySetupPromptText` | `"Confirm your new recovery phrase"` | Description of the biometric prompt shown by `generateRecoveryPhrase()`. New in 2.0 |
 | `allowEmulatorHostHttp` | `false` | Development only: accept `http://10.0.2.2`, the emulator's alias for the developer's machine. New in 2.0; leave it off in release builds |
 | `requestTimeoutMillis` | `10_000` | Network request timeout |
+| `certificatePins` | empty | Public-key pins for the host of `baseUrl`, `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` (OkHttp `CertificatePinner`). Empty relies on the platform's certificate validation only. When set: at least two distinct pins (current key and a backup key kept offline), https only; a chain matching none of them fails the request. New in 2.0.0 (FI-006) |
 | `playIntegrityCloudProjectNumber` | `null` | The bank's Google Cloud project number for Play Integrity; without it no integrity token is sent |
 
 | Token purpose | Lifetime | Used by |
@@ -122,13 +123,16 @@ The first registration for a credential agrees the push key with Auth Core; late
 val authorization = sdk.fetchAuthorization(id)
 val tx = authorization.signedTransaction()
 amountView.text = "${tx.formattedAmount()} ${tx.currency}"   // e.g. "1250.00 PLN"
-beneficiaryView.text = tx.beneficiaryDisplay()                // e.g. "Jan Kowalski · PL61…"
+beneficiaryView.text = tx.beneficiaryDisplay()                // e.g. "PL61109010140000071219812874 · Jan Kowalski"
 referenceView.text = tx.transactionReference
 
 val outcome = sdk.approve(authorization, activity)
 ```
 
 `approve()` re-verifies the payload, takes the expiry from the signed bytes, shows `tx.confirmationText()` as the `BiometricPrompt` description (with explicit confirmation required) and signs those same bytes. It switches to the main thread for the prompt itself, so it can be called from any coroutine scope tied to the activity. If the payload does not verify, both calls throw `NEXUSSignError.AuthorizationPayloadInvalid` and nothing is signed — treat it as a security event, not as a retryable network error.
+
+
+Since 2.0.0 the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt (FI-003). Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
 
 ## Recovery
 

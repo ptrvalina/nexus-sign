@@ -49,3 +49,11 @@ A customer who declines or an operator queue that does not answer verifies nothi
 ## D-012 ICE candidates are buffered around descriptions
 
 Found by the real-media test: a peer gathers candidates as soon as it sets its local description, so its candidates can be relayed before its offer or answer, and the other side cannot apply a candidate before the remote description. Senders hold candidates until their description is posted; receivers hold candidates until the remote description is applied. The SDKs must follow the same rule.
+
+## D-013 Account first, 140 characters, no padding (FI-003)
+
+The system biometric prompt (iOS `LAContext` reason, Android `BiometricPrompt` description) has limited room and the platforms truncate long text at the end. Before: `name · iban`, values up to 512 characters, so a long name could leave the IBAN outside the visible part. Options: (a) shorten names on the device, which shows something other than what is signed; (b) a lower server-side limit only; (c) put the account identifier first and lower the limit to ISO 20022 Max140Text. Chosen (c): the account appears before anything a payer name can push away, and every value is still shown verbatim. Leading and trailing space separators and empty values are refused, because they change what is seen without changing what is read. Breaking for banks that send longer names (400 at creation); in-flight authorizations with longer values are refused by updated SDKs (`invalid_value`) and must be re-issued. The full prompt text on real devices remains a device check.
+
+## D-014 Certificate pinning is opt-in, with at least two pins (FI-006)
+
+Pinning protects enrolment and signed requests against a MITM holding a certificate from a trusted CA. A mandatory pin would lock out every app whose bank rotates its server key without shipping an update, so pins are a configuration of the bank app: SPKI SHA-256 in the OkHttp form on both platforms, at least two distinct pins (current and backup) when set, https only. Empty keeps the platform validation only. On iOS the system trust evaluation runs first, then the chain must contain a pinned key.

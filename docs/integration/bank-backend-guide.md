@@ -159,7 +159,7 @@ curl -s -X POST "$BASE/v1/authorizations" -H "Authorization: Bearer $TOKEN" \
 | `operationType` | 1-32 characters, for example `transfer` |
 | `amountMinor` | Decimal string in minor units, no leading zeros, at most 30 digits |
 | `currency` | `^[A-Z]{3}$` |
-| `beneficiary` | Up to 16 string fields; keys match `^[a-z][a-z0-9_]{0,63}$`; values up to 512 characters |
+| `beneficiary` | Up to 16 string fields; keys match `^[a-z][a-z0-9_]{0,63}$`; values of 1 to 140 characters (UTF-16 code units, ISO 20022 Max140Text), no leading or trailing space. Longer values are refused with 400 |
 | `policyReference`, `policyVersion` | The bank's policy, 1-128 and 1-64 characters |
 | `verificationPolicy` | Optional, see [adaptive verification](#11-adaptive-verification) |
 | `expiresInSeconds` | 30-900, default 120 |

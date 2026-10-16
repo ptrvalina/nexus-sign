@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.CertificatePinner
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -25,6 +26,12 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
     private val json = Json { ignoreUnknownKeys = true }
     private val client = OkHttpClient.Builder()
         .callTimeout(config.requestTimeoutMillis, TimeUnit.MILLISECONDS)
+        .apply {
+            if (config.certificatePins.isNotEmpty()) {
+                val host = config.baseUrl.toHttpUrl().host
+                certificatePinner(CertificatePinner.Builder().add(host, *config.certificatePins.toTypedArray()).build())
+            }
+        }
         .build()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val base64 = Base64.getEncoder()

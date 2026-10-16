@@ -27,4 +27,19 @@ class NEXUSSignConfigTest {
             assertThrows(url, IllegalArgumentException::class.java) { config(url, allowEmulatorHostHttp = true) }
         }
     }
+
+    private val pinA = "sha256/" + "A".repeat(43) + "="
+    private val pinB = "sha256/" + "B".repeat(43) + "="
+    private fun pinned(pins: List<String>, baseUrl: String = "https://nexus.bank.example") =
+        NEXUSSignConfig(bankId = "bank", baseUrl = baseUrl, sessionTokenProvider = { "token" }, certificatePins = pins)
+
+    @Test
+    fun `FI-006 pins need a backup pin, the sha256 form and https`() {
+        pinned(emptyList())
+        pinned(listOf(pinA, pinB))
+        assertThrows(IllegalArgumentException::class.java) { pinned(listOf(pinA)) }
+        assertThrows(IllegalArgumentException::class.java) { pinned(listOf(pinA, pinA)) }
+        assertThrows(IllegalArgumentException::class.java) { pinned(listOf(pinA, "sha1/" + "B".repeat(27) + "=")) }
+        assertThrows(IllegalArgumentException::class.java) { pinned(listOf(pinA, pinB), baseUrl = "http://127.0.0.1:8080") }
+    }
 }

@@ -48,10 +48,38 @@ const base = {
   nonce: '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff',
 };
 
+// What the SDKs show in the system confirmation prompt (FI-003): amount and
+// the account identifier first, so a long payee name cannot push the account
+// out of the visible part of the prompt; then the payee name, the BIC, any
+// other fields by key; on a second line the operation type and the reference.
+const ACCOUNT_KEYS = ['iban', 'account', 'account_number'];
+const MINOR_UNITS = Object.fromEntries([
+  ...['BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW', 'PYG', 'RWF', 'UGX', 'UYI', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'].map((c) => [c, 0]),
+  ...['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND'].map((c) => [c, 3]),
+  ...['CLF', 'UYW'].map((c) => [c, 4]),
+]);
+function formatAmount(minor, currency) {
+  const digits = MINOR_UNITS[currency] ?? 2;
+  if (digits === 0) return minor;
+  const padded = minor.padStart(digits + 1, '0');
+  return `${padded.slice(0, -digits)}.${padded.slice(-digits)}`;
+}
+function beneficiaryDisplay(beneficiary) {
+  const keys = Object.keys(beneficiary);
+  const account = ACCOUNT_KEYS.find((k) => k in beneficiary);
+  const ordered = [account, 'name', 'bic'].filter((k) => k && k in beneficiary);
+  const rest = keys.filter((k) => !ordered.includes(k)).sort();
+  return [...ordered, ...rest].map((k) => beneficiary[k]).join(' · ');
+}
+function confirmationText(f) {
+  const who = beneficiaryDisplay(f.beneficiary);
+  return `${formatAmount(f.amount_minor, f.currency)} ${f.currency}${who ? ` → ${who}` : ''}\n${f.operation_type} • ${f.transaction_reference}`;
+}
+
 const valid = [];
 const addValid = (name, obj) => {
   const bytes = canonical(obj);
-  valid.push({ name, canonical_base64: b64(bytes), canonical_sha256: sha(bytes), fields: obj });
+  valid.push({ name, canonical_base64: b64(bytes), canonical_sha256: sha(bytes), fields: obj, beneficiary_display: beneficiaryDisplay(obj.beneficiary), confirmation_text: confirmationText(obj) });
 };
 
 addValid('baseline transfer', base);
@@ -61,7 +89,7 @@ addValid('unicode, quotes, backslash and slash in beneficiary', {
   beneficiary: {
     name: 'Zażółć gęślą jaźń "Sp. z o.o." \\ ✓ 😀',
     address_line_1: 'ul. Marszałkowska 1/2',
-    note: 'Faktura 2026/09 <ref> & \u00e9 ',
+    note: 'Faktura 2026/09 <ref> & \u00e9',
     iban: 'PL61109010140000071219812874',
   },
 });
@@ -78,6 +106,11 @@ addValid('large amount (30 digits)', {
   amount_minor: '123456789012345678901234567890',
 });
 addValid('empty beneficiary', { ...base, authorization_id: '00000000-0000-4000-8000-000000000006', beneficiary: {} });
+addValid('payee name of 140 characters (the maximum) is shown after the account', {
+  ...base,
+  authorization_id: '00000000-0000-4000-8000-000000000007',
+  beneficiary: { name: `ACME ${'N'.repeat(130)} GmbH`, iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' },
+});
 
 const baseBytes = canonical(base);
 const baseText = baseBytes.toString('utf8');
@@ -113,6 +146,15 @@ addInvalid('line break in beneficiary value', JSON.stringify(normalize({ ...base
 addInvalid('bidi override in beneficiary name', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan \u202eikswoloK', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
 addInvalid('line separator in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan\u2028Kowalski' } })), 'invalid_value');
 addInvalid('zero-width space in transaction reference', JSON.stringify(normalize({ ...base, transaction_reference: 'BANK-2026\u200b-000001' })), 'invalid_value');
+// Display limits (FI-003): a value longer than an ISO 20022 Max140Text, a
+// blank value, or one with leading or trailing space is refused, so the
+// prompt cannot be padded or flooded.
+addInvalid('beneficiary value of 141 characters', JSON.stringify(normalize({ ...base, beneficiary: { name: 'N'.repeat(141), iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('empty beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: '', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('beneficiary value of spaces only', JSON.stringify(normalize({ ...base, beneficiary: { name: '   ', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('leading space in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: ' Jan Kowalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('trailing no-break space in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski\u00a0', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('17 beneficiary fields', JSON.stringify(normalize({ ...base, beneficiary: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`f${String(i).padStart(2, '0')}`, 'x'])) })), 'invalid_value');
 addInvalid('top level is an array', `[${baseText}]`, 'invalid_json');
 invalid.push({ name: 'invalid UTF-8 byte', reason: 'invalid_json', canonical_base64: b64(Buffer.concat([baseBytes.subarray(0, 10), Buffer.from([0xff]), baseBytes.subarray(10)])) });
 

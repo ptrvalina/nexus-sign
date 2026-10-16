@@ -17,7 +17,7 @@ A JSON object with exactly these 15 fields. All values are strings, except `bene
 | `operation_type` | e.g. `transfer` |
 | `amount_minor` | Non-negative integer in minor units, decimal string without leading zeros, at most 30 digits |
 | `currency` | ISO 4217 code, `^[A-Z]{3}$` |
-| `beneficiary` | Object of string values; keys match `^[a-z][a-z0-9_]{0,63}$`; at most 16 fields; values up to 512 characters |
+| `beneficiary` | Object of string values; keys match `^[a-z][a-z0-9_]{0,63}$`; at most 16 fields; values of 1 to 140 UTF-16 code units (ISO 20022 Max140Text) with no leading or trailing space separator (Zs). Up to 2.0.0-rc.2: up to 512 |
 | `policy_reference`, `policy_version` | Bank policy under which the authorization was issued |
 | `issued_at`, `expires_at` | RFC 3339 UTC with milliseconds, e.g. `2026-09-26T10:00:00.000Z` |
 | `nonce` | 32 random bytes, lowercase hex |
@@ -52,6 +52,17 @@ Before displaying or signing, the SDK:
 3. checks `canonicalPayloadHash`;
 4. requires every displayed response field (amount, currency, beneficiary, reference, expiry and the others) to equal the value in the signed bytes;
 5. renders the confirmation screen and the biometric prompt only from the signed bytes.
+
+### Confirmation text
+
+Both SDKs build the same text from the signed bytes (checked against `confirmation_text` in `test-vectors/signed-payload-v1.json`):
+
+```
+<amount> <currency> → <beneficiary display>
+<operation_type> • <transaction_reference>
+```
+
+The beneficiary display joins values with ` · ` in this order: the account identifier first (the first present of `iban`, `account`, `account_number`), then `name`, then `bic`, then the remaining keys in sorted order. The account comes first because the system biometric prompt has limited room and may truncate the end of the text; a name must not push the account out of view (FI-003). With values limited to 140 characters, the account is always in the first line. Whether the whole text is visible depends on the platform prompt and is checked on devices (`docs/engineering/DEVICE_ACCEPTANCE_CHECKLIST.md`); the host app's own confirmation screen must show every field in full.
 
 Any mismatch refuses signing with a reason code: `invalid_json`, `duplicate_key`, `not_canonical`, `missing_field`, `unexpected_field`, `invalid_value`, `wrong_protocol` or `response_mismatch`. `approve()` also refuses an authorization whose `credential_id` is not the device's own (`wrong_device`).
 

@@ -1039,8 +1039,8 @@ components:
         beneficiary:
           type: object
           maxProperties: 16
-          description: Keys match ^[a-z][a-z0-9_]{0,63}$; string values up to 512 characters.
-          additionalProperties: { type: string, maxLength: 512 }
+          description: Keys match ^[a-z][a-z0-9_]{0,63}$; at most 16 fields; string values of 1 to 140 UTF-16 code units, without leading or trailing space separators.
+          additionalProperties: { type: string, minLength: 1, maxLength: 140 }
           example: { name: Jan Kowalski, iban: PL61109010140000071219812874 }
         policyReference: { type: string, maxLength: 128 }
         policyVersion: { type: string, maxLength: 64 }

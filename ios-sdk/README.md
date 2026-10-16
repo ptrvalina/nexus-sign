@@ -37,6 +37,12 @@ let sdk = NEXUSSignSDK(config: NEXUSSignConfig(
 
 `recoverySetupPromptText` (default `"Confirm to set up your recovery phrase"`) is the reason shown in the Face ID / Touch ID prompt of `generateRecoveryPhrase()`; localize it in the host app. `keychainAccessGroup`, `pushKeychainAccessGroup` and `requestTimeout` (default 10 s) are optional.
 
+`certificatePins` (new in 2.0.0, FI-006) pins the public key of the host of `baseURL`: a set of `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` strings, the same form as the Android SDK. Empty (the default) relies on the system's certificate validation only. When set, give at least two pins (the current key and a backup key kept offline) and an https URL; the system validation runs first, then a connection whose chain has none of the pinned keys is cancelled. Supported key types: P-256, P-384, RSA 2048/3072/4096. Compute a pin with:
+
+```bash
+openssl x509 -in server.pem -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+```
+
 | Token purpose | Lifetime | Used by |
 |---|---|---|
 | `BOOTSTRAP` | 5 minutes, single use | `bootstrap()` only |
@@ -135,7 +141,7 @@ If App Attest is unavailable or fails, the SDK still sends the enrolment with th
 let authorization = try await sdk.fetchAuthorization(authorizationID: id)
 let tx = try authorization.signedTransaction()
 amountLabel.text = "\(tx.formattedAmount) \(tx.currency)"   // e.g. "1250.00 PLN"
-beneficiaryLabel.text = tx.beneficiaryDisplay                // e.g. "Jan Kowalski · PL61…"
+beneficiaryLabel.text = tx.beneficiaryDisplay                // e.g. "PL61109010140000071219812874 · Jan Kowalski"
 referenceLabel.text = tx.transactionReference
 
 let outcome = try await sdk.approve(authorization: authorization)
@@ -144,6 +150,9 @@ let outcome = try await sdk.approve(authorization: authorization)
 `approve()` re-verifies the payload, takes the expiry from the signed bytes, shows `tx.confirmationText` in the system biometric prompt and signs those same bytes. If the payload does not verify, both calls throw `NEXUSSignError.authorizationPayloadInvalid(reason:detail:)` and nothing is signed — treat it as a security event, not as a retryable network error.
 
 Decode any NEXUS-SIGN payload your app receives from the bank backend (for example `NexusRecoverySession`) with `JSONDecoder.nexus()`: Auth Core timestamps carry milliseconds, which the default and `.iso8601` strategies reject.
+
+
+Since 2.0.0 the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt (FI-003). Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
 
 ## Recovery
 

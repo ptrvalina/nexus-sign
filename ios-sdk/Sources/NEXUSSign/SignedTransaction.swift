@@ -32,15 +32,19 @@ public struct NexusSignedTransaction: Equatable {
         SignedPayload.formatMinorUnits(amountMinor, fractionDigits: SignedPayload.fractionDigits(currency: currency))
     }
 
-    /// Beneficiary for display: well-known keys first, remaining keys sorted.
+    /// Beneficiary for display: the account identifier first (iban, account
+    /// or account_number), then name and bic, then the other fields by key.
     public var beneficiaryDisplay: String { SignedPayload.beneficiaryDisplay(beneficiary) }
 
-    /// One-line summary suitable for the biometric prompt.
+    /// Text of the Face ID / Touch ID prompt (FI-003). The first line carries
+    /// the amount and the account identifier, so a long payee name cannot push
+    /// the account out of the visible part of the prompt; the second line names
+    /// the operation and the reference. Shared vectors fix the exact text.
     public var confirmationText: String {
-        var text = "\(operationType): \(formattedAmount) \(currency)"
+        var text = "\(formattedAmount) \(currency)"
         let who = beneficiaryDisplay
         if !who.isEmpty { text += " → \(who)" }
-        text += " • \(transactionReference)"
+        text += "\n\(operationType) • \(transactionReference)"
         return text
     }
 
@@ -169,8 +173,21 @@ enum SignedPayload {
                 throw Rejected(reason: "invalid_value", detail: "\(pair.key) contains a control, format or separator character")
             }
         }
-        for (key, value) in beneficiary where !isDisplaySafe(value) {
-            throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) contains a control, format or separator character")
+        if beneficiary.count > beneficiaryMaxFields {
+            throw Rejected(reason: "invalid_value", detail: "more than \(beneficiaryMaxFields) beneficiary fields")
+        }
+        for (key, value) in beneficiary {
+            if !isDisplaySafe(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) contains a control, format or separator character")
+            }
+            // UTF-16 code units, as Auth Core and the Android SDK count.
+            if value.isEmpty || value.utf16.count > beneficiaryMaxValueLength {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) must be 1 to \(beneficiaryMaxValueLength) characters")
+            }
+            if let first = value.unicodeScalars.first, let last = value.unicodeScalars.last,
+               first.properties.generalCategory == .spaceSeparator || last.properties.generalCategory == .spaceSeparator {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) has leading or trailing space")
+            }
         }
 
         return NexusSignedTransaction(
@@ -255,15 +272,20 @@ enum SignedPayload {
         !value.unicodeScalars.contains { displayUnsafeCategories.contains($0.properties.generalCategory) }
     }
 
-    private static let preferredBeneficiaryKeys = ["name", "iban", "account", "account_number", "bic"]
+    /// ISO 20022 Max140Text, in UTF-16 code units; Auth Core applies the same limit.
+    static let beneficiaryMaxValueLength = 140
+    static let beneficiaryMaxFields = 16
+
+    private static let accountKeys = ["iban", "account", "account_number"]
 
     static func beneficiaryDisplay(_ beneficiary: [String: String]) -> String {
-        let ordered = preferredBeneficiaryKeys.filter { beneficiary[$0] != nil }
-            + beneficiary.keys.filter { !preferredBeneficiaryKeys.contains($0) }.sorted()
-        return ordered.compactMap { key -> String? in
-            guard let value = beneficiary[key], !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-            return value
-        }.joined(separator: " · ")
+        let account = accountKeys.first { beneficiary[$0] != nil }
+        let ordered = [account, "name", "bic"].compactMap { $0 }.filter { beneficiary[$0] != nil }
+        // Array.sorted on String compares Unicode scalars; keys are [a-z0-9_]
+        // (checked above), where that equals the UTF-16 order the other
+        // implementations use.
+        let rest = beneficiary.keys.filter { !ordered.contains($0) }.sorted()
+        return (ordered + rest).compactMap { beneficiary[$0] }.joined(separator: " · ")
     }
 
     static func parseTimestamp(_ value: String) -> Date? {

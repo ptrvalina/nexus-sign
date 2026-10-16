@@ -50,11 +50,16 @@ test('canonical JSON is key-order independent, round-trips and is valid UTF-8', 
   }
 });
 
-test('a beneficiary value is accepted exactly when it has no unsafe character (incl. lone surrogates, NXS-033)', () => {
+test('a beneficiary value is accepted exactly when it has no unsafe character and no leading or trailing space (NXS-033, FI-003)', () => {
   for (let i = 0; i < RUNS; i += 1) {
     const chars = Array.from({ length: 1 + int(20) }, () => (int(6) === 0 ? pick(UNSAFE) : pick(SAFE)));
     const text = chars.join('');
-    const unsafe = chars.some((c) => UNSAFE.includes(c));
+    // FI-003: a space at either end is invisible on the confirmation screen.
+    // Surrogates are judged on the joined text: \ud800 followed by \udfff is a
+    // valid pair (U+103FF), not two lone surrogates.
+    const unsafe = chars.some((c) => UNSAFE.includes(c) && !/[\ud800-\udfff]/.test(c))
+      || !text.isWellFormed()
+      || /^\p{Zs}|\p{Zs}$/u.test(text);
     let accepted = true;
     try { canonicalizeAuthorization({ ...base, beneficiary: { name: text, iban: 'PL61109010140000071219812874' } }); } catch { accepted = false; }
     if (accepted === unsafe) fail(unsafe ? 'unsafe value accepted' : 'safe value refused', text);
