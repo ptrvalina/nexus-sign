@@ -7,9 +7,11 @@ This runbook covers the evidence sealing key, the per-client secrets (client sec
 | Evidence sealing key (HSM) | Yes, by configuration and restart; the retired public key stays configured in `EVIDENCE_RETIRED_PUBLIC_KEYS_PEM` | Not applicable; existing records keep their seal |
 | Client secret and webhook signing secret (per bank client) | Yes, with `registerClient`, always both together | Not applicable |
 | Client certificate fingerprints (per bank client) | Yes, with `setClientCertificates`, without rotating the secrets (`registerClient --mtls-cert-sha256` also sets them, but rotates the secrets) | Not applicable |
-| `WEBHOOK_SECRET_ENCRYPTION_KEY` | No; one key, no fallback key | Only by re-registering each client |
-| `DEVICE_SECRET_ENCRYPTION_KEY` | No; one key, no fallback key | Not implemented |
-| `ADMIN_SECRET_ENCRYPTION_KEY` | No; one key, no fallback key | Only by re-provisioning each admin account (new TOTP secret) |
+| `WEBHOOK_SECRET_ENCRYPTION_KEY` | Yes since 2.0.0: current key plus `_PREVIOUS` keys (FI-005) | `rotateSecretKeys.js` |
+| `DEVICE_SECRET_ENCRYPTION_KEY` | Yes since 2.0.0: current key plus `_PREVIOUS` keys | `rotateSecretKeys.js` |
+| `ADMIN_SECRET_ENCRYPTION_KEY` | Yes since 2.0.0: current key plus `_PREVIOUS` keys | `rotateSecretKeys.js` |
+
+A master key rotation re-encrypts the stored secrets; it does not change them. If the old master key **and** a copy of the database may have leaked, the secrets themselves are exposed: replace them as well (webhook secrets with `registerClient`, offline keys by device re-enrolment or recovery, TOTP secrets with `createAdminUser`), as described under each key below.
 
 Device credential keys are separate: `credentials.key_version` increases when a device recovers, and is unrelated to `hsm_key_version`.
 
@@ -38,13 +40,13 @@ Every schema 3 record names the key that sealed it in `sealKeyId` (SHA-256 of th
 
 ### WEBHOOK_SECRET_ENCRYPTION_KEY change
 
-`bank_clients.webhook_secret_encrypted` is AES-256-GCM output with no key identifier: `v2$iv$authTag$ciphertext` with the associated data `webhook:<clientId>` since 2.0, or `iv$authTag$ciphertext` from 1.4 (still decrypted; re-encrypted in the new format when the client is registered again). After a key change, every existing value stops decrypting:
+`bank_clients.webhook_secret_encrypted` is AES-256-GCM. Since 2.0.0 the value names its key: `k1$<key id>$iv$authTag$ciphertext` (key id: first 8 bytes of SHA-256 of the master key, hex), associated data `webhook:<clientId>`. Older values (`v2$iv$authTag$ciphertext`, and `iv$authTag$ciphertext` from 1.4) are still read and are re-encrypted by `rotateSecretKeys.js`. If the key is changed **without** keeping the old one in `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS`, every existing value stops decrypting:
 
 - Deliveries for clients with a webhook fail and count as failed attempts; see [webhook backlog](webhook-backlog.md). Queuing an event does not decrypt the secret, so the API calls that queue events are not affected.
 
 ### DEVICE_SECRET_ENCRYPTION_KEY change
 
-`credentials.offline_secret_encrypted` holds each credential's offline confirmation key, AES-256-GCM with `device:<credentialId>` as associated data and no key identifier. The plaintext key comes from a key agreement at enrolment with a server key pair that is discarded afterwards, so Auth Core cannot derive it again. `push_registrations.push_key_encrypted` uses the same master key. After a key change:
+`credentials.offline_secret_encrypted` holds each credential's offline confirmation key, AES-256-GCM with `device:<credentialId>` as associated data, in the same formats as above. The plaintext key comes from a key agreement at enrolment with a server key pair that is discarded afterwards, so Auth Core cannot derive it again; losing the master key loses the offline keys. `push_registrations.push_key_encrypted` uses the same master key. If the key is changed without keeping the old one in `DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS`:
 
 - `POST /v1/authorizations/{authorizationId}/offline-confirmation` returns 500 for every credential enrolled before the change. The QR challenge is still served. The failure does not use up attempts.
 - Secure push messages cannot be sealed for devices registered before the change; they register for push again.
@@ -52,7 +54,7 @@ Every schema 3 record names the key that sealed it in `sealKeyId` (SHA-256 of th
 
 ### ADMIN_SECRET_ENCRYPTION_KEY change
 
-`admin_users.totp_secret_encrypted` is AES-256-GCM with the associated data `admin:<username>`. After a key change, no existing TOTP secret decrypts and no admin with a TOTP secret can log in until the account is re-provisioned. Bank and device traffic is not affected.
+`admin_users.totp_secret_encrypted` is AES-256-GCM with the associated data `admin:<username>`. If the key is changed without keeping the old one in `ADMIN_SECRET_ENCRYPTION_KEY_PREVIOUS`, no existing TOTP secret decrypts and no admin with a TOTP secret can log in until the account is re-provisioned. Bank and device traffic is not affected.
 
 ## Diagnosis
 
@@ -141,32 +143,31 @@ node dist/cli/setClientCertificates.js <clientId> <new hex>             # after 
 
 (`npm run set-client-certificates -- ...` runs the same command.) Register the old and the new fingerprint together, let the bank switch certificates, then register the new fingerprint alone.
 
-### WEBHOOK_SECRET_ENCRYPTION_KEY
+### Master keys: WEBHOOK_, DEVICE_ and ADMIN_SECRET_ENCRYPTION_KEY (scheduled rotation)
 
-Re-encryption under a new master key is not implemented. The only supported path is re-registering each client with a webhook, which also rotates its client secret:
+The same procedure for each of the three keys; `<NAME>` is the key being rotated.
 
-1. Agree a change window with every affected bank backend.
-2. Deploy the new `WEBHOOK_SECRET_ENCRYPTION_KEY`.
-3. Immediately run `registerClient` for each client from the diagnosis query, with the new key in the environment and the client's webhook URL and push mode, and hand over the printed secrets.
-4. Confirm deliveries resume with the [webhook backlog](webhook-backlog.md) queries.
+1. Generate the new key: `openssl rand -base64 32`, into the secrets manager.
+2. Deploy with `<NAME>` = new key and `<NAME>_PREVIOUS` = old key (several old keys: comma-separated). Startup checks both (32 bytes, base64, not equal). Every process now encrypts with the new key and reads values under either. Replace all processes; a process still on the old configuration cannot read values written under the new key.
+3. Check what is left: `node dist/cli/rotateSecretKeys.js <webhook|device|admin|all> --dry-run`.
+4. Re-encrypt: `node dist/cli/rotateSecretKeys.js <webhook|device|admin|all>`. The tool first checks that every stored value decrypts with the configured keys and stops without writing anything if one does not. Then it re-encrypts in batches of 200, checks each new value decrypts to the same secret, writes it only if the row was not changed meanwhile, and records `master_key_rotated` in the audit log with the counts and key IDs. It can be run again; a second run reports 0 to re-encrypt.
+5. Deploy without `<NAME>_PREVIOUS`. Destroy the old key according to the bank's key management policy.
 
-### DEVICE_SECRET_ENCRYPTION_KEY
+For `DEVICE_SECRET_ENCRYPTION_KEY` the credential trigger normally forbids any change of `offline_secret_encrypted`. Migration 020 lets the tool replace the ciphertext within its own transaction (`nexus.secret_rewrap`); presence of the offline key and every other credential field stay immutable.
 
-Re-encryption is not implemented. After a key change, every affected customer must enrol the device again ([device replacement](lost-or-stolen-device.md)) or complete recovery before offline confirmation works for that customer again; until then the bank uses device-signature confirmation. Change this key only when it is compromised.
+### Master key compromise
 
-Setting `OFFLINE_CONFIRMATION_ENABLED=false` does not delete the stored values. Turning the feature on again with the same key restores offline confirmation for those credentials.
+Rotate as above, then also replace the secrets the old key protected, because an attacker with the old key and a database copy may have decrypted them:
 
-### ADMIN_SECRET_ENCRYPTION_KEY
-
-1. Deploy the new key.
-2. Re-provision every account from the diagnosis query with the new key in the environment, keeping its role and scope:
+- **Webhook secrets:** run `registerClient` for each client with a webhook (this also rotates the client secret), agree the change window with each bank, and confirm deliveries with the [webhook backlog](webhook-backlog.md) queries.
+- **Offline keys and push keys:** offline confirmation keys cannot be replaced server-side. Disable offline confirmation (`OFFLINE_CONFIRMATION_ENABLED=false`) until the affected customers have re-enrolled their devices ([device replacement](lost-or-stolen-device.md)) or completed recovery; device-signature confirmation is not affected. Devices register for secure push again to get new push keys.
+- **TOTP secrets:** re-provision every account from the diagnosis query, keeping its role and scope:
 
    ```sh
    node dist/cli/createAdminUser.js <username> <role> [--client=<clientId>]
    ```
 
-   Each run enrols a new TOTP secret, sets a new password and ends the account's sessions. Without `--client` the account becomes a platform operator.
-3. Hand the printed secrets to each account holder over a secure channel.
+   Each run enrols a new TOTP secret, sets a new password and ends the account's sessions. Without `--client` the account becomes a platform operator. Hand the printed secrets to each account holder over a secure channel.
 
 ## Follow-up
 

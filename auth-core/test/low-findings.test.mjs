@@ -22,7 +22,8 @@ test('NXS-034: a device nonce outlives the whole timestamp window', () => {
 test('NXS-035: a webhook secret is bound to its bank client; 1.4 ciphertexts still decrypt', () => {
   const { encryptSecret, decryptSecret } = loadTs('crypto/secretBox.ts', { stubs: envStub() });
   const stored = encryptSecret('whsec-bank-a', 'webhook', 'bank-a');
-  assert.match(stored, /^v2\$/);
+  // 2.0.0: the ciphertext names its master key (FI-005); still bound to the client.
+  assert.match(stored, /^k1\$[0-9a-f]{16}\$/);
   assert.equal(decryptSecret(stored, 'webhook', 'bank-a'), 'whsec-bank-a');
   assert.throws(() => decryptSecret(stored, 'webhook', 'bank-b'), 'copied to another bank\'s row');
   assert.throws(() => encryptSecret('x', 'webhook'), /bound to their bank client/);

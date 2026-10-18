@@ -36,6 +36,7 @@ const production = {
   ANDROID_REQUIRE_LOCKED_BOOTLOADER: true,
   ANDROID_APP_CERT_SHA256: [],
   ANDROID_REQUIRED_DEVICE_VERDICT: 'MEETS_DEVICE_INTEGRITY',
+  METRICS_BEARER_TOKEN: 'm'.repeat(40),
 };
 
 test('a complete production configuration has no blockers', () => {
@@ -148,4 +149,27 @@ test('master keys are validated at startup', () => {
   assert.deepEqual(configurationErrors({ ...production, WEBHOOK_SECRET_ENCRYPTION_KEY: 'short' }), ['WEBHOOK_SECRET_ENCRYPTION_KEY must be 32 random bytes, base64-encoded']);
   assert.deepEqual(configurationErrors({ ...production, ADMIN_SECRET_ENCRYPTION_KEY: Buffer.alloc(16).toString('base64') }), ['ADMIN_SECRET_ENCRYPTION_KEY must be 32 random bytes, base64-encoded']);
   assert.deepEqual(configurationErrors(production), []);
+});
+
+test('FI-004: offline confirmation in production needs per-currency caps; caps are validated', () => {
+  const { parseOfflineLimits } = loadTs('config/productionPosture.ts');
+  const offline = { ...production, OFFLINE_CONFIRMATION_ENABLED: true, DEVICE_SECRET_ENCRYPTION_KEY: KEY };
+  assert.ok(productionBlockers(offline).some((b) => b.startsWith('OFFLINE_CONFIRMATION_MAX_AMOUNT is required in production')));
+  assert.ok(!productionBlockers({ ...offline, OFFLINE_CONFIRMATION_MAX_AMOUNT: 'PLN:100000' }).some((b) => b.startsWith('OFFLINE_CONFIRMATION_MAX_AMOUNT')));
+  assert.deepEqual([...parseOfflineLimits('PLN:100000, EUR:0')], [['PLN', 100000n], ['EUR', 0n]]);
+  for (const bad of ['PLN', 'pln:1', 'PLN:-1', 'PLN:01', 'PLN:1,PLN:2', 'PLN:1.5']) {
+    assert.throws(() => parseOfflineLimits(bad), /OFFLINE_CONFIRMATION_MAX_AMOUNT/, bad);
+    assert.ok(configurationErrors({ ...production, NODE_ENV: 'development', ALLOW_INSECURE_DEVELOPMENT: true, OFFLINE_CONFIRMATION_MAX_AMOUNT: bad }).some((e) => e.includes('OFFLINE_CONFIRMATION_MAX_AMOUNT')), bad);
+  }
+});
+
+test('FI-008: production requires the PostgreSQL nonce store', () => {
+  assert.ok(productionBlockers({ ...production, DEVICE_NONCE_STORE: 'redis' }).some((b) => b.startsWith('DEVICE_NONCE_STORE must be postgres in production')));
+  assert.ok(!productionBlockers({ ...production, DEVICE_NONCE_STORE: 'postgres' }).some((b) => b.startsWith('DEVICE_NONCE_STORE')));
+});
+
+test('FI-030: production requires a metrics token of at least 32 characters', () => {
+  const message = 'METRICS_BEARER_TOKEN of at least 32 characters is required in production (FI-030)';
+  assert.ok(productionBlockers({ ...production, METRICS_BEARER_TOKEN: undefined }).includes(message));
+  assert.ok(productionBlockers({ ...production, METRICS_BEARER_TOKEN: 'short' }).includes(message));
 });

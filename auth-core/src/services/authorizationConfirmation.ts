@@ -9,6 +9,7 @@ import { sealAuthorizationEvidence, type ChainPosition } from './evidenceService
 import { assertCredentialIntegrity, CredentialIntegrityError } from './credentialIntegrity';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { decryptSecretBytes } from '../crypto/secretBox';
+import { parseOfflineLimits } from '../config/productionPosture';
 import { env } from '../config/env';
 import { OFFLINE_CODE_DIGITS, offlineCodeFromTag, offlineConfirmationTag, offlineQrPayload } from './deviceProtocol';
 import { settlePlanForConfirmation } from './adaptiveVerificationService';
@@ -69,6 +70,20 @@ export async function confirmAuthorizationOffline(
 }
 
 /** QR content for offline confirmation of a pending authorization. */
+/**
+ * FI-004: offline codes are symmetric, so their reach is capped per currency
+ * by the deployment (OFFLINE_CONFIRMATION_MAX_AMOUNT). Returns why the
+ * amount may not be confirmed offline, or null.
+ */
+export function offlineLimitExceeded(currency: string, amountMinor: string): string | null {
+  const configured = env.OFFLINE_CONFIRMATION_MAX_AMOUNT?.trim();
+  if (!configured) return null;
+  const limit = parseOfflineLimits(configured).get(currency);
+  if (limit === undefined) return `Offline confirmation is not offered for ${currency}`;
+  if (BigInt(amountMinor) > limit) return `The amount exceeds the offline confirmation limit for ${currency}`;
+  return null;
+}
+
 export async function getOfflineChallenge(id: string, clientId: string): Promise<{ authorizationId: string; qrPayload: string; codeDigits: number; expiresAt: string }> {
   if (!env.OFFLINE_CONFIRMATION_ENABLED) throw new ConflictError('Offline confirmation is not enabled on this deployment');
   const auth = await getAuthorizationForClient(id, clientId);
@@ -76,6 +91,8 @@ export async function getOfflineChallenge(id: string, clientId: string): Promise
   if (!auth.credentialId) throw new ConflictError('Authorization has no bound credential');
   const credential = await getCredentialForClient(auth.credentialId, clientId);
   if (!credential.offlineEnabled) throw new ConflictError('The customer\'s device is not enrolled for offline confirmation');
+  const limitReason = offlineLimitExceeded(auth.currency, auth.amountMinor);
+  if (limitReason) throw new ConflictError(limitReason, 'OFFLINE_LIMIT_EXCEEDED');
   return {
     authorizationId: auth.authorizationId,
     qrPayload: offlineQrPayload(canonicalizeAuthorization(authorizationObjectOf(auth))),
@@ -129,6 +146,8 @@ async function confirmAuthorization(
       signedBytes: canonical, publicKeyPem: credential.publicKeyPem, enrolmentEvidenceHash };
   } else {
     if (!env.OFFLINE_CONFIRMATION_ENABLED) return { status: 'FAILED', reason: 'Offline confirmation is not enabled on this deployment' };
+    const limitReason = offlineLimitExceeded(auth.currency, auth.amountMinor);
+    if (limitReason) return { status: 'FAILED', reason: limitReason };
     const checked = await checkOfflineCode(id, clientId, credential.credentialId, canonical, proof.code, auditContext);
     if ('result' in checked) return checked.result;
     details = { signature: checked.tag.toString('base64'), signatureFormat: 'hmac', credentialId: credential.credentialId, hsmAdapter, confirmationMethod: 'OFFLINE_CODE',

@@ -483,6 +483,14 @@ DROP TRIGGER IF EXISTS authorization_lifecycle ON authorization_requests;
 CREATE TRIGGER authorization_lifecycle BEFORE UPDATE ON authorization_requests
   FOR EACH ROW EXECUTE FUNCTION authorization_lifecycle();
 
+-- Re-encryption of a stored secret under a new master key (FI-005,
+-- cli/rotateSecretKeys.js): the ciphertext of the offline key may change, its
+-- presence may not. The tool sets nexus.secret_rewrap for its own transaction
+-- and checks that the new ciphertext decrypts to the same key.
+CREATE OR REPLACE FUNCTION secret_rewrap_allowed() RETURNS boolean AS $$
+  SELECT coalesce(current_setting('nexus.secret_rewrap', true), '') = 'on';
+$$ LANGUAGE sql STABLE;
+
 -- Credential lifecycle: ACTIVE -> REVOKED (final). The keys of a credential never change, and its sealed enrolment
 -- record is attached once.
 CREATE OR REPLACE FUNCTION credential_lifecycle() RETURNS trigger AS $$
@@ -494,7 +502,8 @@ BEGIN
      OR NEW.auth_public_key_pem IS DISTINCT FROM OLD.auth_public_key_pem
      OR NEW.offline_public_key_pem IS DISTINCT FROM OLD.offline_public_key_pem
      OR NEW.offline_server_public_key_pem IS DISTINCT FROM OLD.offline_server_public_key_pem
-     OR NEW.offline_secret_encrypted IS DISTINCT FROM OLD.offline_secret_encrypted
+     OR (NEW.offline_secret_encrypted IS DISTINCT FROM OLD.offline_secret_encrypted
+         AND NOT (secret_rewrap_allowed() AND OLD.offline_secret_encrypted IS NOT NULL AND NEW.offline_secret_encrypted IS NOT NULL))
      OR NEW.platform IS DISTINCT FROM OLD.platform
      OR NEW.key_version IS DISTINCT FROM OLD.key_version THEN
     RAISE EXCEPTION 'credential % : keys and identity binding are immutable', OLD.credential_id USING ERRCODE = 'integrity_constraint_violation';
@@ -616,3 +625,11 @@ ALTER TABLE verification_sessions ADD COLUMN IF NOT EXISTS result_issuer VARCHAR
 ALTER TABLE verification_sessions ADD COLUMN IF NOT EXISTS result_jti VARCHAR(128);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_result_jti
     ON verification_sessions(client_id, result_issuer, result_jti) WHERE result_jti IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS device_request_nonces (
+    credential_id              UUID NOT NULL,
+    nonce                      VARCHAR(64) NOT NULL,
+    expires_at                 TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (credential_id, nonce)
+);
+CREATE INDEX IF NOT EXISTS idx_device_request_nonces_expires_at ON device_request_nonces(expires_at);

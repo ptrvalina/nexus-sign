@@ -95,7 +95,11 @@ See [device authentication and offline confirmation](../protocol/device-authenti
 | Variable | Default | Production requirement | Purpose |
 |---|---|---|---|
 | `OFFLINE_CONFIRMATION_ENABLED` | off | None | Opt-in flag. Enables the offline challenge and confirmation endpoints and the storage of offline keys at enrolment. |
+| `OFFLINE_CONFIRMATION_MAX_AMOUNT` | none (no cap) | Production, when `OFFLINE_CONFIRMATION_ENABLED=true` | Highest amount per currency that an offline code may confirm, `CURRENCY:amountMinor` comma-separated (e.g. `PLN:100000,EUR:20000`). Currencies not listed are not offered offline; above the cap no QR challenge is issued (409 `OFFLINE_LIMIT_EXCEEDED`) and a code is refused without using an attempt. The cap exists because an offline code is an HMAC under a key Auth Core also holds (FI-004, [ADR 0003](../adr/0003-offline-confirmation-hmac-codes.md)). New in 2.0.0. |
+| `DEVICE_NONCE_STORE` | `postgres` | Production: `postgres` | Where used device request nonces are remembered. `postgres`: table `device_request_nonces` (migration 021), deleted after their lifetime by the expiry sweep; `redis`: as before 2.0.0, a Redis failover or restore can forget nonces (FI-008). New in 2.0.0 |
+| `METRICS_BEARER_TOKEN` | none (open) | Production, at least 32 characters | Bearer token the monitoring system sends to `GET /metrics`; without it, metrics are readable by every client that passes the gateway check (FI-030). New in 2.0.0 |
 | `DEVICE_SECRET_ENCRYPTION_KEY` | none | Required when `OFFLINE_CONFIRMATION_ENABLED=true` or `PUSH_DELIVERY_ENABLED=true` (any environment) | AES-256-GCM master key for `credentials.offline_secret_encrypted` and `push_registrations.push_key_encrypted`. 32 bytes, base64. |
+| `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS`, `DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS`, `ADMIN_SECRET_ENCRYPTION_KEY_PREVIOUS` | none | During a master key rotation only | Previous master keys, comma-separated, accepted for decryption until `rotateSecretKeys.js` has re-encrypted the stored secrets ([key rotation](runbooks/key-rotation.md)). Each 32 bytes, base64, different from the current key. New in 2.0.0 (FI-005). |
 
 ## Secure push
 

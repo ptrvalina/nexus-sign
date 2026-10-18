@@ -213,6 +213,35 @@ export function verifyEvidenceChain(records, evidenceKeys, { expectedHead } = {}
   return problems;
 }
 
+/**
+ * Checks a chain export against the heads the bank kept from
+ * `evidence.appended` webhooks (FI-019): each head must be HSM-sealed by a
+ * known key (so the bank's own store can be trusted to be what Auth Core
+ * sent), and the export must contain that record unchanged. A head beyond
+ * the end of the export means records were removed; a head whose hash
+ * differs means the chain was rewritten.
+ */
+export function verifyRetainedHeads(records, heads, evidenceKeys) {
+  const keys = keyring(evidenceKeys);
+  const problems = [];
+  const bySequence = new Map(records.map((r) => [r.chainSequence, r]));
+  const last = Math.max(0, ...records.map((r) => r.chainSequence ?? 0));
+  for (const head of heads) {
+    const label = `head #${head.chainSequence}`;
+    if (!Number.isInteger(head.chainSequence) || typeof head.evidenceHash !== 'string') { problems.push(`${label}: malformed (needs chainSequence and evidenceHash)`); continue; }
+    if (head.hsmSignature !== undefined) {
+      const key = keys[head.sealKeyId];
+      let sealed = false;
+      try { sealed = Boolean(key) && verify('sha256', Buffer.from(head.evidenceHash, 'hex'), { key, dsaEncoding: 'der' }, Buffer.from(head.hsmSignature, 'base64')); } catch { sealed = false; }
+      if (!sealed) problems.push(`${label}: its HSM seal does not verify with the given keys (not a head Auth Core sent)`);
+    }
+    const record = bySequence.get(head.chainSequence);
+    if (!record) problems.push(`records missing at the end of the chain: the bank holds head #${head.chainSequence}, the export ends at ${last}`);
+    else if (record.evidenceHash !== head.evidenceHash) problems.push(`record ${head.chainSequence} differs from the head the bank holds`);
+  }
+  return problems;
+}
+
 /** Records of a chain sealed before schema 3, whose key provenance cannot be checked. */
 export function legacyRecords(records) {
   return records.filter((r) => r.sealedPayload?.schemaVersion !== '3');

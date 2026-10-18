@@ -36,6 +36,11 @@ export function productionBlockers(config: Env): string[] {
   }
   if (!config.ADMIN_MFA_REQUIRED) blockers.push('ADMIN_MFA_REQUIRED must be true in production');
   if (!config.ADMIN_SECRET_ENCRYPTION_KEY) blockers.push('ADMIN_SECRET_ENCRYPTION_KEY is required in production (admin TOTP secrets)');
+  if (!config.METRICS_BEARER_TOKEN || config.METRICS_BEARER_TOKEN.length < 32) blockers.push('METRICS_BEARER_TOKEN of at least 32 characters is required in production (FI-030)');
+  if (config.DEVICE_NONCE_STORE === 'redis') blockers.push('DEVICE_NONCE_STORE must be postgres in production (FI-008: Redis failover can forget used nonces)');
+  if (config.OFFLINE_CONFIRMATION_ENABLED && !config.OFFLINE_CONFIRMATION_MAX_AMOUNT?.trim()) {
+    blockers.push('OFFLINE_CONFIRMATION_MAX_AMOUNT is required in production when OFFLINE_CONFIRMATION_ENABLED is true (FI-004: offline codes can be computed by whoever holds the database and DEVICE_SECRET_ENCRYPTION_KEY)');
+  }
   if (!config.PKCS11_MODULE_PATH || !config.PKCS11_PIN) {
     blockers.push('PKCS11_MODULE_PATH and PKCS11_PIN are required in production');
   }
@@ -68,6 +73,21 @@ export function configurationErrors(config: Env): string[] {
     if (value !== undefined && value !== '' && (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || Buffer.from(value, 'base64').length !== 32)) {
       errors.push(`${name} must be 32 random bytes, base64-encoded`);
     }
+    const previous = (config as Record<string, unknown>)[`${name}_PREVIOUS`];
+    if (typeof previous === 'string' && previous.trim() !== '') {
+      if (!value) errors.push(`${name}_PREVIOUS is set but ${name} is not`);
+      for (const entry of previous.split(',')) {
+        const trimmed = entry.trim();
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed) || Buffer.from(trimmed, 'base64').length !== 32) {
+          errors.push(`${name}_PREVIOUS must list 32-byte keys, base64-encoded, separated by commas`);
+        } else if (value && Buffer.from(trimmed, 'base64').equals(Buffer.from(value, 'base64'))) {
+          errors.push(`${name}_PREVIOUS must not repeat the current ${name}`);
+        }
+      }
+    }
+  }
+  if (config.OFFLINE_CONFIRMATION_MAX_AMOUNT !== undefined && config.OFFLINE_CONFIRMATION_MAX_AMOUNT.trim() !== '') {
+    try { parseOfflineLimits(config.OFFLINE_CONFIRMATION_MAX_AMOUNT); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
   }
   if (config.OFFLINE_CONFIRMATION_ENABLED && !config.DEVICE_SECRET_ENCRYPTION_KEY) {
     errors.push('DEVICE_SECRET_ENCRYPTION_KEY is required when OFFLINE_CONFIRMATION_ENABLED is true');
@@ -99,4 +119,16 @@ export function insecureDevelopmentSettings(config: Env): string[] {
   if (!config.REQUIRE_MTLS_HEADER) settings.push('REQUIRE_MTLS_HEADER=false');
   if (!config.ADMIN_MFA_REQUIRED) settings.push('ADMIN_MFA_REQUIRED=false');
   return settings;
+}
+
+/** `PLN:100000,EUR:20000` → Map(currency → max amount in minor units). */
+export function parseOfflineLimits(value: string): Map<string, bigint> {
+  const limits = new Map<string, bigint>();
+  for (const entry of value.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const match = /^([A-Z]{3}):(0|[1-9][0-9]{0,29})$/.exec(entry);
+    if (!match) throw new Error(`OFFLINE_CONFIRMATION_MAX_AMOUNT: "${entry}" is not CURRENCY:amountMinor (e.g. PLN:100000)`);
+    if (limits.has(match[1])) throw new Error(`OFFLINE_CONFIRMATION_MAX_AMOUNT lists ${match[1]} twice`);
+    limits.set(match[1], BigInt(match[2]));
+  }
+  return limits;
 }

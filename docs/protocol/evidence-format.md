@@ -216,6 +216,7 @@ EVIDENCE_VALID records=7 hsm_seal=verified device_signatures=5/5 verified chain=
 |---|---|
 | `--public-keys=<file.pem>` | One file with one or more PEM public keys: the current and retired evidence keys, obtained out of band (for example from the HSM key ceremony records). Without it the keys in the export are used, which an audit should not rely on: the script then prints a `WARNING` on standard error, the summary starts with `EVIDENCE_SELF_CONSISTENT` and reports `hsm_seal=verified_with_export_keys`, and the exit code is 3. `--public-key` is accepted as an alias |
 | `--expect-head=<chainSequence>:<evidenceHash>` | The head the bank stored from its latest confirmation. Without it the summary says `head=not_checked`, and records removed from the end of the chain are not detected |
+| `--heads=<file>` | The heads the bank kept from `evidence.appended` webhooks for this NEXUS ID (JSON array, or one JSON object per line). Each must carry a valid HSM seal and be present unchanged in the export; a head past the end of the export reports `records missing at the end of the chain`. The summary then says `heads=<n>_matched`. New in 2.0.0 (FI-019) |
 
 The input is either export. The exit code is 0 for evidence valid against the keys given with `--public-keys`, 3 for evidence that is consistent only with the keys inside the export, 1 for invalid evidence (one `INVALID` line per problem) and 2 for a usage error.
 

@@ -1,6 +1,6 @@
-# Upgrade to 2.0.0-rc.2
+# Upgrade to 2.0
 
-From 1.4.0, follow this page from the start. From 2.0.0-rc.1, see [from 2.0.0-rc.1](#from-200-rc1) first.
+From 1.4.0, follow this page from the start. From 2.0.0-rc.1, see [from 2.0.0-rc.1](#from-200-rc1) first. From 2.0.0-rc.2 to 2.0.0, see [the last section](#from-200-rc2-to-200).
 
 2.0.0-rc.2 changes the database schema (migrations 013 to 018), the evidence format (schema 3), the recovery protocol (protocol 2), the bank client authentication (client certificate binding) and the admin console (TOTP, bank scope, four-eyes approval). Several changes are breaking for bank backends and for the bank's apps; they are listed at the end of this page. The upgrade needs a maintenance window without traffic, because 1.4.0 cannot write evidence after migration 013 and 2.0 refuses credentials until they are sealed (step 5).
 
@@ -168,3 +168,21 @@ Details and examples are in the [bank backend integration guide](../integration/
 Bank backends stop calling the removed endpoints and `purpose: SESSION`; apps move to SDK 2.0.0-rc.2 ([breaking changes](#breaking-changes-for-bank-backends)).
 
 The SDK changes have not been compiled or tested on Apple or Android toolchains in the environment that produced this release candidate; they must be built and tested in CI and on physical devices ([release](release.md)).
+
+## From 2.0.0-rc.2 to 2.0.0
+
+Changes since 2.0.0-rc.2 that an upgrade must handle. Details: [CHANGELOG](../../CHANGELOG.md).
+
+1. **Before the window:**
+    - generate `METRICS_BEARER_TOKEN` (`openssl rand -base64 32`) and give it to the monitoring system;
+    - with offline confirmation enabled, agree `OFFLINE_CONFIRMATION_MAX_AMOUNT` with the bank (per currency, minor units);
+    - bank backends: beneficiary values over 140 characters, empty or padded with spaces are refused with 400 (FI-003); the audio/video completion endpoint takes `{ resultToken }` only (FI-002); receivers must accept the new webhook types `authorization.verified`, `authorization.rejected`, `authorization.expired` and `evidence.appended`;
+    - app teams: SDK 2.0.0 refuses signed bytes with beneficiary values the server no longer issues (`invalid_value`); optional `certificatePins`; optional call modules.
+2. **Stop traffic and back up** the database (steps 1 and 2 above).
+3. **Migrations** 019, 020 and 021 as the table owner, then `scripts/db/roles.sql` again (it grants `nexus_app` DELETE on `device_request_nonces`).
+4. **Configuration:** add `METRICS_BEARER_TOKEN`, `OFFLINE_CONFIRMATION_MAX_AMOUNT` (if offline confirmation is enabled) and, for verification calls, `WEBRTC_*` ([audio and video calls](audio-video-calls.md)). Leave `DEVICE_NONCE_STORE` unset (default `postgres`).
+5. **Verification channels:** register provider keys or enable operator verification per bank (`verificationSetup.js`); channels without a verifier are no longer offered.
+6. **Start 2.0.0** and run the checks of step 12 above.
+7. **Optional, any time after the upgrade:** rotate the master keys ([key rotation](runbooks/key-rotation.md)); `rotateSecretKeys.js` also moves secrets written before 2.0.0 to the `k1` format.
+
+Rollback after 2.0.0 has run with traffic: 2.0.0-rc.2 cannot read secrets written in the `k1` format (new webhook secrets, offline keys of devices enrolled after the upgrade, TOTP secrets created or re-encrypted). Restore the backup instead (see [rollback](#rollback)).

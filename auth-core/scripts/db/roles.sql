@@ -12,7 +12,8 @@
 --                        so it cannot disable or replace the append-only and
 --                        lifecycle triggers; INSERT and SELECT only on the
 --                        evidence and audit tables; DELETE only on
---                        push_registrations; no TRUNCATE anywhere.
+--                        push_registrations and expired device_request_nonces;
+--                        no TRUNCATE anywhere.
 --   nexus_audit_reader   read-only access to evidence and audit records, for
 --                        export and archival.
 --
@@ -55,6 +56,8 @@ END $$;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM nexus_app;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO nexus_app;
 GRANT DELETE ON push_registrations TO nexus_app;
+-- Expired device request nonces (FI-008).
+GRANT DELETE ON device_request_nonces TO nexus_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexus_app;
 -- Evidence and audit records are only ever added.
 REVOKE UPDATE ON evidence_records, audit_logs FROM nexus_app;

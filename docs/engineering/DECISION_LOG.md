@@ -85,3 +85,23 @@ The WebRTC patent grant does not cover H.264/H.265. Both call modules wrap the d
 ## D-021 Real kotlinx-serialization in the local Android JVM run
 
 The four SecurePushTest failures of the baseline came from the hand-written serialization stub. Gradle 8.14.3 ships kotlinx-serialization 1.6.2 (the SDK declares 1.6.3, same API); with it and the serialization compiler plugin from kotlinc, the SDK's JVM tests pass in full. Android APIs (Keystore, BiometricPrompt, OkHttp, WebRTC) remain stubs; this is still not an Android build.
+
+## D-022 Master key ring with key IDs in the ciphertext (FI-005)
+
+Options: (a) wrap the master keys in the HSM (PKCS#11 decrypt per use); (b) key IDs and a ring of current plus previous keys, with an offline re-encryption tool; (c) both. Chosen now: (b), because it is independent of the HSM vendor and testable here, and it is the precondition for (a) anyway: without key IDs no key can be retired. The key ID is derived from the key (SHA-256 prefix), so operators cannot mislabel it. Associated data is unchanged. The credential trigger accepts a new offline key ciphertext only inside the tool's transaction (`nexus.secret_rewrap`), and only if presence does not change; the application could set the flag too, but it already holds the master key, so no new capability arises. HSM wrapping (a) remains open (REMAINING_RISKS R-05).
+
+## D-023 Offline codes: a deployment cap instead of a protocol change (FI-004)
+
+A short code typed by a person cannot carry an asymmetric signature, so the server-side forgery risk is inherent. Limiting the amount per currency in the deployment configuration bounds the harm and keeps the database out of the decision. A deferred device signature uploaded later would make offline confirmations verifiable; it is recorded as an option for the owner (ADR 0003 amendment), not implemented.
+
+## D-024 Device request nonces in PostgreSQL (FI-008)
+
+Options: Redis `WAIT` for synchronous replication (depends on the Redis deployment and fails open on timeout), or PostgreSQL with a primary key. PostgreSQL already holds all durable state, so the nonce store inherits its replication and backup guarantees. Cost: one insert per device request; expired rows are deleted by the existing sweep. Redis remains available as `DEVICE_NONCE_STORE=redis` outside production for comparison. BOOTSTRAP token consumption stays in Redis (REMAINING_RISKS R-06).
+
+## D-025 Every chain head goes to the bank (FI-019)
+
+Heads were delivered only with confirmations; enrolment and recovery records were not covered and the bank had no way to check a head's origin. Now every appended record queues `evidence.appended` in the same transaction (outbox), with the HSM seal of the head. The bank's copy is the independent store; the verifier checks exports against all retained heads. An external timestamping or transparency log (FI-018) is not added.
+
+## D-026 Metrics behind a bearer token (FI-030)
+
+A separate port would need deployment changes in every environment; a bearer token on the existing route is enough to keep bank systems behind the gateway from reading operational metrics. Required in production.

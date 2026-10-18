@@ -4,7 +4,7 @@
 // (sealed enrolment), and the customer's device signature over the exact
 // transaction bytes.
 //
-//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>]
+//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>]
 //
 // <export.json> is the response of either
 //   GET /v1/authorizations/{id}/evidence        (one record with its enrolment)
@@ -15,13 +15,16 @@
 // 3 consistent only with the keys inside the export (no --public-keys).
 // --expect-head is the chainSequence and evidenceHash the bank received with
 // its latest confirmation: records removed after it are then detected.
+// --heads is a file of the heads the bank kept from `evidence.appended`
+// webhooks for this NEXUS ID (a JSON array, or one JSON object per line):
+// each must be HSM-sealed and present unchanged in the export (FI-019).
 import { readFileSync } from 'node:fs';
-import { describeSignedTransaction, legacyRecords, verifyEvidenceChain, verifyEvidenceRecord } from './lib/evidence.mjs';
+import { describeSignedTransaction, legacyRecords, verifyEvidenceChain, verifyEvidenceRecord, verifyRetainedHeads } from './lib/evidence.mjs';
 
 const args = process.argv.slice(2);
 const file = args.find((a) => !a.startsWith('--'));
 if (!file) {
-  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>]');
+  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>]');
   process.exit(2);
 }
 const option = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -43,7 +46,20 @@ if (headOption) {
 
 const isChain = Array.isArray(exported.records);
 const records = isChain ? exported.records : [exported];
+const headsFile = option('heads');
+let heads = [];
+if (headsFile) {
+  const text = readFileSync(headsFile, 'utf8').trim();
+  try {
+    heads = text.startsWith('[') ? JSON.parse(text) : text.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
+  } catch {
+    console.error('--heads: not a JSON array or JSON lines');
+    process.exit(2);
+  }
+  if (!isChain) { console.error('--heads needs a chain export (GET /v1/nexus-identities/{nexusId}/evidence)'); process.exit(2); }
+}
 const problems = isChain ? verifyEvidenceChain(records, keys, { expectedHead }) : verifyEvidenceRecord(exported, keys, { standalone: true });
+if (heads.length > 0) problems.push(...verifyRetainedHeads(records, heads, keys));
 if (problems.length > 0) {
   for (const p of problems) console.error(`INVALID  ${p}`);
   process.exit(1);
@@ -66,5 +82,5 @@ const signatures = `device_signatures=${authorizations.length - offline}/${autho
 const pinned = Boolean(keyFile);
 if (!pinned) console.error('WARNING  seals were checked against the public keys inside the export; pass --public-keys with keys obtained out of band for an independent check');
 console.log(`${pinned ? 'EVIDENCE_VALID' : 'EVIDENCE_SELF_CONSISTENT'} records=${records.length} hsm_seal=${pinned ? 'verified' : 'verified_with_export_keys'} ${signatures}${isChain ? ' chain=linked' : ''}`
-  + `${expectedHead ? ' head=matched' : isChain ? ' head=not_checked' : ''}${legacy ? ` legacy_records=${legacy} (sealed before schema 3: no key provenance)` : ''}`);
+  + `${heads.length > 0 ? ` heads=${heads.length}_matched` : ''}${expectedHead ? ' head=matched' : isChain && heads.length === 0 ? ' head=not_checked' : ''}${legacy ? ` legacy_records=${legacy} (sealed before schema 3: no key provenance)` : ''}`);
 if (!pinned) process.exitCode = 3;

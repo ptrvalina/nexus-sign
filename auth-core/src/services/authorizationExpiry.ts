@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { withTransaction } from '../db/pool';
+import { pool, withTransaction } from '../db/pool';
 import { recordAuditEvent, type AuditContext } from './auditService';
 import { enqueueWebhook } from './webhookService';
 import type { AuthorizationRecord } from './authorizationRecord';
@@ -84,4 +84,16 @@ export async function expireOverdueVerificationSessions(limit = 200): Promise<nu
     }
     return overdue.rows.length;
   });
+}
+
+/**
+ * Deletes device request nonces past their lifetime (FI-008), at most
+ * `limit` per call. A nonce is kept for twice the timestamp skew plus a
+ * margin, after which the request's own timestamp is too old to be accepted.
+ */
+export async function purgeExpiredDeviceNonces(limit = 5000): Promise<number> {
+  const result = await pool.query(
+    `DELETE FROM device_request_nonces WHERE ctid IN (
+       SELECT ctid FROM device_request_nonces WHERE expires_at < now() LIMIT $1)`, [limit]);
+  return result.rowCount ?? 0;
 }

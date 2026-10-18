@@ -4,6 +4,7 @@ import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { pool } from '../db/pool';
 import { canonicalJson } from './canonicalAuthorization';
 import { NotFoundError } from './errors';
+import { enqueueWebhook } from './webhookService';
 
 /**
  * Evidence, schema version 3 (docs/protocol/evidence-format.md, ADR 0009).
@@ -200,6 +201,16 @@ async function appendRecord(
       columns.correlationId ?? null, previousEvidenceHash, hash, seal.signature.toString('base64'), seal.keyVersion, sealKeyId,
       EVIDENCE_SCHEMA_VERSION, JSON.stringify(columns.verificationFactors ?? []), JSON.stringify(sealedPayload)],
   );
+  // FI-019: every new chain head goes to the bank (transactional outbox), so
+  // the bank holds HSM-sealed checkpoints that Auth Core cannot take back;
+  // verify-evidence --heads detects records removed after any of them.
+  const owner = await tx.query<{ client_id: string }>(`SELECT client_id FROM nexus_identities WHERE nexus_id = $1`, [nexusId]);
+  if (owner.rows[0]) {
+    await enqueueWebhook(owner.rows[0].client_id, 'evidence.appended', {
+      nexusId, recordType, evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash,
+      previousEvidenceHash, sealKeyId, hsmSignature: seal.signature.toString('base64'),
+    }, tx);
+  }
   return { evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash };
 }
 

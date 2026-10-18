@@ -34,6 +34,12 @@ const envSchema = z.object({
   /** Encrypts per-credential offline confirmation keys (32 bytes, base64).
    * Required when OFFLINE_CONFIRMATION_ENABLED is true. */
   DEVICE_SECRET_ENCRYPTION_KEY: z.string().optional(),
+  /** Key rotation (FI-005): previous master keys, comma-separated base64,
+   * accepted for decryption only until cli/rotateSecretKeys.js has
+   * re-encrypted the stored secrets under the current key. */
+  WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS: z.string().optional(),
+  DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS: z.string().optional(),
+  ADMIN_SECRET_ENCRYPTION_KEY_PREVIOUS: z.string().optional(),
 
   /** How long an OAuth2 client-credentials access token stays valid. */
   OAUTH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
@@ -90,6 +96,23 @@ const envSchema = z.object({
   /** Offline confirmation: the customer confirms a transaction shown as a QR
    * code without network on the phone and types an 8-digit code. */
   OFFLINE_CONFIRMATION_ENABLED: z.string().optional().transform((v) => v === 'true'),
+  /** FI-030: bearer token required for GET /metrics. Without it the endpoint
+   * is open to every caller that passes the gateway check (any bank system).
+   * Required in production; at least 32 characters. */
+  METRICS_BEARER_TOKEN: z.string().optional(),
+  /** Where used device request nonces are remembered (FI-008). `postgres`
+   * (default): table device_request_nonces, as durable as the rest of the
+   * data. `redis`: as before 2.0.0; a failover to an asynchronous replica or a
+   * restore can forget nonces. Production requires postgres. */
+  DEVICE_NONCE_STORE: z.enum(['postgres', 'redis']).default('postgres'),
+  /** FI-004: highest amount, per currency, that may be confirmed with an
+   * offline code, e.g. `PLN:100000,EUR:20000` (minor units). The offline code
+   * is an HMAC under a key Auth Core also holds, so whoever has the database
+   * and DEVICE_SECRET_ENCRYPTION_KEY can compute it; the cap bounds what such
+   * a code can authorize. Set in the deployment, not in the database.
+   * Currencies not listed are not offered offline. Required in production
+   * when OFFLINE_CONFIRMATION_ENABLED is true. */
+  OFFLINE_CONFIRMATION_MAX_AMOUNT: z.string().optional(),
 
   // --- Secure push (docs/protocol/secure-push.md) ---
 
@@ -182,14 +205,11 @@ const envSchema = z.object({
   ANDROID_REQUIRED_DEVICE_VERDICT: z.enum(['MEETS_BASIC_INTEGRITY', 'MEETS_DEVICE_INTEGRITY', 'MEETS_STRONG_INTEGRITY']).default('MEETS_DEVICE_INTEGRITY'),
 
   /** Where Android keys must live, proven by Keystore key attestation
-   * (androidKeyAttestation.ts): REQUIRE_STRONGBOX, REQUIRE_HARDWARE_BACKED
-   * (TEE or StrongBox) or ALLOW_SOFTWARE (development only). A key that does
-   * not meet the policy is refused; nothing falls back silently. */
-  /** Where Android keys must live, proven by Keystore attestation:
-   * REQUIRE_STRONGBOX (StrongBox only), REQUIRE_HARDWARE_BACKED (TEE or
-   * StrongBox; default), ALLOW_TEE (the same acceptance as
-   * REQUIRE_HARDWARE_BACKED, named for policies written as "TEE allowed"),
-   * ALLOW_SOFTWARE (development only; a production blocker). */
+   * (androidKeyAttestation.ts): REQUIRE_STRONGBOX (StrongBox only),
+   * REQUIRE_HARDWARE_BACKED (TEE or StrongBox; default), ALLOW_TEE (the same
+   * acceptance as REQUIRE_HARDWARE_BACKED, named for policies written as "TEE
+   * allowed"), ALLOW_SOFTWARE (development only; a production blocker). A key
+   * that does not meet the policy is refused; nothing falls back silently. */
   ANDROID_KEY_SECURITY_POLICY: z.enum(['REQUIRE_STRONGBOX', 'REQUIRE_HARDWARE_BACKED', 'ALLOW_TEE', 'ALLOW_SOFTWARE']).default('REQUIRE_HARDWARE_BACKED'),
   /** Refuse devices whose bootloader is unlocked or whose boot is not verified. */
   ANDROID_REQUIRE_LOCKED_BOOTLOADER: z.string().optional().transform((v) => v !== 'false'),

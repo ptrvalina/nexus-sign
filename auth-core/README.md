@@ -10,7 +10,7 @@ Backend service for cryptographic transaction authorization, credential lifecycl
 - Device-signed mobile requests (no access token after enrolment) and offline confirmation with a QR code and an 8-digit code.
 - Server-side verification of App Attest and Play Integrity evidence.
 - Signature verification and atomic authorization consumption.
-- Adaptive verification (Push -> Audio -> Video) bound to the signature.
+- Adaptive verification (Push -> Audio -> Video) bound to the signature. Audio and video results are operator decisions after an in-app call (signalling relayed here, media peer to peer) or signed provider tokens ([ADR 0017](../docs/adr/0017-in-app-audio-video-calls.md)).
 - HSM-sealed, hash-chained evidence that can be verified offline, including the customer's signature.
 - Bank commit tracking and webhook delivery through a transactional outbox.
 - Administrative controls (suspend, reactivate, revoke) and audit logging.

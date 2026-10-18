@@ -26,7 +26,8 @@
     "create-admin-user": "node dist/cli/createAdminUser.js",
     "set-client-certificates": "node dist/cli/setClientCertificates.js",
     "seal-credential-baseline": "node dist/cli/sealCredentialBaseline.js",
-    "verification-setup": "node dist/cli/verificationSetup.js"
+    "verification-setup": "node dist/cli/verificationSetup.js",
+    "rotate-secret-keys": "node dist/cli/rotateSecretKeys.js"
   },
   "dependencies": {
     "express": "^4.19.2",

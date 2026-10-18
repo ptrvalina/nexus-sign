@@ -1,6 +1,7 @@
 import { verify } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { redis } from '../db/redis';
+import { pool } from '../db/pool';
 import { env } from '../config/env';
 import { resolveMobileSession, type ReplacementAuthorization } from '../services/mobileSessionService';
 import { getNexusIdentityStatus } from '../services/nexusIdentityService';
@@ -130,8 +131,8 @@ async function authenticateDeviceSignature(req: MobileAuthenticatedRequest, res:
   // A timestamp is accepted up to the skew either side of now, so a nonce must
   // be remembered for the whole 2 x skew window plus clock and rounding margin
   // (NXS-034).
-  const fresh = await redis.set(`device_nonce:${credential.credentialId}:${nonce}`, '1', 'EX', deviceNonceTtlSeconds(env.DEVICE_REQUEST_MAX_SKEW_SECONDS), 'NX');
-  if (fresh !== 'OK') {
+  const fresh = await rememberNonce(credential.credentialId, nonce);
+  if (!fresh) {
     reject('Device request nonce has already been used');
     return;
   }
@@ -156,6 +157,23 @@ async function credentialIntact(credential: Parameters<typeof assertCredentialIn
     if (error instanceof CredentialIntegrityError) return false;
     throw error;
   }
+}
+
+/**
+ * Records a nonce as used; false if it was used before. With
+ * DEVICE_NONCE_STORE=postgres (default) the primary key of
+ * device_request_nonces decides, so a Redis failover or restore cannot
+ * forget a nonce (FI-008); `redis` keeps the previous behaviour.
+ */
+async function rememberNonce(credentialId: string, nonce: string): Promise<boolean> {
+  const ttl = deviceNonceTtlSeconds(env.DEVICE_REQUEST_MAX_SKEW_SECONDS);
+  if (env.DEVICE_NONCE_STORE === 'redis') {
+    return (await redis.set(`device_nonce:${credentialId}:${nonce}`, '1', 'EX', ttl, 'NX')) === 'OK';
+  }
+  const inserted = await pool.query(
+    `INSERT INTO device_request_nonces (credential_id, nonce, expires_at) VALUES ($1, $2, now() + make_interval(secs => $3))
+     ON CONFLICT (credential_id, nonce) DO NOTHING`, [credentialId, nonce, ttl]);
+  return inserted.rowCount === 1;
 }
 
 /** How long a device request nonce is remembered (NXS-034). */
