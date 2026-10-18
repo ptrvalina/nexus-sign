@@ -1208,7 +1208,10 @@ components:
       properties:
         confirmed:
           type: boolean
-          description: True only when state is VERIFIED. The customer's confirmation is complete only then; OFFLINE_PROVISIONAL is not a confirmation (offline confirmation v2).
+          description: True only when state is VERIFIED and the sealed evidence verifies now (HSM seal, binding to this authorization and its terms, device signature with the enrolment-sealed key). OFFLINE_PROVISIONAL is never confirmed. Derived by Auth Core, not a cryptographic fact by itself; verify the exported evidence for that.
+        evidenceProblem:
+          type: string
+          description: Present when state is VERIFIED but the evidence does not verify (confirmed is false).
         authorizationId: { type: string, format: uuid }
         nexusId: { $ref: '#/components/schemas/NexusId' }
         credentialId: { type: string, format: uuid }

@@ -6,6 +6,7 @@ import { getCredentialForClient, revokeCredentialForClient } from '../services/c
 import { createAuthorization } from '../services/authorizationService';
 import { getAuthorizationForClient } from '../services/authorizationRecord';
 import { reportedState } from '../services/authorizationExpiry';
+import { confirmationView } from '../services/authorizationEvidenceCheck';
 import { confirmAuthorizationOffline, getOfflineChallenge, verifyAuthorization } from '../services/authorizationConfirmation';
 import { finalizeBankTransaction, getBankTransactionState, requestCommit } from '../services/bankTransactionService';
 import { completeVerificationSession, escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
@@ -198,9 +199,10 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
       res.json({
         ...auth,
         state: reportedState(auth),
-        // The only state in which the customer's confirmation is complete;
-        // OFFLINE_PROVISIONAL is not (offline confirmation v2).
-        confirmed: reportedState(auth) === 'VERIFIED',
+        // True only for VERIFIED with sealed evidence that verifies now (HSM
+        // seal, binding, terms, device signature with the enrolment key): the
+        // state column alone does not set it. OFFLINE_PROVISIONAL never.
+        ...(await confirmationView(auth.authorizationId, clientIdOf(req), reportedState(auth))),
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,

@@ -1,6 +1,7 @@
 import { createPublicKey, verify } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { env } from '../config/env';
+import { pool } from '../db/pool';
 import { authorizationObjectOf, mapAuthorization, type AuthorizationRow } from './authorizationRecord';
 import { canonicalizeAuthorization } from './canonicalAuthorization';
 import { assertCredentialIntegrity, CredentialIntegrityError, sealProblem } from './credentialIntegrity';
@@ -12,7 +13,8 @@ import { mapEvidenceRow, type EvidenceRow } from './evidenceService';
  * authorization, it re-checks the sealed AUTHORIZATION evidence of that
  * authorization instead of trusting the `state` column:
  *
- *  - exactly one record, HSM seal valid with a known evidence key;
+ *  - exactly one record, HSM seal valid with a known evidence key, at its
+ *    sealed position in the identity's chain and linked to its predecessor;
  *  - it names this authorization, its credential and the exact canonical
  *    bytes of the stored (immutable) terms;
  *  - the confirmation method matches the row, and is a device signature
@@ -29,7 +31,7 @@ import { mapEvidenceRow, type EvidenceRow } from './evidenceService';
  *
  * Returns why the authorization must not be committed, or null.
  */
-export async function authorizationEvidenceProblem(tx: PoolClient, auth: AuthorizationRow): Promise<string | null> {
+export async function authorizationEvidenceProblem(tx: Pick<PoolClient, 'query'>, auth: AuthorizationRow): Promise<string | null> {
   const records = await tx.query<EvidenceRow>(
     `SELECT * FROM evidence_records WHERE authorization_id = $1 AND record_type = 'AUTHORIZATION'`, [auth.authorization_id]);
   if (records.rows.length !== 1) return records.rows.length === 0 ? 'no sealed evidence for this authorization' : 'more than one evidence record';
@@ -41,6 +43,17 @@ export async function authorizationEvidenceProblem(tx: PoolClient, auth: Authori
       || p.nexusId !== auth.nexus_id || p.canonicalPayloadHash !== auth.canonical_payload_hash) {
     return 'the evidence names another authorization, identity, credential or terms';
   }
+  // Its place in the identity's chain: the sealed position must be the stored
+  // one, and the predecessor it names must be the record before it. A record
+  // sealed outside the normal append (even with a valid seal) is refused.
+  if (p.chainSequence !== record.chainSequence || (p.previousEvidenceHash ?? null) !== (record.previousEvidenceHash ?? null)) {
+    return 'the evidence is not consistent with its position in the chain';
+  }
+  const predecessor = record.chainSequence > 1
+    ? (await tx.query<{ evidence_hash: string }>(
+      `SELECT evidence_hash FROM evidence_records WHERE nexus_id = $1 AND chain_sequence = $2`, [auth.nexus_id, record.chainSequence - 1])).rows[0]?.evidence_hash ?? null
+    : null;
+  if (predecessor !== (record.previousEvidenceHash ?? null)) return 'the evidence does not link to its predecessor in the chain';
   const canonical = canonicalizeAuthorization(authorizationObjectOf(mapAuthorization(auth)));
   if (typeof p.signedPayloadBase64 !== 'string' || !Buffer.from(p.signedPayloadBase64, 'base64').equals(canonical)) {
     return 'the evidence does not carry the stored terms';
@@ -75,4 +88,20 @@ export async function authorizationEvidenceProblem(tx: PoolClient, auth: Authori
     ok = false;
   }
   return ok ? null : 'the device signature in the evidence does not verify';
+}
+
+/**
+ * What the bank's GET reports: `confirmed` is true only for a VERIFIED
+ * authorization whose sealed evidence passes authorizationEvidenceProblem
+ * now. A VERIFIED row whose evidence does not (a database write, a damaged
+ * record) reports confirmed: false and the reason; nothing is changed or
+ * audited here (the commit request audits). Not a cryptographic fact by
+ * itself: a bank that needs one verifies the exported evidence.
+ */
+export async function confirmationView(authorizationId: string, clientId: string, state: string): Promise<{ confirmed: boolean; evidenceProblem?: string }> {
+  if (state !== 'VERIFIED') return { confirmed: false };
+  const row = await pool.query<AuthorizationRow>(`SELECT * FROM authorization_requests WHERE authorization_id = $1 AND client_id = $2`, [authorizationId, clientId]);
+  if (!row.rows[0] || row.rows[0].state !== 'VERIFIED') return { confirmed: false };
+  const problem = await authorizationEvidenceProblem(pool, row.rows[0]);
+  return problem ? { confirmed: false, evidenceProblem: problem } : { confirmed: true };
 }

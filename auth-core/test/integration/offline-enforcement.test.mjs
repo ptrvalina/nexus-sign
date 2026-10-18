@@ -111,7 +111,10 @@ describe('FI-004 enforcement: no execution without the device signature', { skip
     // The trigger permits PENDING_USER -> VERIFIED with any signature value.
     await q(`UPDATE authorization_requests SET state = 'VERIFIED', signature = 'forged', signature_format = 'der', confirmation_method = 'DEVICE_SIGNATURE', verified_at = now()
              WHERE authorization_id = $1`, [auth.authorizationId]);
-    assert.equal((await stateOf(auth.authorizationId)).state, 'VERIFIED', 'the row itself says VERIFIED');
+    const view = await stateOf(auth.authorizationId);
+    assert.equal(view.state, 'VERIFIED', 'the row itself says VERIFIED');
+    assert.equal(view.confirmed, false, 'confirmed is derived from the evidence, not from the state column');
+    assert.match(view.evidenceProblem, /no sealed evidence/);
     const r = await commit(auth.authorizationId);
     assert.equal(r.status, 409, r.text);
     assert.equal(r.json.code, 'EVIDENCE_INVALID');
