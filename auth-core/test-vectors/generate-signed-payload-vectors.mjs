@@ -111,6 +111,16 @@ addValid('payee name of 140 characters (the maximum) is shown after the account'
   authorization_id: '00000000-0000-4000-8000-000000000007',
   beneficiary: { name: `ACME ${'N'.repeat(130)} GmbH`, iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' },
 });
+// Phase 10 additions (appended, so the indexes of the vectors above stay).
+// Look-alike letters are not a protocol error: the bytes are signed and shown
+// as they are (Cyrillic А U+0410 and о U+043E here), so the signature binds
+// them; whether a bank flags confusable payee names is FI-034.
+addValid('payee name with Cyrillic look-alike letters is signed and shown as is', {
+  ...base,
+  authorization_id: '00000000-0000-4000-8000-000000000008',
+  beneficiary: { name: '\u0410nna N\u043ewak', iban: 'PL61109010140000071219812874' },
+});
+addValid('smallest non-zero amount', { ...base, authorization_id: '00000000-0000-4000-8000-000000000009', amount_minor: '1', currency: 'EUR' });
 
 const baseBytes = canonical(base);
 const baseText = baseBytes.toString('utf8');
@@ -155,6 +165,15 @@ addInvalid('beneficiary value of spaces only', JSON.stringify(normalize({ ...bas
 addInvalid('leading space in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: ' Jan Kowalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
 addInvalid('trailing no-break space in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski\u00a0', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
 addInvalid('17 beneficiary fields', JSON.stringify(normalize({ ...base, beneficiary: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`f${String(i).padStart(2, '0')}`, 'x'])) })), 'invalid_value');
+addInvalid('amount of 31 digits', JSON.stringify(normalize({ ...base, amount_minor: '1'.repeat(31) })), 'invalid_value');
+addInvalid('currency with a digit', JSON.stringify(normalize({ ...base, currency: 'PL1' })), 'invalid_value');
+addInvalid('currency of four letters', JSON.stringify(normalize({ ...base, currency: 'PLNX' })), 'invalid_value');
+addInvalid('empty nonce', JSON.stringify(normalize({ ...base, nonce: '' })), 'invalid_value');
+addInvalid('nonce in uppercase hex', JSON.stringify(normalize({ ...base, nonce: base.nonce.toUpperCase() })), 'invalid_value');
+addInvalid('nonce of 31 bytes', JSON.stringify(normalize({ ...base, nonce: base.nonce.slice(0, 62) })), 'invalid_value');
+addInvalid('authorization_id not a UUID', JSON.stringify(normalize({ ...base, authorization_id: 'auth-1' })), 'invalid_value');
+addInvalid('credential_id in uppercase', JSON.stringify(normalize({ ...base, credential_id: '00000000-0000-4000-8000-00000000000A' })), 'invalid_value');
+addInvalid('nexus_id of 8 digits', JSON.stringify(normalize({ ...base, nexus_id: '12345678' })), 'invalid_value');
 addInvalid('top level is an array', `[${baseText}]`, 'invalid_json');
 invalid.push({ name: 'invalid UTF-8 byte', reason: 'invalid_json', canonical_base64: b64(Buffer.concat([baseBytes.subarray(0, 10), Buffer.from([0xff]), baseBytes.subarray(10)])) });
 

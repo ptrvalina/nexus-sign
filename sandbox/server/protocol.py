@@ -30,6 +30,10 @@ FIELDS = frozenset({
 
 AMOUNT = re.compile(r'^(0|[1-9][0-9]{0,29})$')
 CURRENCY = re.compile(r'^[A-Z]{3}$')
+# Protocol v1 formats: lowercase UUIDs, 9-digit NEXUS ID, 32-byte nonce in lowercase hex.
+UUID_V1 = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+NEXUS_ID = re.compile(r'^[0-9]{9}$')
+NONCE = re.compile(r'^[0-9a-f]{64}$')
 BENEFICIARY_KEY = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 BENEFICIARY_MAX_FIELDS = 16
 # ISO 20022 Max140Text, in UTF-16 code units (FI-003; 512 until 2.0.0-rc.2).
@@ -220,6 +224,12 @@ def parse_signed_payload(data):
         raise Rejected('invalid_value', 'currency')
     if not TIMESTAMP.match(obj['issued_at']) or not TIMESTAMP.match(obj['expires_at']):
         raise Rejected('invalid_value', 'timestamps')
+    if not UUID_V1.match(obj['authorization_id']) or not UUID_V1.match(obj['credential_id']):
+        raise Rejected('invalid_value', 'authorization_id/credential_id')
+    if not NEXUS_ID.match(obj['nexus_id']):
+        raise Rejected('invalid_value', 'nexus_id')
+    if not NONCE.match(obj['nonce']):
+        raise Rejected('invalid_value', 'nonce')
     for key in FIELDS - {'beneficiary'}:
         if not is_display_safe(obj[key]):
             raise Rejected('invalid_value', f'{key} contains a control, format or separator character')

@@ -98,6 +98,11 @@ internal object SignedPayload {
     private val CURRENCY = Regex("^[A-Z]{3}$")
     private val BENEFICIARY_KEY = Regex("^[a-z][a-z0-9_]{0,63}$")
     private val TIMESTAMP = Regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$")
+    // Protocol v1 formats (authorization-protocol-v1.md): lowercase UUIDs,
+    // 9-digit NEXUS ID, 32-byte nonce in lowercase hex.
+    private val UUID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    private val NEXUS_ID = Regex("^[0-9]{9}$")
+    private val NONCE = Regex("^[0-9a-f]{64}$")
 
     class Rejected(val reason: String, detail: String) : Exception("$reason: $detail")
 
@@ -128,6 +133,9 @@ internal object SignedPayload {
         if (!AMOUNT.matches(str("amount_minor"))) throw Rejected("invalid_value", "amount_minor")
         if (!CURRENCY.matches(str("currency"))) throw Rejected("invalid_value", "currency")
         if (!TIMESTAMP.matches(str("issued_at")) || !TIMESTAMP.matches(str("expires_at"))) throw Rejected("invalid_value", "timestamps")
+        if (!UUID.matches(str("authorization_id")) || !UUID.matches(str("credential_id"))) throw Rejected("invalid_value", "authorization_id/credential_id")
+        if (!NEXUS_ID.matches(str("nexus_id"))) throw Rejected("invalid_value", "nexus_id")
+        if (!NONCE.matches(str("nonce"))) throw Rejected("invalid_value", "nonce")
         for ((key, value) in obj) {
             if (value is String && !isDisplaySafe(value)) throw Rejected("invalid_value", "$key contains a control, format or separator character")
         }

@@ -168,6 +168,15 @@ enum SignedPayload {
         guard matches(issuedAt, timestampPattern), matches(expiresAt, timestampPattern) else {
             throw Rejected(reason: "invalid_value", detail: "timestamps")
         }
+        let authorizationID = try str("authorization_id")
+        let credentialID = try str("credential_id")
+        guard matches(authorizationID, uuidPattern), matches(credentialID, uuidPattern) else {
+            throw Rejected(reason: "invalid_value", detail: "authorization_id/credential_id")
+        }
+        let nexusID = try str("nexus_id")
+        guard matches(nexusID, nexusIDPattern) else { throw Rejected(reason: "invalid_value", detail: "nexus_id") }
+        let nonceValue = try str("nonce")
+        guard matches(nonceValue, noncePattern) else { throw Rejected(reason: "invalid_value", detail: "nonce") }
         for pair in pairs {
             if case let .string(text) = pair.value, !isDisplaySafe(text) {
                 throw Rejected(reason: "invalid_value", detail: "\(pair.key) contains a control, format or separator character")
@@ -348,6 +357,10 @@ enum SignedPayload {
     private static let currencyPattern = "^[A-Z]{3}$"
     private static let beneficiaryKeyPattern = "^[a-z][a-z0-9_]{0,63}$"
     private static let timestampPattern = "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    // Protocol v1 formats: lowercase UUIDs, 9-digit NEXUS ID, 32-byte nonce in lowercase hex.
+    private static let uuidPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    private static let nexusIDPattern = "^[0-9]{9}$"
+    private static let noncePattern = "^[0-9a-f]{64}$"
 
     private static func matches(_ value: String, _ pattern: String) -> Bool {
         value.range(of: pattern, options: .regularExpression) != nil
