@@ -198,3 +198,12 @@ test('FI-005: production requires HSM-wrapped master keys; plaintext and wrapped
   assert.ok(configurationErrors({ ...dev, DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS_WRAPPED: WRAPPED }).some((e) => e.includes('_PREVIOUS_WRAPPED is set but')));
   assert.ok(configurationErrors({ ...dev, MASTER_KEY_SOURCE: 'env' }).some((e) => e.includes('_WRAPPED is only read with MASTER_KEY_SOURCE=hsm')));
 });
+
+test('FI-004: offline confirmation v1 is refused in production and needs the insecure flag elsewhere', () => {
+  const offline = { ...production, OFFLINE_CONFIRMATION_ENABLED: true, OFFLINE_CONFIRMATION_MAX_AMOUNT: 'PLN:100000', OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY: 3 };
+  assert.ok(!productionBlockers({ ...offline, OFFLINE_CONFIRMATION_MODE: 'deferred_signature' }).some((b) => /OFFLINE_CONFIRMATION_MODE/.test(b)));
+  assert.ok(productionBlockers({ ...offline, OFFLINE_CONFIRMATION_MODE: 'immediate' }).some((b) => /OFFLINE_CONFIRMATION_MODE must be deferred_signature/.test(b)));
+  const dev = { ...offline, NODE_ENV: 'development', ALLOW_INSECURE_DEVELOPMENT: false, HSM_ADAPTER: 'pkcs11', REQUIRE_MTLS_HEADER: true, ADMIN_MFA_REQUIRED: true };
+  assert.ok(configurationErrors({ ...dev, OFFLINE_CONFIRMATION_MODE: 'immediate' }).some((e) => /OFFLINE_CONFIRMATION_MODE=immediate is a development setting/.test(e)));
+  assert.ok(!configurationErrors({ ...dev, OFFLINE_CONFIRMATION_MODE: 'deferred_signature' }).some((e) => /OFFLINE_CONFIRMATION_MODE/.test(e)));
+});

@@ -2,7 +2,8 @@ import type { PoolClient } from 'pg';
 import { pool, withTransaction } from '../db/pool';
 import { recordAuditEvent } from './auditService';
 import { enqueueWebhook } from './webhookService';
-import { AuthorizationNotFoundError } from './authorizationRecord';
+import { AuthorizationNotFoundError, type AuthorizationRow } from './authorizationRecord';
+import { authorizationEvidenceProblem } from './authorizationEvidenceCheck';
 import { ConflictError } from './errors';
 import { env } from '../config/env';
 
@@ -61,6 +62,15 @@ export async function requestCommit(authorizationId: string, clientId: string, b
     if (credential !== 'ACTIVE') throw new ConflictError('The device credential that confirmed this authorization is no longer active', 'CREDENTIAL_NOT_ACTIVE');
     if (!auth.verified_at || Date.now() - auth.verified_at.getTime() > env.BANK_COMMIT_MAX_AGE_SECONDS * 1000) {
       throw new ConflictError(`The confirmation is older than ${env.BANK_COMMIT_MAX_AGE_SECONDS} s; request a new authorization`, 'CONFIRMATION_TOO_OLD');
+    }
+    // FI-004 (phase 9): the state column alone does not authorize a commit;
+    // the sealed evidence must show a device signature over these terms.
+    const problem = await authorizationEvidenceProblem(tx, auth as unknown as AuthorizationRow);
+    if (problem) {
+      // Outside the transaction, so the record survives the refusal.
+      await recordAuditEvent('integrity_violation', { nexusId: auth.nexus_id, clientId },
+        { authorizationId, reason: `commit refused: ${problem}` }).catch(() => undefined);
+      throw new ConflictError(`The authorization's evidence does not support a commit: ${problem}`, 'EVIDENCE_INVALID');
     }
 
     const updated = await tx.query<Row>(

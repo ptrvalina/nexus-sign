@@ -198,6 +198,9 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
       res.json({
         ...auth,
         state: reportedState(auth),
+        // The only state in which the customer's confirmation is complete;
+        // OFFLINE_PROVISIONAL is not (offline confirmation v2).
+        confirmed: reportedState(auth) === 'VERIFIED',
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,

@@ -1206,6 +1206,9 @@ components:
     Authorization:
       type: object
       properties:
+        confirmed:
+          type: boolean
+          description: True only when state is VERIFIED. The customer's confirmation is complete only then; OFFLINE_PROVISIONAL is not a confirmation (offline confirmation v2).
         authorizationId: { type: string, format: uuid }
         nexusId: { $ref: '#/components/schemas/NexusId' }
         credentialId: { type: string, format: uuid }

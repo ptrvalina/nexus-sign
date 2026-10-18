@@ -138,6 +138,8 @@ export function insecureDevelopmentSettings(config: Env): string[] {
   if (!config.REQUIRE_VALID_ATTESTATION) settings.push('REQUIRE_VALID_ATTESTATION=false');
   if (!config.REQUIRE_MTLS_HEADER) settings.push('REQUIRE_MTLS_HEADER=false');
   if (!config.ADMIN_MFA_REQUIRED) settings.push('ADMIN_MFA_REQUIRED=false');
+  // FI-004: offline confirmation v1 accepts a code alone.
+  if (config.OFFLINE_CONFIRMATION_ENABLED && config.OFFLINE_CONFIRMATION_MODE === 'immediate') settings.push('OFFLINE_CONFIRMATION_MODE=immediate');
   return settings;
 }
 

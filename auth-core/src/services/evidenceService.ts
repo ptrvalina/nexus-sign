@@ -363,11 +363,13 @@ export async function getAuthorizationEvidencePosition(authorizationId: string):
   return row ? { evidenceId: row.evidence_id, chainSequence: Number(row.chain_sequence), evidenceHash: row.evidence_hash } : null;
 }
 
-interface EvidenceRow {
+export interface EvidenceRow {
   evidence_id: string; record_type: EvidenceRecordType; authorization_id: string | null; nexus_id: string; credential_id: string;
   chain_sequence: string; sealed_payload: Record<string, unknown> | null; evidence_hash: string; previous_evidence_hash: string | null;
   hsm_signature: string; hsm_key_version: number; seal_key_id: string | null; schema_version: string; created_at: Date;
 }
+
+export function mapEvidenceRow(row: EvidenceRow): SealedEvidence { return mapEvidence(row); }
 
 function mapEvidence(row: EvidenceRow): SealedEvidence {
   return {

@@ -23,6 +23,7 @@
 // (default: read from ~/nexus-local-credentials.txt, written by
 // auth-core/scripts/run-local.sh).
 import { createServer, request as httpRequest } from 'node:http';
+import { paymentStatus } from './status.mjs';
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
 import { randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -178,7 +179,7 @@ async function paymentRows() {
   const rows = [];
   for (const payment of [...payments].reverse()) {
     const current = await authCore('GET', `/v1/authorizations/${payment.authorizationId}`);
-    rows.push({ ...payment, state: current.json?.state ?? `HTTP ${current.status}`, confirmationMethod: current.json?.confirmationMethod ?? null });
+    rows.push({ ...payment, status: paymentStatus(current.json, current.status), confirmationMethod: current.json?.confirmationMethod ?? null });
   }
   return rows;
 }
@@ -187,7 +188,6 @@ const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&':
 
 async function page(message = '') {
   const rows = await paymentRows();
-  const stateLabel = { PENDING_USER: 'ждёт клиента', VERIFIED: 'подтверждён подписью', REJECTED: 'отклонён', EXPIRED: 'истёк', CANCELLED: 'отменён' };
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Демо-банк</title>
 <meta http-equiv="refresh" content="5; url=/">
 <style>body{font-family:system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1d2b3f}
@@ -209,7 +209,7 @@ ${message ? `<p class="msg">${escape(message)}</p>` : ''}
 <label>Проверка <select name="call"><option value="">только подпись</option><option value="VIDEO">видеозвонок с сотрудником</option><option value="AUDIO">аудиозвонок с сотрудником</option></select></label>
 <button type="submit">Отправить на подтверждение</button></fieldset></form>
 <table><tr><th>Создан</th><th>Референс</th><th>Сумма</th><th>Получатель</th><th>Статус</th></tr>
-${rows.map((r) => `<tr><td>${r.createdAt.toLocaleTimeString('ru-RU')}</td><td><code>${escape(r.reference)}</code></td><td>${(r.amountMinor / 100).toFixed(2)} ${escape(r.currency)}</td><td>${escape(r.beneficiary.name)}<br><small>${escape(r.beneficiary.iban)}</small></td><td class="${r.state === 'VERIFIED' ? 'ok' : r.state === 'PENDING_USER' ? 'wait' : 'bad'}">${escape(stateLabel[r.state] ?? r.state)}${r.confirmationMethod ? `<br><small>${escape(r.confirmationMethod)}</small>` : ''}</td></tr>`).join('') || '<tr><td colspan="5">Платежей пока нет.</td></tr>'}
+${rows.map((r) => `<tr><td>${r.createdAt.toLocaleTimeString('ru-RU')}</td><td><code>${escape(r.reference)}</code></td><td>${(r.amountMinor / 100).toFixed(2)} ${escape(r.currency)}</td><td>${escape(r.beneficiary.name)}<br><small>${escape(r.beneficiary.iban)}</small></td><td class="${r.status.css}">${escape(r.status.label)}${r.confirmationMethod ? `<br><small>${escape(r.confirmationMethod)}</small>` : ''}</td></tr>`).join('') || '<tr><td colspan="5">Платежей пока нет.</td></tr>'}
 </table>
 ${customer.nexusId ? `<p><a href="/ops/evidence">Цепочка доказательств клиента (JSON)</a></p>` : ''}
 <p><small>Страница обновляется каждые 5 секунд.</small></p></body></html>`;

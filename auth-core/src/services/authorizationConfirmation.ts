@@ -405,6 +405,7 @@ async function finalizeVerified(tx: PoolClient, auth: AuthorizationRow, verified
     nexusId: auth.nexus_id,
     transactionReference: auth.transaction_reference,
     confirmationMethod: verified.confirmationMethod,
+    confirmed: true,
     evidence,
     evidenceHead: await getChainHead(tx, auth.nexus_id),
   }, tx);
@@ -460,6 +461,7 @@ async function acceptOfflineCode(id: string, clientId: string, auditContext: Aud
       transactionReference: auth.transaction_reference,
       offlineCodeAcceptedAt: updated.rows[0].offline_code_accepted_at.toISOString(),
       signatureDeadline: deadline,
+      confirmed: false,
     }, tx);
     return { ok: true, result: { status: 'PROVISIONAL', signatureDeadline: deadline } };
   });
@@ -600,7 +602,7 @@ export async function expireUnsignedOfflineConfirmations(limit = 200): Promise<n
       await recordAuditEvent('offline_signature_missing', { nexusId: row.nexus_id, clientId: row.client_id, actor: 'system:expiry' },
         { authorizationId: row.authorization_id, credentialId: row.credential_id, reason: row.reason }, tx);
       await enqueueWebhook(row.client_id, 'authorization.offline_unsigned', {
-        authorizationId: row.authorization_id, nexusId: row.nexus_id, transactionReference: row.transaction_reference, reason: row.reason,
+        authorizationId: row.authorization_id, nexusId: row.nexus_id, transactionReference: row.transaction_reference, reason: row.reason, confirmed: false,
       }, tx);
     }
     return due.rows.length;
