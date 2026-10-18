@@ -100,6 +100,25 @@ Wrapped value: `w1$<KEK label>$<iv base64>$<ciphertext‖tag base64>`, AES-256-G
 
 | Item | Status |
 |---|---|
-| SoftHSM 2.7.0: AES-GCM wrap and unwrap, attribute checks, failure modes, rotations | PASS (`master-key-hsm.test.mjs` 10/10) |
+| SoftHSM 2.7.0: AES-GCM wrap and unwrap, attribute checks (incl. `CKA_LOCAL`/`CKA_NEVER_EXTRACTABLE` since phase 8), failure modes, rotations | Local test on SoftHSM only: `master-key-hsm.test.mjs` 11/11 passed (2026-10-18). Not a release-gate PASS: SoftHSM is not the production HSM |
 | Vendor HSM: AES-GCM with associated data via `CK_GCM_PARAMS`, attribute policy, partition/role separation, backup | BLOCKED: no HSM available |
 | Key ceremony record | Not done |
+
+## Review of the implementation (phase 8, 2026-10-18)
+
+Code review of `src/crypto/masterKeyVault.ts`, `src/crypto/secretBox.ts`, `src/cli/masterKeys.ts`, `src/cli/rotateSecretKeys.ts` against the questions of the phase 8 instruction. Own review, not an independent audit.
+
+| Question | Finding |
+|---|---|
+| Algorithm and parameters | AES-256-GCM in the HSM (`CKM_AES_GCM`, `CK_PARAMS_AES_GCM`), 96-bit IV, 128-bit tag; a 32-byte key plus 16-byte tag is the only accepted ciphertext length |
+| IV uniqueness | Random per wrap: HSM generator XOR Node's generator, so neither alone decides. Wraps are rare (key generation, rotation, KEK change), so a 96-bit random IV is far from the collision bound. The stored secrets under the master keys use Node's 96-bit random IVs (secretBox); same reasoning, volume is one secret per credential, webhook client or admin |
+| Associated data | `nexus-sign/master-key/v1|<NAME>` for each master key; a wrapped key configured under another name fails to unwrap (test). Stored secrets: `device:<credentialId>` etc. (secretBox) |
+| Key purpose and attributes | KEK: AES, 32 bytes, `CKA_SENSITIVE`, not `CKA_EXTRACTABLE`, and since D-031 `CKA_LOCAL` and `CKA_NEVER_EXTRACTABLE`; `CKA_DECRYPT` required for the service, `CKA_ENCRYPT` only for wrapping tools; `create-kek` sets `CKA_WRAP`/`CKA_UNWRAP` false |
+| Encrypt/decrypt rights | A decrypt-only KEK (`create-kek --decrypt-only`) for production processes; an encrypt-capable one only where keys are wrapped (test: encrypt-only KEK refused by the service) |
+| HSM unavailable | Startup fails closed with the PKCS#11 code only (`C_Initialize`, token missing, login refused, no KEK, wrong type) (tests) |
+| Rotation and interruption | `rotateSecretKeys.js` decrypts everything before writing (an unknown key stops it before any write: tested), then re-encrypts in batches of 200, each in a transaction; by design an interruption leaves each row under the old or the new key, both in the ring (`_PREVIOUS`), and a second run re-encrypts the rest. Tested: rotation with server restarts before and after; **not tested: killing the tool in the middle of a run** |
+| Key of another purpose | Refused by the associated data (test) |
+| Logs | Errors carry only `CKR_*` codes and names; the CLI prints wrapped values, never plaintext (test greps the logs for key material) |
+| Production mode | `MASTER_KEY_SOURCE=hsm` required; plaintext keys next to `hsm` refused (tests) |
+| Plaintext keys in memory | **Yes.** After startup the three master keys and every configured `_PREVIOUS` key are Buffers in the Auth Core process for its lifetime (and in the operator tools while they run). Per-use copies of the offline key `K` are wiped after the code comparison (phase 8); other decrypted secrets (webhook secrets, admin TOTP seeds) are short-lived values not explicitly wiped. JavaScript gives no guarantee that the runtime has not copied a Buffer |
+| Could the application avoid plaintext master keys? | Possible without changing the stored format (D-032): master keys as non-extractable HSM objects and `C_Decrypt` per secret. Not implemented: needs vendor validation and does not stop an attacker who controls the process from using the HSM |

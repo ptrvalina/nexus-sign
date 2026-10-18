@@ -48,6 +48,8 @@ describe('HSM-wrapped master keys', { skip }, () => {
     const token = initToken(conf, 'nexus-main');
     generateKeyPair(conf, token, { label: 'nexus-evidence' });
     hsmEnv = {
+      // Accepted codes show that the offline key decrypts; v1 reads VERIFIED.
+      OFFLINE_CONFIRMATION_MODE: 'immediate',
       SOFTHSM2_CONF: conf, HSM_ADAPTER: 'pkcs11', PKCS11_MODULE_PATH: SOFTHSM_MODULE, PKCS11_PIN: '12345678',
       PKCS11_TOKEN_LABEL: 'nexus-main', PKCS11_EVIDENCE_KEY_LABEL: 'nexus-evidence', PKCS11_KEK_LABEL: 'nexus-master-kek',
       MASTER_KEY_SOURCE: 'hsm', NODE_ENV: 'development', ALLOW_INSECURE_DEVELOPMENT: 'true',
@@ -206,6 +208,23 @@ describe('HSM-wrapped master keys', { skip }, () => {
     const { code, log } = await startExpectingFailure(serverEnv(wrappedKeys(), { PKCS11_KEK_LABEL: 'encrypt-only-kek' }), { database });
     assert.notEqual(code, 0);
     assert.match(log, /does not allow decryption \(CKA_DECRYPT\)/);
+  });
+
+  test('a KEK imported from a known value (not generated in the HSM) is refused', async () => {
+    // Sensitive and not extractable now, but its value existed outside the HSM.
+    const script = `
+      const p11 = require('pkcs11js'); const p = new p11.PKCS11(); p.load(process.env.M); p.C_Initialize();
+      const slot = p.C_GetSlotList(true).find((s) => p.C_GetTokenInfo(s).label.trim() === 'nexus-main');
+      const s = p.C_OpenSession(slot, p11.CKF_SERIAL_SESSION | p11.CKF_RW_SESSION); p.C_Login(s, p11.CKU_USER, '12345678');
+      p.C_CreateObject(s, [
+        { type: p11.CKA_CLASS, value: p11.CKO_SECRET_KEY }, { type: p11.CKA_KEY_TYPE, value: p11.CKK_AES }, { type: p11.CKA_VALUE, value: Buffer.alloc(32, 7) },
+        { type: p11.CKA_TOKEN, value: true }, { type: p11.CKA_LABEL, value: 'imported-kek' }, { type: p11.CKA_SENSITIVE, value: true },
+        { type: p11.CKA_EXTRACTABLE, value: false }, { type: p11.CKA_ENCRYPT, value: true }, { type: p11.CKA_DECRYPT, value: true }]);
+      p.C_Finalize();`;
+    execFileSync(process.execPath, ['-e', script], { cwd: ROOT, env: { ...process.env, SOFTHSM2_CONF: conf, M: SOFTHSM_MODULE } });
+    const { code, log } = await startExpectingFailure(serverEnv(wrappedKeys(), { PKCS11_KEK_LABEL: 'imported-kek' }), { database });
+    assert.notEqual(code, 0);
+    assert.match(log, /must have been generated in the HSM and never been extractable/);
   });
 
   test('plaintext keys next to MASTER_KEY_SOURCE=hsm are refused', async () => {

@@ -155,8 +155,11 @@ export function setMasterKeysForTests(material: Map<MasterKeyPurpose, MasterKeyM
 /**
  * Opens the KEK named by PKCS11_KEK_LABEL on the token of PKCS11_TOKEN_LABEL
  * (or PKCS11_SLOT_INDEX), logged in with PKCS11_PIN. The KEK must be an
- * AES secret key with CKA_SENSITIVE true and CKA_EXTRACTABLE false; `need`
- * names the operation the caller will perform, and the key must allow it.
+ * AES secret key with CKA_SENSITIVE true and CKA_EXTRACTABLE false, and
+ * with CKA_NEVER_EXTRACTABLE and CKA_LOCAL true: generated in the HSM and never
+ * exportable, so no copy of its value can exist outside (an AES key imported
+ * from a known value would satisfy the first two checks). `need` names the
+ * operation the caller will perform, and the key must allow it.
  */
 export function openPkcs11Kek(need: 'decrypt' | 'encrypt' | 'both' = 'decrypt', labelOverride?: string): KeyEncryptionKey {
   if (!env.PKCS11_MODULE_PATH || !env.PKCS11_PIN) throw new MasterKeyError('MASTER_KEY_SOURCE=hsm needs PKCS11_MODULE_PATH and PKCS11_PIN');
@@ -195,6 +198,7 @@ export function openPkcs11Kek(need: 'decrypt' | 'encrypt' | 'both' = 'decrypt', 
   const attributes = p.C_GetAttributeValue(session, key, [
     { type: Pkcs11js.CKA_KEY_TYPE }, { type: Pkcs11js.CKA_SENSITIVE }, { type: Pkcs11js.CKA_EXTRACTABLE },
     { type: Pkcs11js.CKA_ENCRYPT }, { type: Pkcs11js.CKA_DECRYPT }, { type: Pkcs11js.CKA_VALUE_LEN },
+    { type: Pkcs11js.CKA_NEVER_EXTRACTABLE }, { type: Pkcs11js.CKA_LOCAL },
   ]);
   const flag = (i: number) => Buffer.isBuffer(attributes[i].value) && (attributes[i].value as Buffer)[0] === 1;
   // CK_ULONG: 8 bytes on 64-bit platforms, 4 on 32-bit ones, little-endian.
@@ -204,6 +208,7 @@ export function openPkcs11Kek(need: 'decrypt' | 'encrypt' | 'both' = 'decrypt', 
   if (keyType !== Pkcs11js.CKK_AES || length !== 32) fail(`KEK '${label}' must be an AES-256 key`);
   if (!flag(1)) fail(`KEK '${label}' must be sensitive (CKA_SENSITIVE)`);
   if (flag(2)) fail(`KEK '${label}' must not be extractable (CKA_EXTRACTABLE)`);
+  if (!flag(6) || !flag(7)) fail(`KEK '${label}' must have been generated in the HSM and never been extractable (CKA_LOCAL, CKA_NEVER_EXTRACTABLE)`);
   if ((need === 'decrypt' || need === 'both') && !flag(4)) fail(`KEK '${label}' does not allow decryption (CKA_DECRYPT): this process may not unwrap master keys`);
   if ((need === 'encrypt' || need === 'both') && !flag(3)) fail(`KEK '${label}' does not allow encryption (CKA_ENCRYPT): this process may not wrap master keys`);
 
