@@ -110,6 +110,35 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      * canonical bytes and submits the signature. Call from the main thread's
      * lifecycle scope of [activity].
      */
+    /**
+     * Opens an audio or video verification session for [authorization], when
+     * the bank's verification plan asks for one (ADR 0017). The signed bytes
+     * are verified first, so the terms shown during the call
+     * ([NexusSignedTransaction.confirmationText]) are the ones the operator
+     * sees and the device will sign. Auth Core binds the session to this
+     * authorization and this device's credential. At most three sessions per
+     * channel and authorization.
+     *
+     * Run the call with [callSignalling] and a media engine
+     * (nexus-sign-android-calls). The call never confirms the payment: after
+     * a VERIFIED decision, call [approve] as usual.
+     */
+    suspend fun openVerificationCall(authorization: NexusAuthorization, channel: VerificationChannel): VerificationSession {
+        val signed = authorization.signedTransaction()
+        requireNotExpired(signed)
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        if (signed.credentialId != state.registeredCredentialId()) {
+            throw NEXUSSignError.AuthorizationPayloadInvalid("wrong_device", "the authorization is for another device")
+        }
+        return CallWire.decodeSession(networkClient.openVerificationSession(authorization.authorizationId, channel), authorization.authorizationId)
+    }
+
+    /** Device-signed signalling of one verification session. */
+    fun callSignalling(session: VerificationSession): CallSignalling {
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        return DeviceCallSignalling(session.sessionId, networkClient)
+    }
+
     suspend fun approve(authorization: NexusAuthorization, activity: FragmentActivity): NEXUSVerificationOutcome {
         // Expiry, prompt text and the signed bytes all come from the one
         // verified canonical payload, never from the JSON convenience fields.

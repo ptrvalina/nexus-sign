@@ -310,8 +310,9 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
 
   router.post('/v1/mobile/verification-sessions/:sessionId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
     try {
-      const body = z.object({ type: z.string(), payload: z.unknown().optional() }).strict().parse(req.body);
-      res.status(201).json(await deviceSignal(sessionParam.parse(req.params.sessionId), await callDevice(req), body.type, body.payload ?? null));
+      const body = z.object({ type: z.string(), payload: z.unknown().optional(), messageId: z.string().uuid().optional() }).strict().parse(req.body);
+      const sent = await deviceSignal(sessionParam.parse(req.params.sessionId), await callDevice(req), body.type, body.payload ?? null, body.messageId);
+      res.status(sent.duplicate ? 200 : 201).json(sent);
     } catch (e) { next(e); }
   });
 

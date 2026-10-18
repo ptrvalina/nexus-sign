@@ -120,6 +120,39 @@ final class NetworkClient {
 
     // MARK: - Transport
 
+    // MARK: Verification calls (ADR 0017)
+
+    func openVerificationSession(authorizationID: String, channel: VerificationChannel) async throws -> [String: Any] {
+        try await sendJSON("POST", "/v1/mobile/authorizations/\(authorizationID)/verification-sessions", body: ["channel": channel.rawValue])
+    }
+
+    func joinCall(sessionID: String) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/verification-sessions/\(sessionID)/call")
+    }
+
+    func sendCallSignal(sessionID: String, body: [String: Any]) async throws {
+        _ = try await perform("POST", "/v1/mobile/verification-sessions/\(sessionID)/signals", body: body, token: .device)
+    }
+
+    func receiveCallSignals(sessionID: String, after: Int64, waitMilliseconds: Int) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/verification-sessions/\(sessionID)/signals?after=\(after)&waitMs=\(waitMilliseconds)")
+    }
+
+    func cancelCall(sessionID: String) async throws {
+        _ = try await perform("POST", "/v1/mobile/verification-sessions/\(sessionID)/cancel", body: [:], token: .device)
+    }
+
+    /// Longest long-poll wait that fits in the request timeout.
+    var callPollWaitMilliseconds: Int { max(0, min(15_000, Int(config.requestTimeout * 1000) - 2_000)) }
+
+    private func sendJSON(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
+        let data = try await perform(method, path, body: body, token: .device)
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw NEXUSSignError.serverError(statusCode: 200, message: "Unexpected response format")
+        }
+        return object
+    }
+
     private enum TokenSource {
         /// Signed by the enrolled device's authentication key.
         case device
@@ -149,7 +182,14 @@ final class NetworkClient {
         var attempt = 0
         while true {
             attempt += 1
-            let url = config.baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            // appendingPathComponent would percent-encode a "?", so the query
+            // (call signals: ?after=&waitMs=) is set separately.
+            let pathParts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+            var url = config.baseURL.appendingPathComponent(String(pathParts[0]).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            if pathParts.count == 2, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                components.percentEncodedQuery = String(pathParts[1])
+                url = components.url ?? url
+            }
             var request = URLRequest(url: url)
             request.httpMethod = method
             request.timeoutInterval = config.requestTimeout

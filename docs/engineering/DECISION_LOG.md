@@ -57,3 +57,31 @@ The system biometric prompt (iOS `LAContext` reason, Android `BiometricPrompt` d
 ## D-014 Certificate pinning is opt-in, with at least two pins (FI-006)
 
 Pinning protects enrolment and signed requests against a MITM holding a certificate from a trusted CA. A mandatory pin would lock out every app whose bank rotates its server key without shipping an update, so pins are a configuration of the bank app: SPKI SHA-256 in the OkHttp form on both platforms, at least two distinct pins (current and backup) when set, https only. Empty keeps the platform validation only. On iOS the system trust evaluation runs first, then the chain must contain a pinned key.
+
+## D-015 WebRTC binaries: development approval, pinned, release blockers recorded (ADR 0017)
+
+Owner decision of 2026-10-18: proceed with conditional integration of `io.github.webrtc-sdk:android` and `stasel/WebRTC` for development; no production approval. Pinned exactly: Android `150.7871.01` (newest milestone published), iOS `153.0.0` (newest release with a named source commit and checksum found; `155.0.0` exists). Evidence, licence findings and the open items TPM-1 to TPM-7 are in `THIRD_PARTY_MEDIA.md`; they are release blockers for gate G7. Both are isolated in optional modules (`android-sdk-calls`, `ios-sdk-calls`) so the core SDKs stay free of WebRTC.
+
+## D-016 Signalling rules enforced by Auth Core, atomically
+
+The relay previously accepted any signal type from either party. It now enforces, in one Redis script per message: offers only from the device and only when the previous offer is answered (one outstanding offer, which also makes ICE restart glare-free); answers only from the operator and only for an outstanding offer; candidates only after the sender's own description; nothing after the sender's bye. A client-chosen `messageId` makes a retried POST idempotent (200 with the original `seq`). Keys of a call share one Redis Cluster hash tag. HTTP replays are already refused by the device signature nonce and the admin session; the messageId only covers honest retries.
+
+## D-017 Closure is announced by the server
+
+A party should not keep a camera open on a session that has ended elsewhere (decision, cancel, expiry sweep, authorization confirmed or rejected, credential revoked). Every long poll checks the session at most every 2 s and relays one `bye` from `server` with the reason. This needs no hook in each code path that can close a session.
+
+## D-018 Operator hang-up closes the session
+
+Before, an operator who hung up left the session open and the customer waiting until expiry. `POST /admin/api/verification-calls/{id}/release` (claiming operator only) cancels the session like a customer cancel: nothing verified or failed, plan back to PENDING, audit `verification_session_cancelled` with `by: admin:<user>`, and the device receives `bye operator_left`. The customer may open a new session (attempt limit applies).
+
+## D-019 Call state machine in the core SDKs, media behind an interface
+
+The device-side rules (offer first, candidate buffering both ways, duplicate and stale messages ignored, ICE restart after a drop with a limit, endings mapped from bye reasons, local expiry, release exactly once, retries with the same messageId) are the same on both platforms and testable without WebRTC. They live in the core SDKs (`VerificationCallController`); libwebrtc is reached only through `CallMediaEngine`, implemented by the call modules with the native APIs. A JVM test runs the Kotlin controller against a real Auth Core with scripted media (`CallConformanceTest`); that proves protocol conformance, not media.
+
+## D-020 Only VP8 and VP9 are negotiated
+
+The WebRTC patent grant does not cover H.264/H.265. Both call modules wrap the default encoder and decoder factories so that only VP8 and VP9 are offered and accepted. This uses the long-standing factory interfaces rather than per-transceiver codec preferences, which are newer API.
+
+## D-021 Real kotlinx-serialization in the local Android JVM run
+
+The four SecurePushTest failures of the baseline came from the hand-written serialization stub. Gradle 8.14.3 ships kotlinx-serialization 1.6.2 (the SDK declares 1.6.3, same API); with it and the serialization compiler plugin from kotlinc, the SDK's JVM tests pass in full. Android APIs (Keystore, BiometricPrompt, OkHttp, WebRTC) remain stubs; this is still not an Android build.

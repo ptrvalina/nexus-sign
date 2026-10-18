@@ -139,7 +139,7 @@ async function pending() {
   for (const payment of [...payments].reverse()) {
     const current = await authCore('GET', `/v1/authorizations/${payment.authorizationId}`);
     if (current.status === 200 && current.json.state === 'PENDING_USER' && new Date(current.json.expiresAt) > new Date()) {
-      return { authorizationId: payment.authorizationId };
+      return { authorizationId: payment.authorizationId, call: payment.call ?? null };
     }
   }
   return {};
@@ -147,7 +147,16 @@ async function pending() {
 
 // --- Operator page ----------------------------------------------------------
 
-async function createPayment({ amount, currency, name, iban }) {
+// Verification calls (ADR 0017): the payment can require an AUDIO or VIDEO
+// call with a bank operator (admin console, Verification calls) before the
+// customer signs. Needs operator verification enabled for the bank:
+//   node dist/cli/verificationSetup.js operator local-bank AUDIO,VIDEO
+const CALL_POLICIES = {
+  VIDEO: { requireVideo: true, audioAvailable: false },
+  AUDIO: { requireAudio: true, videoAvailable: false },
+};
+
+async function createPayment({ amount, currency, name, iban, call }) {
   if (!customer.credentialId) throw new HttpError(409, 'Сначала зарегистрируйте телефон в демо-приложении.');
   const amountMinor = Math.round(Number(String(amount).replace(',', '.')) * 100);
   if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new HttpError(400, 'Сумма должна быть положительным числом.');
@@ -157,9 +166,10 @@ async function createPayment({ amount, currency, name, iban }) {
     nexusId: customer.nexusId, credentialId: customer.credentialId, transactionReference: reference,
     operationType: 'transfer', amountMinor: String(amountMinor), currency: String(currency).toUpperCase(), beneficiary,
     policyReference: 'TRANSFER-DEFAULT', policyVersion: '2026-09',
+    ...(CALL_POLICIES[call] ? { verificationPolicy: CALL_POLICIES[call] } : {}),
   }, { 'Idempotency-Key': randomUUID() });
   if (created.status !== 201) throw new HttpError(created.status, `Authorization not created: ${created.text}`);
-  payments.push({ authorizationId: created.json.authorizationId, reference, amountMinor, currency: String(currency).toUpperCase(), beneficiary, createdAt: new Date() });
+  payments.push({ authorizationId: created.json.authorizationId, reference, amountMinor, currency: String(currency).toUpperCase(), beneficiary, call: CALL_POLICIES[call] ? call : null, createdAt: new Date() });
   log(`payment ${reference} (${(amountMinor / 100).toFixed(2)} ${currency}) waiting for the customer`);
   return created.json;
 }
@@ -196,6 +206,7 @@ ${message ? `<p class="msg">${escape(message)}</p>` : ''}
 <label>Валюта <input name="currency" value="PLN" size="4"></label>
 <label>Получатель <input name="name" value="Jan Kowalski" size="22"></label>
 <label>IBAN <input name="iban" value="PL61109010140000071219812874" size="32"></label>
+<label>Проверка <select name="call"><option value="">только подпись</option><option value="VIDEO">видеозвонок с сотрудником</option><option value="AUDIO">аудиозвонок с сотрудником</option></select></label>
 <button type="submit">Отправить на подтверждение</button></fieldset></form>
 <table><tr><th>Создан</th><th>Референс</th><th>Сумма</th><th>Получатель</th><th>Статус</th></tr>
 ${rows.map((r) => `<tr><td>${r.createdAt.toLocaleTimeString('ru-RU')}</td><td><code>${escape(r.reference)}</code></td><td>${(r.amountMinor / 100).toFixed(2)} ${escape(r.currency)}</td><td>${escape(r.beneficiary.name)}<br><small>${escape(r.beneficiary.iban)}</small></td><td class="${r.state === 'VERIFIED' ? 'ok' : r.state === 'PENDING_USER' ? 'wait' : 'bad'}">${escape(stateLabel[r.state] ?? r.state)}${r.confirmationMethod ? `<br><small>${escape(r.confirmationMethod)}</small>` : ''}</td></tr>`).join('') || '<tr><td colspan="5">Платежей пока нет.</td></tr>'}

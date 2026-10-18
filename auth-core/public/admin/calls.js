@@ -47,8 +47,19 @@ async function loadCalls() {
   }
 }
 
-async function postSignal(sessionId, type, payload) {
-  await api(`/admin/api/verification-calls/${sessionId}/signals`, { method: 'POST', body: JSON.stringify({ type, payload }) });
+/** Each message carries its own ID, so a retry after a lost response is
+ * accepted once and not relayed twice. */
+async function postSignal(sessionId, type, payload, messageId = crypto.randomUUID()) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await api(`/admin/api/verification-calls/${sessionId}/signals`, { method: 'POST', body: JSON.stringify({ type, payload, messageId }) });
+      return;
+    } catch (error) {
+      // Retry only what may not have arrived; a refusal (4xx) is final.
+      if (attempt >= 2 || (error.status && error.status < 500)) throw error;
+      await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+    }
+  }
 }
 
 async function answer(sessionId) {
@@ -70,7 +81,11 @@ async function answer(sessionId) {
     if (call.current.answered) postSignal(sessionId, 'candidate', event.candidate.toJSON()).catch(reportError);
     else call.current.outgoing.push(event.candidate.toJSON());
   };
-  pc.onconnectionstatechange = () => { document.getElementById('call-state').textContent = pc.connectionState; };
+  pc.onconnectionstatechange = () => {
+    // A dropped connection is restored by the phone (ICE restart: a new
+    // offer, answered below); this side only shows the state.
+    document.getElementById('call-state').textContent = pc.connectionState === 'disconnected' ? 'reconnecting' : pc.connectionState;
+  };
 
   const t = claim.transaction;
   activeEl().style.display = 'block';
@@ -96,6 +111,7 @@ async function pollSignals() {
     call.current.after = next;
     for (const signal of signals) {
       if (signal.type === 'offer') {
+        // The first offer, or an ICE restart by the phone after a drop.
         await pc.setRemoteDescription({ type: 'offer', sdp: signal.payload.sdp });
         for (const candidate of call.current.incoming.splice(0)) await pc.addIceCandidate(candidate).catch(reportError);
         const answerDescription = await pc.createAnswer();
@@ -107,7 +123,8 @@ async function pollSignals() {
         if (pc.remoteDescription) await pc.addIceCandidate(signal.payload).catch(reportError);
         else call.current.incoming.push(signal.payload);
       } else if (signal.type === 'bye') {
-        document.getElementById('call-state').textContent = `the customer left (${signal.payload?.reason ?? 'bye'})`;
+        const reason = signal.payload?.reason ?? 'bye';
+        document.getElementById('call-state').textContent = signal.from === 'server' ? `call closed (${reason})` : `the customer left (${reason})`;
         endCall(false);
         return;
       }
@@ -146,6 +163,14 @@ function endCall(hideImmediately = true) {
 
 document.getElementById('call-verified-btn').addEventListener('click', () => decide('VERIFIED'));
 document.getElementById('call-failed-btn').addEventListener('click', () => decide('FAILED'));
-document.getElementById('call-hangup-btn').addEventListener('click', () => endCall());
+/** Hang up without a result: the session is closed so the customer is not
+ * left waiting; nothing is verified or failed. */
+async function hangUp() {
+  const sessionId = call.current?.sessionId;
+  endCall();
+  if (sessionId) await api(`/admin/api/verification-calls/${sessionId}/release`, { method: 'POST', body: '{}' }).catch(reportError);
+}
+
+document.getElementById('call-hangup-btn').addEventListener('click', () => hangUp());
 document.getElementById('calls-refresh-btn').addEventListener('click', () => loadCalls().catch(reportError));
 setInterval(() => { if (state.session && !call.current) loadCalls().catch(reportError); }, 5000);

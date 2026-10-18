@@ -671,10 +671,11 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalRequest' } } }
       responses:
-        '201': { description: Queued, content: { application/json: { schema: { type: object, properties: { seq: { type: integer } } } } } }
+        '201': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '200': { description: 'A message with this messageId was already accepted; nothing is relayed again', content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        '409': { description: 'Session closed, or the message breaks the signalling order (an offer while one is unanswered, a candidate before the offer, anything after bye)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '410': { $ref: '#/components/responses/Gone' }
     get:
       tags: [Mobile SDK]
@@ -957,11 +958,17 @@ components:
       properties:
         type: { type: string, enum: [offer, answer, candidate, bye] }
         payload: { description: '`{ sdp }` for offer and answer (at most 16 384 characters), an RTCIceCandidateInit for candidate (at most 2 048), `{ reason }` for bye' }
+        messageId: { type: string, format: uuid, description: 'Chosen by the sender; a retry with the same messageId is accepted once (200) and not relayed again' }
+    CallSignalAccepted:
+      type: object
+      properties:
+        seq: { type: integer }
+        duplicate: { type: boolean }
     CallSignal:
       type: object
       properties:
         seq: { type: integer }
-        from: { type: string, enum: [device, operator] }
+        from: { type: string, enum: [device, operator, server], description: '`server`: the session or authorization was closed (bye with the reason)' }
         type: { type: string, enum: [offer, answer, candidate, bye] }
         payload: {}
         at: { type: string, format: date-time }

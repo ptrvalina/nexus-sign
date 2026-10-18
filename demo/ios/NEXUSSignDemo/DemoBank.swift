@@ -1,4 +1,5 @@
 import Foundation
+import NEXUSSign
 
 /// The app's own backend: the demo bank (demo/bank-backend/demo-bank.mjs),
 /// reached at the same address as Auth Core through the demo bank's device
@@ -27,8 +28,11 @@ struct DemoBank {
         _ = try await request("POST", "app/registered", body: try JSONSerialization.data(withJSONObject: ["credentialId": credentialID]))
     }
 
-    func pendingAuthorizationID() async throws -> String? {
-        try await request("GET", "app/pending", body: nil)["authorizationId"] as? String
+    /// The payment to review, and the call the bank's policy asks for first (AUDIO, VIDEO or none).
+    func pending() async throws -> (authorizationID: String, call: VerificationChannel?)? {
+        let body = try await request("GET", "app/pending", body: nil)
+        guard let id = body["authorizationId"] as? String else { return nil }
+        return (id, (body["call"] as? String).flatMap(VerificationChannel.init(rawValue:)))
     }
 
     private func request(_ method: String, _ path: String, body: Data?) async throws -> [String: Any] {

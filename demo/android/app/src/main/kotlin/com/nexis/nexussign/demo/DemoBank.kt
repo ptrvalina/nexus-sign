@@ -27,8 +27,14 @@ class DemoBank(
         request("POST", "/app/registered", JSONObject().put("credentialId", credentialId).toString())
     }
 
-    suspend fun pendingAuthorizationId(): String? =
-        JSONObject(request("GET", "/app/pending", null)).optString("authorizationId").ifEmpty { null }
+    /** The payment to review, and the call the bank's policy asks for (AUDIO, VIDEO or none). */
+    class Pending(val authorizationId: String, val call: String?)
+
+    suspend fun pending(): Pending? {
+        val body = JSONObject(request("GET", "/app/pending", null))
+        val id = body.optString("authorizationId").ifEmpty { return null }
+        return Pending(id, body.optString("call").takeIf { it == "AUDIO" || it == "VIDEO" })
+    }
 
     private suspend fun request(method: String, path: String, body: String?): String = withContext(Dispatchers.IO) {
         val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {

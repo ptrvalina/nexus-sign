@@ -27,6 +27,7 @@ android {
 
 dependencies {
     implementation("com.nexis:nexus-sign-android")
+    implementation("com.nexis:nexus-sign-android-calls")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

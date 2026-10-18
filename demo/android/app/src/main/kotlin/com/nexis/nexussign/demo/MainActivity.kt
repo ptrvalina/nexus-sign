@@ -11,6 +11,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -20,6 +21,13 @@ import com.nexis.nexussign.NEXUSSignError
 import com.nexis.nexussign.NEXUSSignSDK
 import com.nexis.nexussign.NEXUSVerificationOutcome
 import com.nexis.nexussign.NexusAuthorization
+import com.nexis.nexussign.CallEndReason
+import com.nexis.nexussign.CallState
+import com.nexis.nexussign.VerificationChannel
+import com.nexis.nexussign.calls.CallPermissions
+import com.nexis.nexussign.calls.VerificationCallSession
+import com.nexis.nexussign.calls.VerificationCallView
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -44,11 +52,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var paymentCard: LinearLayout
     private lateinit var paymentText: TextView
     private lateinit var approveButton: Button
+    private lateinit var callButton: Button
     private lateinit var recoveryButton: Button
     private lateinit var statusView: TextView
 
     private var current: NexusAuthorization? = null
     private var busy = false
+    // The call the bank's policy asks for before signing (ADR 0017), and
+    // whether the operator has recorded VERIFIED for it.
+    private var requiredCall: VerificationChannel? = null
+    private var callVerified = false
+    private lateinit var mainUi: View
+    private val permissionRequest = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) startCall() else setStatus("Без доступа к микрофону (и камере для видео) звонок невозможен.")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,7 +80,8 @@ class MainActivity : AppCompatActivity() {
                 recoverySetupPromptText = "Подтвердите новую фразу восстановления",
             ),
         )
-        setContentView(buildUi())
+        mainUi = buildUi()
+        setContentView(mainUi)
         setStatus(
             if (sdk.isRegistered()) "Телефон зарегистрирован. Ожидаю платёж от банка…"
             else "Нажмите «Зарегистрировать телефон». Ключи будут созданы в аппаратном хранилище этого телефона.",
@@ -82,11 +100,16 @@ class MainActivity : AppCompatActivity() {
     /** Asks the demo bank whether a payment is waiting, and loads it through the SDK. */
     private suspend fun poll() {
         if (busy || current != null || !sdk.isRegistered()) return
-        val id = runCatching { bank.pendingAuthorizationId() }.getOrNull() ?: return
+        val pending = runCatching { bank.pending() }.getOrNull() ?: return
         try {
             // The SDK checks that every displayed field matches the exact bytes it will sign.
-            current = sdk.fetchAuthorization(id)
-            setStatus("Банк просит подтвердить платёж. Проверьте сумму и получателя.")
+            current = sdk.fetchAuthorization(pending.authorizationId)
+            requiredCall = pending.call?.let { VerificationChannel.valueOf(it) }
+            callVerified = false
+            setStatus(
+                if (requiredCall == null) "Банк просит подтвердить платёж. Проверьте сумму и получателя."
+                else "Банк просит сначала проверить платёж в звонке с сотрудником, затем подтвердить его биометрией.",
+            )
         } catch (e: Exception) {
             show(e)
         }
@@ -140,6 +163,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Asks for microphone (and camera) right before the call, then starts it. */
+    private fun requestCall() {
+        val channel = requiredCall ?: return
+        val missing = CallPermissions.missing(this, channel)
+        if (missing.isEmpty()) startCall() else permissionRequest.launch(missing.toTypedArray())
+    }
+
+    private fun startCall() {
+        val authorization = current ?: return
+        val channel = requiredCall ?: return
+        lifecycleScope.launch {
+            busy = true
+            render()
+            try {
+                val call = VerificationCallSession.open(sdk, this@MainActivity, authorization, channel)
+                val view = VerificationCallView(this@MainActivity)
+                // The terms on the call screen come from the signed bytes.
+                view.bind(this@MainActivity, call, authorization.signedTransaction().confirmationText())
+                setContentView(view)
+                call.start(this@MainActivity)
+                val ended = call.controller.state.first { it is CallState.Ended } as CallState.Ended
+                delay(1_500)
+                view.release()
+                setContentView(mainUi)
+                when (val reason = ended.reason) {
+                    is CallEndReason.Decided -> {
+                        callVerified = reason.verified
+                        setStatus(if (reason.verified) "Сотрудник подтвердил проверку. Теперь подтвердите платёж биометрией." else "Проверка в звонке не пройдена: банк отклонил платёж.")
+                    }
+                    CallEndReason.OperatorLeft, CallEndReason.CancelledByCustomer, CallEndReason.Expired, CallEndReason.ConnectionLost ->
+                        setStatus("Звонок завершён без результата. Можно позвонить ещё раз (до трёх попыток).")
+                    else -> setStatus("Звонок завершён: $reason")
+                }
+            } catch (e: Exception) {
+                setContentView(mainUi)
+                show(e)
+            } finally {
+                busy = false
+                render()
+            }
+        }
+    }
+
     private fun createRecoveryPhrase() {
         lifecycleScope.launch {
             busy = true
@@ -173,7 +239,11 @@ class MainActivity : AppCompatActivity() {
             "${transaction.formattedAmount()} ${transaction.currency}\n" +
             "${transaction.beneficiaryDisplay()}\n" +
             "Референс: ${transaction.transactionReference}"
-        approveButton.isEnabled = !busy
+        val callNeeded = requiredCall != null && !callVerified
+        callButton.visibility = if (requiredCall != null) View.VISIBLE else View.GONE
+        callButton.text = if (requiredCall == VerificationChannel.VIDEO) "Видеозвонок с сотрудником банка" else "Аудиозвонок с сотрудником банка"
+        callButton.isEnabled = !busy && callNeeded
+        approveButton.isEnabled = !busy && !callNeeded
         paymentCard.visibility = View.VISIBLE
     }
 
@@ -252,6 +322,11 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, pad / 2, 0, pad / 2)
         }
         paymentCard.addView(paymentText)
+        callButton = Button(this).apply {
+            visibility = View.GONE
+            setOnClickListener { requestCall() }
+        }
+        paymentCard.addView(callButton)
         approveButton = Button(this).apply {
             text = "Подтвердить биометрией"
             setOnClickListener { approve() }

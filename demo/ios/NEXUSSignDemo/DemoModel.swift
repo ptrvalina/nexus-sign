@@ -1,5 +1,6 @@
 import Foundation
 import NEXUSSign
+import NEXUSSignCalls
 
 /// Enrols this iPhone with Auth Core, shows the payment the demo bank sends
 /// and signs it. The SDK creates the keys in the Secure Enclave; signing asks
@@ -12,6 +13,10 @@ final class DemoModel: ObservableObject {
     @Published private(set) var registered = false
     @Published private(set) var busy = false
     @Published private(set) var payment: NexusSignedTransaction?
+    /// The call the bank asks for before signing (ADR 0017), and whether the operator recorded VERIFIED.
+    @Published private(set) var requiredCall: VerificationChannel?
+    @Published private(set) var callVerified = false
+    @Published var call: VerificationCallModel?
     @Published private(set) var status = "Введите адрес сервера (https://IP-компьютера:8443) и код сопряжения со страницы демо-банка, затем нажмите «Подключиться»."
 
     private static let addressKey = "serverAddress"
@@ -97,6 +102,41 @@ final class DemoModel: ObservableObject {
         }
     }
 
+    /// Asks for microphone (and camera) right before the call, opens the
+    /// session and shows the call screen; the terms come from the signed bytes.
+    func startCall() {
+        guard let sdk, let authorization, let channel = requiredCall, let payment else { return }
+        Task {
+            guard await CallPermissions.request(for: channel) else {
+                status = "Без доступа к микрофону (и камере для видео) звонок невозможен."
+                return
+            }
+            busy = true
+            do {
+                let session = try await sdk.openVerificationCall(authorization: authorization, channel: channel)
+                let model = try VerificationCallModel(sdk: sdk, session: session, terms: payment.confirmationText)
+                call = model
+                model.start()
+                while !model.state.isEnded { try? await Task.sleep(nanoseconds: 200_000_000) }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                call = nil
+                switch model.state {
+                case .ended(.decided(let verified)):
+                    callVerified = verified
+                    status = verified ? "Сотрудник подтвердил проверку. Теперь подтвердите платёж Face ID / Touch ID." : "Проверка в звонке не пройдена: банк отклонил платёж."
+                case .ended(let reason):
+                    status = "Звонок завершён без результата (\(reason)). Можно позвонить ещё раз (до трёх попыток)."
+                default:
+                    break
+                }
+            } catch {
+                call = nil
+                show(error)
+            }
+            busy = false
+        }
+    }
+
     func createRecoveryPhrase() {
         guard let sdk else { return }
         Task {
@@ -126,12 +166,16 @@ final class DemoModel: ObservableObject {
     /// which checks every displayed field against the exact bytes it will sign.
     private func poll() async {
         guard let sdk, let bank, !busy, authorization == nil, registered else { return }
-        guard let id = try? await bank.pendingAuthorizationID() else { return }
+        guard let pending = try? await bank.pending() else { return }
         do {
-            let loaded = try await sdk.fetchAuthorization(authorizationID: id)
+            let loaded = try await sdk.fetchAuthorization(authorizationID: pending.authorizationID)
             authorization = loaded
             payment = try loaded.signedTransaction()
-            status = "Банк просит подтвердить платёж. Проверьте сумму и получателя."
+            requiredCall = pending.call
+            callVerified = false
+            status = pending.call == nil
+                ? "Банк просит подтвердить платёж. Проверьте сумму и получателя."
+                : "Банк просит сначала проверить платёж в звонке с сотрудником, затем подтвердить его Face ID / Touch ID."
         } catch {
             show(error)
         }

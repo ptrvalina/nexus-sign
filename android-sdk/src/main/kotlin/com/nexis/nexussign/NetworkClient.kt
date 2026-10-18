@@ -156,6 +156,37 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
         return decode(send("/v1/recovery/sessions/${session.sessionId}/complete", body, TokenSource.Fixed(session.accessToken)))
     }
 
+    // --- Verification calls (ADR 0017) ---
+
+    suspend fun openVerificationSession(authorizationId: String, channel: VerificationChannel): JsonObject {
+        val body = buildJsonObject { put("channel", channel.name) }
+        return parseObject(send("/v1/mobile/authorizations/$authorizationId/verification-sessions", body, TokenSource.Device))
+    }
+
+    suspend fun joinCall(sessionId: String): JsonObject =
+        parseObject(send("/v1/mobile/verification-sessions/$sessionId/call", null, TokenSource.Device))
+
+    suspend fun sendCallSignal(sessionId: String, body: JsonObject) {
+        send("/v1/mobile/verification-sessions/$sessionId/signals", body, TokenSource.Device)
+    }
+
+    suspend fun receiveCallSignals(sessionId: String, after: Long, waitMillis: Long): JsonObject =
+        parseObject(send("/v1/mobile/verification-sessions/$sessionId/signals?after=$after&waitMs=$waitMillis", null, TokenSource.Device))
+
+    suspend fun cancelCall(sessionId: String) {
+        send("/v1/mobile/verification-sessions/$sessionId/cancel", JsonObject(emptyMap()), TokenSource.Device) // 204
+    }
+
+    /** Longest long-poll wait that still fits in the request timeout. */
+    val callPollWaitMillis: Long get() = (config.requestTimeoutMillis - 2_000).coerceIn(0, 15_000)
+
+    private fun parseObject(reply: Reply): JsonObject =
+        try {
+            json.parseToJsonElement(reply.body) as JsonObject
+        } catch (e: Exception) {
+            throw NEXUSSignError.ServerError(reply.code, "Unexpected response format")
+        }
+
     private inline fun <reified T> decode(reply: Reply): T =
         try {
             json.decodeFromString<T>(reply.body)

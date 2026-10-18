@@ -21,8 +21,25 @@ import type { OperatorIdentity } from './adaptiveVerificationService';
  *             session (password + TOTP login, role operator or higher).
  *
  * Signals live in Redis only for the life of the session.
+ *
+ * Signalling rules, enforced atomically in Redis (signal state machine):
+ *   - only the device sends offers, only the operator answers; the device
+ *     may send a new offer (ICE restart) only once its previous offer has
+ *     been answered, so there is never more than one outstanding offer;
+ *   - candidates follow the sender's own description (device: an offer,
+ *     operator: an answer);
+ *   - after a party's bye it sends nothing more;
+ *   - a message may carry a client-chosen messageId; a repeated messageId
+ *     (a retry after a lost response) returns the original seq and is not
+ *     relayed twice. Replayed HTTP requests are refused before this point by
+ *     the device request signature (one-time nonce) and the admin session.
+ * When the session or its authorization is closed by anything (decision,
+ * cancel, expiry, confirmation, credential revocation), the next read
+ * relays one `bye` from `server` with the reason, so both parties end the
+ * call even if the other side is gone.
  */
 export type CallRole = 'device' | 'operator';
+export type SignalSender = CallRole | 'server';
 export const SIGNAL_TYPES = ['offer', 'answer', 'candidate', 'bye'] as const;
 export type SignalType = typeof SIGNAL_TYPES[number];
 
@@ -32,37 +49,53 @@ const MAX_SIGNALS_PER_DIRECTION = 400;
 const MAX_WAIT_MS = 20_000;
 const POLL_STEP_MS = 250;
 
-export interface Signal { seq: number; from: CallRole; type: SignalType; payload: unknown; at: string }
+export interface Signal { seq: number; from: SignalSender; type: SignalType; payload: unknown; at: string }
 
 export interface IceServer { urls: string[]; username?: string; credential?: string }
 
 interface CallRow {
   session_id: string; authorization_id: string; client_id: string; nexus_id: string; channel: string; status: string;
-  expires_at: Date; credential_id: string | null; auth_state: string; auth_expires_at: Date;
+  expires_at: Date; credential_id: string | null; auth_state: string; auth_expires_at: Date; credential_state: string | null;
 }
 
+// One hash tag per call: the keys of a call are in one Redis Cluster slot,
+// as the append script needs.
 const keys = (sessionId: string) => ({
-  seq: `vcall:${sessionId}:seq`,
-  operator: `vcall:${sessionId}:operator`,
-  inbox: (role: CallRole) => `vcall:${sessionId}:to:${role}`,
+  seq: `vcall:{${sessionId}}:seq`,
+  operator: `vcall:{${sessionId}}:operator`,
+  state: `vcall:{${sessionId}}:state`,
+  inbox: (role: CallRole) => `vcall:{${sessionId}}:to:${role}`,
 });
 
 async function loadCall(sessionId: string): Promise<CallRow> {
   const result = await pool.query<CallRow>(
     `SELECT s.session_id, s.authorization_id, s.client_id, s.nexus_id, s.channel, s.status, s.expires_at,
-            a.credential_id, a.state AS auth_state, a.expires_at AS auth_expires_at
+            a.credential_id, a.state AS auth_state, a.expires_at AS auth_expires_at, c.state AS credential_state
      FROM verification_sessions s JOIN authorization_requests a ON a.authorization_id = s.authorization_id
+     LEFT JOIN credentials c ON c.credential_id = a.credential_id
      WHERE s.session_id = $1`, [sessionId]);
   const row = result.rows[0];
   if (!row || (row.channel !== 'AUDIO' && row.channel !== 'VIDEO')) throw new NotFoundError('Verification session not found');
   return row;
 }
 
+/** Why the call can no longer go on, or null while it is open. */
+function closedReason(row: CallRow, now = Date.now()): string | null {
+  if (row.status !== 'IN_PROGRESS') return `session_${row.status.toLowerCase()}`;
+  if (now >= row.expires_at.getTime()) return 'session_expired';
+  if (row.auth_state !== 'PENDING_USER' || now >= row.auth_expires_at.getTime()) return 'authorization_closed';
+  if (row.credential_state !== 'ACTIVE') return 'credential_revoked';
+  return null;
+}
+
 function assertOpen(row: CallRow): void {
+  const reason = closedReason(row);
+  if (reason === null) return;
+  // As before: a closed session is 409, an open one past its time 410.
   if (row.status !== 'IN_PROGRESS') throw new ConflictError(`Verification session is ${row.status}`);
-  const now = Date.now();
-  if (now >= row.expires_at.getTime()) throw new GoneError('Verification session expired');
-  if (row.auth_state !== 'PENDING_USER' || now >= row.auth_expires_at.getTime()) throw new ConflictError('Authorization is no longer pending');
+  if (reason === 'session_expired') throw new GoneError('Verification session expired');
+  if (reason === 'credential_revoked') throw new ConflictError('The device credential is revoked');
+  throw new ConflictError('Authorization is no longer pending');
 }
 
 /** Milliseconds the call keys live: until the session expires, plus a minute
@@ -182,22 +215,94 @@ function validateSignal(type: string, payload: unknown): SignalType {
   return type as SignalType;
 }
 
-async function append(row: CallRow, from: CallRole, type: SignalType, payload: unknown): Promise<number> {
+/**
+ * Appends one signal atomically, applying the signalling rules above.
+ * KEYS: seq, state, inbox of the recipient(s): to:device, to:operator
+ * ARGV: from, type, messageId ('' if none), signal JSON without seq, ttl ms, max per inbox
+ * Returns {seq, duplicate} or an error code string.
+ */
+const APPEND_SCRIPT = `
+local from, kind, mid, body, ttl, max = ARGV[1], ARGV[2], ARGV[3], ARGV[4], tonumber(ARGV[5]), tonumber(ARGV[6])
+if mid ~= '' then
+  local seen = redis.call('HGET', KEYS[2], 'id:' .. from .. ':' .. mid)
+  if seen then return {tonumber(seen), 1} end
+end
+if redis.call('HGET', KEYS[2], 'bye:' .. from) then return 'ERR_CLOSED' end
+local offers = tonumber(redis.call('HGET', KEYS[2], 'offers') or '0')
+local answers = tonumber(redis.call('HGET', KEYS[2], 'answers') or '0')
+if from == 'device' then
+  if kind == 'answer' then return 'ERR_ROLE' end
+  if kind == 'offer' and offers > answers then return 'ERR_OFFER_PENDING' end
+  if kind == 'candidate' and offers == 0 then return 'ERR_NO_DESCRIPTION' end
+elseif from == 'operator' then
+  if kind == 'offer' then return 'ERR_ROLE' end
+  if kind == 'answer' and answers >= offers then return 'ERR_NO_OFFER' end
+  if kind == 'candidate' and answers == 0 then return 'ERR_NO_DESCRIPTION' end
+elseif kind ~= 'bye' then
+  return 'ERR_ROLE'
+end
+local targets = {}
+if from ~= 'device' then table.insert(targets, KEYS[3]) end
+if from ~= 'operator' then table.insert(targets, KEYS[4]) end
+for _, inbox in ipairs(targets) do
+  if redis.call('LLEN', inbox) >= max then return 'ERR_LIMIT' end
+end
+local seq = redis.call('INCR', KEYS[1])
+local signal = '{"seq":' .. seq .. ',' .. string.sub(body, 2)
+for _, inbox in ipairs(targets) do
+  redis.call('RPUSH', inbox, signal)
+  redis.call('PEXPIRE', inbox, ttl)
+end
+if kind == 'offer' then redis.call('HINCRBY', KEYS[2], 'offers', 1) end
+if kind == 'answer' then redis.call('HINCRBY', KEYS[2], 'answers', 1) end
+if kind == 'bye' then redis.call('HSET', KEYS[2], 'bye:' .. from, seq) end
+if mid ~= '' then redis.call('HSET', KEYS[2], 'id:' .. from .. ':' .. mid, seq) end
+redis.call('PEXPIRE', KEYS[1], ttl)
+redis.call('PEXPIRE', KEYS[2], ttl)
+return {seq, 0}
+`;
+
+const APPEND_ERRORS: Record<string, () => Error> = {
+  ERR_CLOSED: () => new ConflictError('This party has left the call'),
+  ERR_ROLE: () => new ValidationError('This party may not send this signal type'),
+  ERR_OFFER_PENDING: () => new ConflictError('The previous offer has not been answered yet'),
+  ERR_NO_OFFER: () => new ConflictError('There is no offer to answer'),
+  ERR_NO_DESCRIPTION: () => new ConflictError('Send the session description before candidates'),
+  ERR_LIMIT: () => new ConflictError('Too many signalling messages for this call'),
+};
+
+async function append(row: CallRow, from: SignalSender, type: SignalType, payload: unknown, messageId?: string): Promise<{ seq: number; duplicate: boolean }> {
   const k = keys(row.session_id);
-  const to: CallRole = from === 'device' ? 'operator' : 'device';
-  if ((await redis.llen(k.inbox(to))) >= MAX_SIGNALS_PER_DIRECTION) throw new ConflictError('Too many signalling messages for this call');
-  const seq = await redis.incr(k.seq);
-  const ttl = keyLifetimeMs(row);
-  const signal: Signal = { seq, from, type, payload, at: new Date().toISOString() };
-  await redis.multi().rpush(k.inbox(to), JSON.stringify(signal)).pexpire(k.inbox(to), ttl).pexpire(k.seq, ttl).exec();
-  return seq;
+  const body = JSON.stringify({ from, type, payload, at: new Date().toISOString() });
+  const result = await redis.eval(APPEND_SCRIPT, 4, k.seq, k.state, k.inbox('device'), k.inbox('operator'),
+    from, type, messageId ?? '', body, String(keyLifetimeMs(row)), String(MAX_SIGNALS_PER_DIRECTION)) as [number, number] | string;
+  if (typeof result === 'string') throw (APPEND_ERRORS[result] ?? (() => new ConflictError(result)))();
+  return { seq: Number(result[0]), duplicate: Number(result[1]) === 1 };
 }
 
+/** Relays one bye from `server` when the session or authorization has been
+ * closed, at most once per call. */
+async function relayClosure(sessionId: string): Promise<void> {
+  const row = await loadCall(sessionId);
+  const reason = closedReason(row);
+  if (reason === null) return;
+  if ((await redis.hsetnx(keys(sessionId).state, 'closed', reason)) !== 1) return;
+  await append(row, 'server', 'bye', { reason }).catch(() => undefined);
+}
+
+const CLOSURE_CHECK_MS = 2_000;
+
 /** Reads signals addressed to `role` with seq > after, waiting up to waitMs
- * for the first one (long poll). */
+ * for the first one (long poll). Checks every few seconds whether the call
+ * has been closed elsewhere, and relays that as a bye. */
 async function read(sessionId: string, role: CallRole, after: number, waitMs: number): Promise<{ signals: Signal[]; next: number }> {
   const deadline = Date.now() + Math.min(Math.max(waitMs, 0), MAX_WAIT_MS);
+  let nextClosureCheck = 0;
   for (;;) {
+    if (Date.now() >= nextClosureCheck) {
+      await relayClosure(sessionId);
+      nextClosureCheck = Date.now() + CLOSURE_CHECK_MS;
+    }
     const raw = await redis.lrange(keys(sessionId).inbox(role), 0, -1);
     const signals = raw.map((s) => JSON.parse(s) as Signal).filter((s) => s.seq > after);
     if (signals.length > 0 || Date.now() >= deadline) return { signals, next: signals.at(-1)?.seq ?? after };
@@ -205,10 +310,10 @@ async function read(sessionId: string, role: CallRole, after: number, waitMs: nu
   }
 }
 
-export async function deviceSignal(sessionId: string, device: DeviceContextForCall, type: string, payload: unknown): Promise<{ seq: number }> {
+export async function deviceSignal(sessionId: string, device: DeviceContextForCall, type: string, payload: unknown, messageId?: string): Promise<{ seq: number; duplicate: boolean }> {
   const row = await deviceCall(sessionId, device);
   assertOpen(row);
-  return { seq: await append(row, 'device', validateSignal(type, payload), payload) };
+  return append(row, 'device', validateSignal(type, payload), payload, messageId);
 }
 
 export async function deviceSignals(sessionId: string, device: DeviceContextForCall, after: number, waitMs: number): Promise<{ signals: Signal[]; next: number }> {
@@ -216,11 +321,11 @@ export async function deviceSignals(sessionId: string, device: DeviceContextForC
   return read(sessionId, 'device', after, waitMs);
 }
 
-export async function operatorSignal(sessionId: string, operator: OperatorIdentity, type: string, payload: unknown): Promise<{ seq: number }> {
+export async function operatorSignal(sessionId: string, operator: OperatorIdentity, type: string, payload: unknown, messageId?: string): Promise<{ seq: number; duplicate: boolean }> {
   await assertClaimedBy(sessionId, operator);
   const row = await loadCall(sessionId);
   assertOpen(row);
-  return { seq: await append(row, 'operator', validateSignal(type, payload), payload) };
+  return append(row, 'operator', validateSignal(type, payload), payload, messageId);
 }
 
 export async function operatorSignals(sessionId: string, operator: OperatorIdentity, after: number, waitMs: number): Promise<{ signals: Signal[]; next: number }> {
@@ -236,6 +341,24 @@ export async function operatorSignals(sessionId: string, operator: OperatorIdent
  */
 export async function deviceCancel(sessionId: string, device: DeviceContextForCall): Promise<void> {
   const row = await deviceCall(sessionId, device);
+  await cancelSession(row, 'device');
+  await sendBye(sessionId, 'device', 'cancelled');
+}
+
+/**
+ * The operator who holds the call leaves without a result (hang up). Like a
+ * customer's cancel, nothing is verified or failed; the session is closed so
+ * the customer is not left waiting, and the customer may open a new one.
+ */
+export async function operatorRelease(sessionId: string, operator: OperatorIdentity): Promise<void> {
+  await assertClaimedBy(sessionId, operator);
+  const row = await loadCall(sessionId);
+  await cancelSession(row, `admin:${operator.username}`);
+  await sendBye(sessionId, 'operator', 'operator_left');
+}
+
+async function cancelSession(row: CallRow, by: string): Promise<void> {
+  const sessionId = row.session_id;
   await withTransaction(async (tx) => {
     const plan = await tx.query(`SELECT 1 FROM authorization_verification_plans WHERE authorization_id = $1 FOR UPDATE`, [row.authorization_id]);
     if (!plan.rows[0]) throw new NotFoundError('Verification plan not found');
@@ -243,13 +366,15 @@ export async function deviceCancel(sessionId: string, device: DeviceContextForCa
     if (cancelled.rowCount !== 1) throw new ConflictError(`Verification session is ${row.status}`);
     await tx.query(`UPDATE authorization_verification_plans SET status = 'PENDING', updated_at = now() WHERE authorization_id = $1 AND status = 'IN_PROGRESS'`, [row.authorization_id]);
     await recordAuditEvent('verification_session_cancelled', { nexusId: row.nexus_id, clientId: row.client_id },
-      { sessionId, authorizationId: row.authorization_id, channel: row.channel, by: 'device' }, tx);
+      { sessionId, authorizationId: row.authorization_id, channel: row.channel, by }, tx);
   });
-  await sendBye(sessionId, 'device', 'cancelled');
 }
 
 /** Tells the other party the call is over (after a decision or a cancel). */
 export async function sendBye(sessionId: string, from: CallRole, reason: string): Promise<void> {
   const row = await loadCall(sessionId);
-  await append(row, from, 'bye', { reason });
+  await append(row, from, 'bye', { reason }).catch((error: unknown) => {
+    // The party already said bye (for example a cancel after hanging up).
+    if (!(error instanceof ConflictError)) throw error;
+  });
 }

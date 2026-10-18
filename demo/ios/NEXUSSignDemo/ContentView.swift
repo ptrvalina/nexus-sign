@@ -1,4 +1,5 @@
 import SwiftUI
+import NEXUSSignCalls
 
 struct ContentView: View {
     @StateObject private var model = DemoModel()
@@ -29,8 +30,12 @@ struct ContentView: View {
                         Text("\(payment.formattedAmount) \(payment.currency)").font(.title2.bold())
                         Text(payment.beneficiaryDisplay)
                         Text("Референс: \(payment.transactionReference)").font(.footnote)
+                        if let channel = model.requiredCall {
+                            Button(channel == .video ? "Видеозвонок с сотрудником банка" : "Аудиозвонок с сотрудником банка") { model.startCall() }
+                                .disabled(model.busy || model.callVerified)
+                        }
                         Button("Подтвердить Face ID / Touch ID") { model.approve() }
-                            .disabled(model.busy)
+                            .disabled(model.busy || (model.requiredCall != nil && !model.callVerified))
                     }
                 }
                 Section {
@@ -44,5 +49,8 @@ struct ContentView: View {
             .navigationTitle("NEXUS-SIGN · демо")
         }
         .navigationViewStyle(.stack)
+        .fullScreenCover(isPresented: Binding(get: { model.call != nil }, set: { if !$0 { model.call = nil } })) {
+            if let call = model.call { VerificationCallView(model: call) }
+        }
     }
 }

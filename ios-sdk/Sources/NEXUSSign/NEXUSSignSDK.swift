@@ -83,6 +83,33 @@ public final class NEXUSSignSDK {
 
     /// Asks for biometric confirmation showing the signed transaction, signs
     /// the canonical bytes and submits the signature.
+    /// Opens an audio or video verification session for `authorization` when
+    /// the bank's verification plan asks for one (ADR 0017). The signed bytes
+    /// are verified first, so the terms shown during the call
+    /// (`signedTransaction().confirmationText`) are those the operator sees
+    /// and the device will sign. Auth Core binds the session to this
+    /// authorization and this device. At most three sessions per channel.
+    ///
+    /// Run the call with `callSignalling(for:)` and a media engine
+    /// (NEXUSSignCalls). The call never confirms the payment: after a
+    /// VERIFIED decision, call `approve(authorization:)` as usual.
+    public func openVerificationCall(authorization: NexusAuthorization, channel: VerificationChannel) async throws -> VerificationSession {
+        let signed = try authorization.signedTransaction()
+        guard let expiry = signed.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
+        guard let credentialID = keyManager.effectiveCredentialID else { throw NEXUSSignError.notRegistered }
+        guard signed.credentialId == credentialID else {
+            throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "the authorization is for another device")
+        }
+        let body = try await networkClient.openVerificationSession(authorizationID: authorization.authorizationId, channel: channel)
+        return try CallWire.decodeSession(body, authorizationID: authorization.authorizationId)
+    }
+
+    /// Device-signed signalling of one verification session.
+    public func callSignalling(for session: VerificationSession) throws -> CallSignalling {
+        guard keyManager.effectiveCredentialID != nil else { throw NEXUSSignError.notRegistered }
+        return DeviceCallSignalling(sessionID: session.sessionID, network: networkClient)
+    }
+
     public func approve(authorization: NexusAuthorization) async throws -> NEXUSVerificationOutcome {
         // Expiry, prompt text and the signed bytes all come from the one
         // verified canonical payload, never from the JSON convenience fields.

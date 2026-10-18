@@ -12,6 +12,7 @@
 		B1D000000000000000000005 /* DemoModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000006 /* DemoModel.swift */; };
 		B1D000000000000000000007 /* DemoBank.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000008 /* DemoBank.swift */; };
 		B1D000000000000000000009 /* NEXUSSign in Frameworks */ = {isa = PBXBuildFile; productRef = B1D00000000000000000000A /* NEXUSSign */; };
+		B1D00000000000000000001B /* NEXUSSignCalls in Frameworks */ = {isa = PBXBuildFile; productRef = B1D00000000000000000001C /* NEXUSSignCalls */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B1D000000000000000000009 /* NEXUSSign in Frameworks */,
+				B1D00000000000000000001B /* NEXUSSignCalls in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -79,6 +81,7 @@
 			name = NEXUSSignDemo;
 			packageProductDependencies = (
 				B1D00000000000000000000A /* NEXUSSign */,
+				B1D00000000000000000001C /* NEXUSSignCalls */,
 			);
 			productName = NEXUSSignDemo;
 			productReference = B1D00000000000000000000B /* NEXUSSignDemo.app */;
@@ -110,6 +113,7 @@
 			mainGroup = B1D00000000000000000000D;
 			packageReferences = (
 				B1D000000000000000000016 /* XCLocalSwiftPackageReference "../../ios-sdk" */,
+				B1D00000000000000000001D /* XCLocalSwiftPackageReference "../../ios-sdk-calls" */,
 			);
 			productRefGroup = B1D00000000000000000000F /* Products */;
 			projectDirPath = "";
@@ -190,7 +194,9 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "NEXUS-SIGN Demo";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Камера нужна для видеозвонка с сотрудником банка при проверке платежа. Звонок не записывается.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID подтверждает платежи ключом в Secure Enclave.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для звонка с сотрудником банка при проверке платежа. Звонок не записывается.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
@@ -214,7 +220,9 @@
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "NEXUS-SIGN Demo";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Камера нужна для видеозвонка с сотрудником банка при проверке платежа. Звонок не записывается.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID подтверждает платежи ключом в Secure Enclave.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Микрофон нужен для звонка с сотрудником банка при проверке платежа. Звонок не записывается.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
@@ -258,12 +266,20 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../../ios-sdk";
 		};
+		B1D00000000000000000001D /* XCLocalSwiftPackageReference "../../ios-sdk-calls" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../ios-sdk-calls";
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		B1D00000000000000000000A /* NEXUSSign */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NEXUSSign;
+		};
+		B1D00000000000000000001C /* NEXUSSignCalls */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NEXUSSignCalls;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

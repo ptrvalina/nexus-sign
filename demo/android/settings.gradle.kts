@@ -25,3 +25,9 @@ includeBuild("../../android-sdk") {
         substitute(module("com.nexis:nexus-sign-android")).using(project(":"))
     }
 }
+
+includeBuild("../../android-sdk-calls") {
+    dependencySubstitution {
+        substitute(module("com.nexis:nexus-sign-android-calls")).using(project(":"))
+    }
+}

@@ -6,7 +6,8 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { skipWithoutServices, startAuthCore } from './support/harness.mjs';
-import { adminSession, bankSession, call, deviceSignature, submitSignature } from './support/actors.mjs';
+import { randomUUID } from 'node:crypto';
+import { adminSession, bankSession, call, deviceHeaders, deviceSignature, submitSignature } from './support/actors.mjs';
 
 const TURN_SECRET = 'turn-shared-secret-for-tests';
 
@@ -33,9 +34,9 @@ describe('verification calls', { skip: skipWithoutServices }, () => {
   });
   after(async () => { await server?.stop(); });
 
-  async function openCall(channel = 'VIDEO') {
-    const auth = await bank.createAuthorization(device, { verificationPolicy: channel === 'VIDEO' ? { requireVideo: true, audioAvailable: false } : { requireAudio: true } });
-    const session = await call(server.baseUrl, 'POST', `/v1/mobile/authorizations/${auth.authorizationId}/verification-sessions`, { device, body: { channel } });
+  async function openCall(channel = 'VIDEO', who = device) {
+    const auth = await bank.createAuthorization(who, { verificationPolicy: channel === 'VIDEO' ? { requireVideo: true, audioAvailable: false } : { requireAudio: true } });
+    const session = await call(server.baseUrl, 'POST', `/v1/mobile/authorizations/${auth.authorizationId}/verification-sessions`, { device: who, body: { channel } });
     assert.equal(session.status, 201, session.text);
     return { auth, sessionId: session.json.sessionId };
   }
@@ -106,7 +107,8 @@ describe('verification calls', { skip: skipWithoutServices }, () => {
     assert.equal(decided.status, 200, decided.text);
     assert.equal(decided.json.status, 'VERIFIED');
     const bye = await deviceCall('GET', `${sessionId}/signals?after=0`);
-    assert.deepEqual(bye.json.signals.map((s) => [s.type, s.payload.reason]), [['bye', 'decided:VERIFIED']]);
+    assert.deepEqual([bye.json.signals[0].from, bye.json.signals[0].type, bye.json.signals[0].payload.reason], ['operator', 'bye', 'decided:VERIFIED']);
+    assert.ok(bye.json.signals.slice(1).every((s) => s.from === 'server' && s.type === 'bye'), 'at most a closure notice follows');
     assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' } })).status, 409, 'closed call');
 
     const state = await bank.call('GET', `/v1/authorizations/${auth.authorizationId}`);
@@ -160,5 +162,100 @@ describe('verification calls', { skip: skipWithoutServices }, () => {
     assert.equal((await server.db.query(`SELECT status FROM verification_sessions WHERE session_id = $1`, [sessionId])).rows[0].status, 'EXPIRED');
     assert.equal((await bank.call('GET', `/v1/authorizations/${auth.authorizationId}/verification-plan`)).json.status, 'PENDING');
     assert.equal((await deviceCall('GET', `${sessionId}/call`)).status, 409);
+  });
+
+  test('signalling order: offers from the device only, answers from the operator only, candidates after the description', async () => {
+    const { sessionId } = await openCall();
+    await op(operator, 'POST', `/${sessionId}/claim`, {});
+    const cand = { candidate: 'candidate:1 1 udp 1 10.0.0.1 9 typ host', sdpMid: '0' };
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'answer', payload: { sdp: 'v=0' } })).status, 400, 'the device never answers');
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'candidate', payload: cand })).status, 409, 'no candidate before the offer');
+    assert.equal((await op(operator, 'POST', `/${sessionId}/signals`, { type: 'answer', payload: { sdp: 'v=0' } })).status, 409, 'no answer without an offer');
+    assert.equal((await op(operator, 'POST', `/${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' } })).status, 400, 'the operator never offers');
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0 1' } })).status, 201);
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0 2' } })).status, 409, 'one outstanding offer at a time');
+    assert.equal((await op(operator, 'POST', `/${sessionId}/signals`, { type: 'candidate', payload: cand })).status, 409, 'operator candidates follow the answer');
+    assert.equal((await op(operator, 'POST', `/${sessionId}/signals`, { type: 'answer', payload: { sdp: 'v=0 a1' } })).status, 201);
+    assert.equal((await op(operator, 'POST', `/${sessionId}/signals`, { type: 'answer', payload: { sdp: 'v=0 a2' } })).status, 409, 'one answer per offer');
+    // ICE restart after a drop: a new offer once the previous one is answered.
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0 restart' } })).status, 201);
+    assert.equal((await op(operator, 'POST', `/${sessionId}/signals`, { type: 'answer', payload: { sdp: 'v=0 a-restart' } })).status, 201);
+    const atOperator = await op(operator, 'GET', `/${sessionId}/signals?after=0`);
+    assert.deepEqual(atOperator.json.signals.map((x) => x.payload.sdp), ['v=0 1', 'v=0 restart']);
+    // After its bye a party sends nothing more.
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'bye', payload: { reason: 'hangup' } })).status, 201);
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'candidate', payload: cand })).status, 409);
+  });
+
+  test('a retried message (same messageId) is accepted once and relayed once', async () => {
+    const { sessionId } = await openCall();
+    await op(operator, 'POST', `/${sessionId}/claim`, {});
+    const messageId = randomUUID();
+    const first = await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' }, messageId });
+    const again = await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' }, messageId });
+    assert.equal(first.status, 201);
+    assert.equal(again.status, 200);
+    assert.deepEqual([again.json.seq, again.json.duplicate], [first.json.seq, true]);
+    assert.equal((await op(operator, 'GET', `/${sessionId}/signals?after=0`)).json.signals.length, 1);
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' }, messageId: 'not-a-uuid' })).status, 400);
+  });
+
+  test('a replayed signed device request is refused', async () => {
+    const { sessionId } = await openCall();
+    const path = `/v1/mobile/verification-sessions/${sessionId}/signals`;
+    const raw = JSON.stringify({ type: 'offer', payload: { sdp: 'v=0' } });
+    const headers = { ...deviceHeaders(device, 'POST', path, raw), 'Content-Type': 'application/json' };
+    const send = () => fetch(`${server.baseUrl}${path}`, { method: 'POST', headers, body: raw });
+    assert.equal((await send()).status, 201);
+    const replay = await send();
+    assert.ok(replay.status === 401 || replay.status === 409, `replay refused (${replay.status})`);
+    assert.equal((await op(operator, 'POST', `/${sessionId}/claim`, {})).status, 200);
+    assert.equal((await op(operator, 'GET', `/${sessionId}/signals?after=0`)).json.signals.length, 1, 'relayed once');
+    // A forged signature (body changed after signing) is refused as well.
+    const forged = await fetch(`${server.baseUrl}${path}`, { method: 'POST', headers: { ...deviceHeaders(device, 'POST', path, raw), 'Content-Type': 'application/json' }, body: raw.replace('v=0', 'v=1') });
+    assert.equal(forged.status, 401);
+  });
+
+  test('two operators claiming at once: exactly one gets the call', async () => {
+    const { sessionId } = await openCall();
+    const results = await Promise.all([op(operator, 'POST', `/${sessionId}/claim`, {}), op(operator2, 'POST', `/${sessionId}/claim`, {})]);
+    assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
+  });
+
+  test('the operator hangs up without a result: session closed, customer told, nothing verified or failed', async () => {
+    const { auth, sessionId } = await openCall();
+    assert.equal((await op(operator2, 'POST', `/${sessionId}/release`, {})).status, 403, 'only the claimer can release');
+    await op(operator, 'POST', `/${sessionId}/claim`, {});
+    assert.equal((await op(operator, 'POST', `/${sessionId}/release`, {})).status, 204);
+    const signals = (await deviceCall('GET', `${sessionId}/signals?after=0`)).json.signals;
+    assert.deepEqual([signals[0].from, signals[0].type, signals[0].payload.reason], ['operator', 'bye', 'operator_left']);
+    assert.equal((await bank.call('GET', `/v1/authorizations/${auth.authorizationId}/verification-plan`)).json.status, 'PENDING');
+    const audit = await server.db.query(`SELECT details FROM audit_logs WHERE event_type = 'verification_session_cancelled' AND details->>'sessionId' = $1`, [sessionId]);
+    assert.equal(audit.rows[0].details.by, 'admin:calls-op-1');
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' } })).status, 409);
+  });
+
+  test('a session closed elsewhere is announced to both parties with a server bye', async () => {
+    const { sessionId } = await openCall();
+    await op(operator, 'POST', `/${sessionId}/claim`, {});
+    await server.db.query(`UPDATE verification_sessions SET expires_at = now() - interval '1 second' WHERE session_id = $1`, [sessionId]);
+    const atDevice = (await deviceCall('GET', `${sessionId}/signals?after=0`)).json.signals;
+    const atOperator = (await op(operator, 'GET', `/${sessionId}/signals?after=0`)).json.signals;
+    for (const signals of [atDevice, atOperator]) {
+      assert.equal(signals.length, 1);
+      assert.deepEqual([signals[0].from, signals[0].type, signals[0].payload.reason], ['server', 'bye', 'session_expired']);
+    }
+    assert.equal((await deviceCall('GET', `${sessionId}/signals?after=0`)).json.signals.length, 1, 'announced once');
+    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' } })).status, 410);
+  });
+
+  test('a revoked device credential ends the call for the operator', async () => {
+    const revokedDevice = await bank.enrolDevice((await bank.createIdentity()).nexusId);
+    const { sessionId } = await openCall('VIDEO', revokedDevice);
+    await op(operator, 'POST', `/${sessionId}/claim`, {});
+    await server.db.query(`UPDATE credentials SET state = 'REVOKED', revoked_at = now() WHERE credential_id = $1`, [revokedDevice.credentialId]);
+    const signals = (await op(operator, 'GET', `/${sessionId}/signals?after=0`)).json.signals;
+    assert.deepEqual([signals[0].from, signals[0].payload.reason], ['server', 'credential_revoked']);
+    assert.equal((await op(operator, 'POST', `/${sessionId}/signals`, { type: 'answer', payload: { sdp: 'v=0' } })).status, 409);
   });
 });

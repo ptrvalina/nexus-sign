@@ -30,7 +30,7 @@ const CHROMIUM_ARGS = [
 ];
 
 /** The device side, run in the browser: offer, ICE, wait for media. */
-async function deviceSide({ baseUrl, sessionId, video }) {
+async function deviceSide({ baseUrl, sessionId, video, restart = false }) {
   const signedFetch = async (method, path, body) => {
     const raw = body === undefined ? '' : JSON.stringify(body);
     const headers = await window.signDevice(method, path, raw);
@@ -48,7 +48,7 @@ async function deviceSide({ baseUrl, sessionId, video }) {
   const outgoing = []; const incoming = []; let offered = false;
   pc.onicecandidate = (e) => {
     if (!e.candidate) return;
-    if (offered) signedFetch('POST', `${base}/signals`, { type: 'candidate', payload: e.candidate.toJSON() });
+    if (offered) signedFetch('POST', `${base}/signals`, { type: 'candidate', payload: e.candidate.toJSON(), messageId: crypto.randomUUID() });
     else outgoing.push(e.candidate.toJSON());
   };
   await pc.setLocalDescription(await pc.createOffer());
@@ -71,6 +71,29 @@ async function deviceSide({ baseUrl, sessionId, video }) {
     }
   }
   if (pc.connectionState !== 'connected') return { state: pc.connectionState };
+  let restarted = null;
+  if (restart) {
+    // ICE restart, as the SDKs do after a drop: a new offer with new ICE
+    // credentials, answered by the console; media continues.
+    const ufrag = (sdp) => /a=ice-ufrag:(\S+)/.exec(sdp)?.[1];
+    const before = ufrag(pc.localDescription.sdp);
+    offered = false;
+    await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+    await signedFetch('POST', `${base}/signals`, { type: 'offer', payload: { sdp: pc.localDescription.sdp }, messageId: crypto.randomUUID() });
+    offered = true;
+    for (const candidate of outgoing.splice(0)) await signedFetch('POST', `${base}/signals`, { type: 'candidate', payload: candidate });
+    let answered = false;
+    const until = Date.now() + 30_000;
+    while (!(answered && pc.connectionState === 'connected' && pc.iceConnectionState !== 'checking') && Date.now() < until) {
+      const { signals, next } = await signedFetch('GET', `${base}/signals?after=${after}&waitMs=1000`);
+      after = next ?? after;
+      for (const s of signals ?? []) {
+        if (s.type === 'answer') { await pc.setRemoteDescription({ type: 'answer', sdp: s.payload.sdp }); answered = true; }
+        else if (s.type === 'candidate') await pc.addIceCandidate(s.payload).catch(() => undefined);
+      }
+    }
+    restarted = { answered, before, after: ufrag(pc.localDescription.sdp), state: pc.connectionState };
+  }
   await new Promise((r) => setTimeout(r, 2500));
   const stats = [...(await pc.getStats()).values()];
   const inbound = stats.filter((s) => s.type === 'inbound-rtp');
@@ -83,6 +106,7 @@ async function deviceSide({ baseUrl, sessionId, video }) {
     dtlsState: transport?.dtlsState,
     srtpCipher: transport?.srtpCipher,
     tlsVersion: transport?.tlsVersion,
+    restarted,
     after,
   };
 }
@@ -99,6 +123,44 @@ describe('real WebRTC call: phone ↔ operator console', { skip }, () => {
     browser = await playwright.chromium.launch({ args: CHROMIUM_ARGS });
   });
   after(async () => { await browser?.close(); await server?.stop(); });
+
+  test('AUDIO: an ICE restart by the phone keeps the call; the operator hangs up and the phone is told', async (t) => {
+    const auth = await bank.createAuthorization(device, { verificationPolicy: { requireAudio: true, videoAvailable: false } });
+    const { sessionId } = (await bank.call('POST', `/v1/authorizations/${auth.authorizationId}/verification-sessions`, { body: { channel: 'AUDIO' } })).json;
+    admin = await server.createAdmin('media-operator-restart', 'operator', { clientId: 'bank-media', password: ADMIN_PASSWORD });
+    const operatorContext = await browser.newContext({ permissions: ['camera', 'microphone'] });
+    const console_ = await operatorContext.newPage();
+    console_.on('dialog', (d) => d.accept());
+    await console_.goto(`${server.baseUrl}/admin/`);
+    await console_.fill('#username', admin.username);
+    await console_.fill('#password', ADMIN_PASSWORD);
+    if (admin.totpSecret) await console_.fill('#totp', totp(admin.totpSecret));
+    await console_.click('#login-form button[type=submit]');
+    await console_.waitForSelector(`button[data-answer="${sessionId}"]`, { timeout: 15_000 });
+    await console_.click(`button[data-answer="${sessionId}"]`);
+    const deviceContext = await browser.newContext({ permissions: ['camera', 'microphone'], bypassCSP: true });
+    const phone = await deviceContext.newPage();
+    await phone.exposeFunction('signDevice', (method, path, raw) => deviceHeaders(device, method, path, raw));
+    await phone.goto(`${server.baseUrl}/healthz`);
+    const result = await phone.evaluate(deviceSide, { baseUrl: server.baseUrl, sessionId, video: false, restart: true });
+    t.diagnostic(`restart: ${JSON.stringify(result.restarted)}`);
+    assert.equal(result.restarted.answered, true, 'the console answered the restart offer');
+    assert.notEqual(result.restarted.before, result.restarted.after, 'new ICE credentials');
+    assert.equal(result.state, 'connected');
+    assert.ok(result.received.audio > 0);
+
+    await console_.click('#call-hangup-btn');
+    const bye = await phone.evaluate(async ({ baseUrl, sessionId: id, after }) => {
+      const path = `/v1/mobile/verification-sessions/${id}/signals?after=${after}&waitMs=5000`;
+      const headers = await window.signDevice('GET', path, '');
+      return (await (await fetch(baseUrl + path, { headers })).json()).signals.find((s) => s.type === 'bye');
+    }, { baseUrl: server.baseUrl, sessionId, after: result.after });
+    assert.deepEqual([bye.from, bye.payload.reason], ['operator', 'operator_left']);
+    assert.equal((await bank.call('GET', `/v1/authorizations/${auth.authorizationId}/verification-plan`)).json.status, 'PENDING', 'hanging up verifies nothing');
+    assert.equal(await console_.textContent('#call-indicators'), 'Camera and microphone off');
+    await operatorContext.close();
+    await deviceContext.close();
+  });
 
   for (const channel of ['VIDEO', 'AUDIO']) {
     test(`${channel}: media flows both ways over DTLS-SRTP, the operator verifies, the device still signs`, async (t) => {

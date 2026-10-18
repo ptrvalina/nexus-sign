@@ -10,7 +10,7 @@ import { recordAuditEvent } from '../services/auditService';
 import { setRequestActor } from '../services/requestContext';
 import type { AdminSession } from '../services/adminAuthService';
 import { byBodyField, byIp, loginThrottle } from '../middleware/bruteForceProtection';
-import { assertClaimedBy, claimCall, listCalls, operatorSignal, operatorSignals, sendBye } from '../services/verificationCall';
+import { assertClaimedBy, claimCall, listCalls, operatorSignal, operatorSignals, operatorRelease, sendBye } from '../services/verificationCall';
 import { recordOperatorDecision } from '../services/adaptiveVerificationService';
 
 const loginSchema = z.object({
@@ -253,8 +253,9 @@ export function buildAdminRouter(options: { cookieSecure: boolean }): Router {
 
   router.post('/admin/api/verification-calls/:sessionId/signals', requireRole('operator'), async (req, res, next) => {
     try {
-      const body = z.object({ type: z.string(), payload: z.unknown().optional() }).strict().parse(req.body);
-      res.status(201).json(await operatorSignal(callParam.parse(req.params.sessionId), operatorOf(req), body.type, body.payload ?? null));
+      const body = z.object({ type: z.string(), payload: z.unknown().optional(), messageId: z.string().uuid().optional() }).strict().parse(req.body);
+      const sent = await operatorSignal(callParam.parse(req.params.sessionId), operatorOf(req), body.type, body.payload ?? null, body.messageId);
+      res.status(sent.duplicate ? 200 : 201).json(sent);
     } catch (error) { next(error); }
   });
 
@@ -262,6 +263,15 @@ export function buildAdminRouter(options: { cookieSecure: boolean }): Router {
     try {
       const query = z.object({ after: z.coerce.number().int().nonnegative().default(0), waitMs: z.coerce.number().int().min(0).max(20_000).default(0) }).parse(req.query);
       res.status(200).json(await operatorSignals(callParam.parse(req.params.sessionId), operatorOf(req), query.after, query.waitMs));
+    } catch (error) { next(error); }
+  });
+
+  /** The operator hangs up without a result: the session is closed, nothing
+   * is verified or failed, and the customer is told. */
+  router.post('/admin/api/verification-calls/:sessionId/release', requireRole('operator'), async (req, res, next) => {
+    try {
+      await operatorRelease(callParam.parse(req.params.sessionId), operatorOf(req));
+      res.status(204).send();
     } catch (error) { next(error); }
   });
 
