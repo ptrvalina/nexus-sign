@@ -28,6 +28,10 @@ Run migrations as the table owner. After `scripts/db/roles.sql` has been applied
 | `016_audit_admin_mtls.sql` | `audit_logs.client_id` and `actor`, append-only triggers on `audit_logs`; `admin_users.client_id`, `totp_secret_encrypted`, `totp_last_step`, `session_version`; table `admin_approvals`; `bank_clients.mtls_cert_sha256` |
 | `017_state_machine.sql` | Lifecycle triggers on `authorization_requests`, `credentials` and `nexus_identities`; triggers refusing `DELETE` on `authorization_requests`, `credentials`, `nexus_identities`, `recovery_sessions` and `admin_approvals`; at most one `ACTIVE` credential per identity |
 | `018_remove_unused_schema.sql` | Drops `attestation_records`, `policy_decisions`, `credentials.suspended_at` and `nexus_identities.recovery_verifier`; authorization states reduced to `PENDING_USER`, `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED`, credential states to `ACTIVE`, `REVOKED` |
+| `019_verification_results.sql` | Verification results: provider keys, result method and issuer per session (FI-002) |
+| `020_secret_key_rotation.sql` | `secret_rewrap_allowed()`; the rotation tool may replace a credential's offline key ciphertext (FI-005) |
+| `021_device_request_nonces.sql` | Device request nonces in PostgreSQL (FI-008) |
+| `022_offline_deferred_signature.sql` | Offline confirmation v2: states `OFFLINE_PROVISIONAL` and `OFFLINE_UNSIGNED` (state column widened to 24), `confirmation_method` `OFFLINE_SIGNED`, columns `offline_code_tag`, `offline_code_accepted_at`, `offline_signature_deadline`, `offline_unsigned_reason`, append-only table `offline_deferred_signatures`; lifecycle trigger with the new transitions; `policy_reference` and `policy_version` immutable. Additive |
 
 ## Notes on 009
 

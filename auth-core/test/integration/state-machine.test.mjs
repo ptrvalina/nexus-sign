@@ -13,9 +13,14 @@ import { bankSession, deviceSignature, enrolWithToken, submitSignature } from '.
 
 // The specification (docs/architecture/state-machines.md).
 const AUTHORIZATION = {
-  PENDING_USER: ['VERIFIED', 'EXPIRED', 'CANCELLED', 'REJECTED'],
-  VERIFIED: [], EXPIRED: [], CANCELLED: [], REJECTED: [],
+  PENDING_USER: ['VERIFIED', 'EXPIRED', 'CANCELLED', 'REJECTED', 'OFFLINE_PROVISIONAL'],
+  // Offline confirmation v2 (migration 022).
+  OFFLINE_PROVISIONAL: ['VERIFIED', 'OFFLINE_UNSIGNED'],
+  VERIFIED: [], EXPIRED: [], CANCELLED: [], REJECTED: [], OFFLINE_UNSIGNED: [],
 };
+// States a bare state write can never reach: each needs its own fields
+// (signature; accepted code and deadline; unsigned reason).
+const NEEDS_FIELDS = ['VERIFIED', 'OFFLINE_PROVISIONAL', 'OFFLINE_UNSIGNED'];
 const CREDENTIAL = { ACTIVE: ['REVOKED'], REVOKED: [] };
 // Removed by migration 018: never used by Auth Core.
 const REMOVED_AUTHORIZATION_STATES = ['CREATED', 'DELIVERING', 'SIGNED', 'CONSUMED'];
@@ -23,7 +28,7 @@ const REMOVED_CREDENTIAL_STATES = ['PENDING', 'SUSPENDED'];
 const IDENTITY = { ACTIVE: ['SUSPENDED', 'REVOKED'], SUSPENDED: ['ACTIVE', 'REVOKED'], REVOKED: [] };
 const BANK = { PENDING: ['COMMIT_REQUESTED'], COMMIT_REQUESTED: ['COMMITTED', 'FAILED', 'CANCELLED'], COMMITTED: [], FAILED: [], CANCELLED: [] };
 
-const refused = /not a permitted transition|immutable|set once|needs a signature|set with the commit request/;
+const refused = /not a permitted transition|immutable|set once|needs a signature|set with the commit request|needs the accepted code|needs a reason/;
 
 describe('database state machines', { skip: skipWithoutServices }, () => {
   let server; let bank; let device;
@@ -75,8 +80,9 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
         if (randomInt(2) === 0) {
           const next = states[randomInt(states.length)];
           if (next === state) continue;
-          // A bare state write never verifies: VERIFIED also needs the signature fields.
-          const allowed = AUTHORIZATION[state].includes(next) && next !== 'VERIFIED';
+          // A bare state write never verifies, and never reaches the offline
+          // v2 states: each needs its own fields.
+          const allowed = AUTHORIZATION[state].includes(next) && !NEEDS_FIELDS.includes(next);
           const attempt = q('UPDATE authorization_requests SET state = $2 WHERE authorization_id = $1', [id, next]);
           if (allowed) { await attempt; state = next; } else await assert.rejects(attempt, refused, `${state} -> ${next}`);
         } else {

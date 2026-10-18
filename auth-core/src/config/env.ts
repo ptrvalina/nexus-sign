@@ -131,6 +131,16 @@ const envSchema = z.object({
    * before the bank notices. Unset: no limit; required in production when
    * offline confirmation is enabled. */
   OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY: z.coerce.number().int().min(1).max(1000).optional(),
+  /** FI-004, offline confirmation protocol (docs/protocol/offline-confirmation-v2-deferred-signature.md).
+   * `deferred_signature` (default, v2): QR prefix NXS2.; an accepted code
+   * leaves the authorization OFFLINE_PROVISIONAL until the device uploads its
+   * ECDSA signature over the same bytes; only then VERIFIED. `immediate` (v1,
+   * as up to 2.0.0-rc.2): QR prefix NXS1.; an accepted code is VERIFIED at
+   * once. Production requires deferred_signature. */
+  OFFLINE_CONFIRMATION_MODE: z.enum(['deferred_signature', 'immediate']).default('deferred_signature'),
+  /** v2: hours after an accepted code within which the device signature must
+   * arrive; afterwards the authorization becomes OFFLINE_UNSIGNED (final). */
+  OFFLINE_SIGNATURE_DEADLINE_HOURS: z.coerce.number().int().min(1).max(720).default(72),
 
   // --- Secure push (docs/protocol/secure-push.md) ---
 

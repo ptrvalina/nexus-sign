@@ -4,7 +4,7 @@
 // (sealed enrolment), and the customer's device signature over the exact
 // transaction bytes.
 //
-//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>]
+//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>] [--reject-offline-code]
 //
 // <export.json> is the response of either
 //   GET /v1/authorizations/{id}/evidence        (one record with its enrolment)
@@ -24,7 +24,7 @@ import { describeSignedTransaction, legacyRecords, verifyEvidenceChain, verifyEv
 const args = process.argv.slice(2);
 const file = args.find((a) => !a.startsWith('--'));
 if (!file) {
-  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>]');
+  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>] [--reject-offline-code]');
   process.exit(2);
 }
 const option = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -58,7 +58,11 @@ if (headsFile) {
   }
   if (!isChain) { console.error('--heads needs a chain export (GET /v1/nexus-identities/{nexusId}/evidence)'); process.exit(2); }
 }
-const problems = isChain ? verifyEvidenceChain(records, keys, { expectedHead }) : verifyEvidenceRecord(exported, keys, { standalone: true });
+// --reject-offline-code: fail every OFFLINE_CODE record (offline confirmation
+// v1, a code only); for banks that accept offline payments only with the
+// device's deferred signature (OFFLINE_SIGNED).
+const rejectOfflineCode = args.includes('--reject-offline-code');
+const problems = isChain ? verifyEvidenceChain(records, keys, { expectedHead, rejectOfflineCode }) : verifyEvidenceRecord(exported, keys, { standalone: true, rejectOfflineCode });
 if (heads.length > 0) problems.push(...verifyRetainedHeads(records, heads, keys));
 if (problems.length > 0) {
   for (const p of problems) console.error(`INVALID  ${p}`);
@@ -73,8 +77,9 @@ for (const record of records) {
 }
 const authorizations = records.filter((r) => (r.sealedPayload.schemaVersion === '3' ? r.sealedPayload.recordType : 'AUTHORIZATION') === 'AUTHORIZATION');
 const offline = authorizations.filter((r) => r.sealedPayload.confirmationMethod === 'OFFLINE_CODE').length;
+const offlineSigned = authorizations.filter((r) => r.sealedPayload.confirmationMethod === 'OFFLINE_SIGNED').length;
 const legacy = legacyRecords(records).length;
-const signatures = `device_signatures=${authorizations.length - offline}/${authorizations.length} verified${offline ? ` offline_codes=${offline} (not third-party verifiable)` : ''}`;
+const signatures = `device_signatures=${authorizations.length - offline}/${authorizations.length} verified${offlineSigned ? ` (of which offline_signed=${offlineSigned})` : ''}${offline ? ` offline_codes=${offline} (not third-party verifiable)` : ''}`;
 // Keys taken from the export only show that the export is self-consistent:
 // whoever produced it could have sealed it with a key of their own. That
 // result is reported differently and with exit code 3, so a script cannot

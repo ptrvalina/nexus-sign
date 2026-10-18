@@ -62,8 +62,13 @@ export interface AuthorizationEvidenceInput {
   signatureAlgorithm: string;
   /** DEVICE_SIGNATURE: ECDSA by the device signing key, verifiable by anyone.
    * OFFLINE_CODE: HMAC with a key shared by device and Auth Core; proves the
-   * device produced the code but is not verifiable by a third party. */
-  confirmationMethod: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE';
+   * device produced the code but is not verifiable by a third party.
+   * OFFLINE_SIGNED (offline confirmation v2): the accepted code and the
+   * device's ECDSA signature over the same bytes, uploaded later; the
+   * signature is verifiable like DEVICE_SIGNATURE. */
+  confirmationMethod: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE' | 'OFFLINE_SIGNED';
+  /** OFFLINE_SIGNED only: the accepted code's tag and the two times. */
+  offline?: { offlineCodeTag: string; offlineCodeAcceptedAt: string; deferredSignatureReceivedAt: string };
   keyVersion: number;
   policyReference: string;
   policyVersion: string;
@@ -243,6 +248,7 @@ export async function sealAuthorizationEvidence(tx: PoolClient, hsm: HsmAdapter,
     signatureFormat: input.signatureFormat,
     signatureAlgorithm: input.signatureAlgorithm,
     confirmationMethod: input.confirmationMethod,
+    ...(input.offline ?? {}),
     keyVersion: input.keyVersion,
     policyReference: input.policyReference,
     policyVersion: input.policyVersion,

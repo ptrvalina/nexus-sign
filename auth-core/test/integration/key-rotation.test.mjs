@@ -32,7 +32,10 @@ describe('master key rotation of stored secrets', { skip: skipWithoutServices },
   // The software HSM makes a new evidence key per process; the credential's
   // sealed enrolment record needs the first process's key as a retired key.
   let firstEvidenceKey;
-  const withEvidence = (env) => ({ ...env, EVIDENCE_RETIRED_PUBLIC_KEYS_PEM: firstEvidenceKey });
+  // Offline codes here show that the offline key decrypts; protocol v1 makes
+  // an accepted code read VERIFIED (v2: offline-deferred-signature.test.mjs).
+  const V1 = { OFFLINE_CONFIRMATION_MODE: 'immediate' };
+  const withEvidence = (env) => ({ ...env, ...V1, EVIDENCE_RETIRED_PUBLIC_KEYS_PEM: firstEvidenceKey });
 
   async function confirmOffline(server) {
     const bank = await bankSession(server, client);
@@ -44,7 +47,7 @@ describe('master key rotation of stored secrets', { skip: skipWithoutServices },
 
   before(async () => {
     database = await createDatabase();
-    const server = await startAuthCore({ database, env: old });
+    const server = await startAuthCore({ database, env: { ...old, ...V1 } });
     try {
       client = await server.registerBank('bank-rotation', { webhookUrl: 'https://bank.example/hooks' });
       const bank = await bankSession(server, client);

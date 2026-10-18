@@ -25,10 +25,12 @@ function codeFor(key, canonical) {
   return String((((tag[o] & 0x7f) << 24) | (tag[o + 1] << 16) | (tag[o + 2] << 8) | tag[o + 3]) % 1e8).padStart(8, '0');
 }
 
-describe('offline confirmation: forgery resistance and residual risk', { skip: skipWithoutServices }, () => {
+describe('offline confirmation v1: forgery resistance and residual risk', { skip: skipWithoutServices }, () => {
   let server; let bank; let device; let other;
   before(async () => {
-    server = await startAuthCore({ env: { OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY: '3', AUTHORIZATION_EXPIRY_SWEEP_MS: '300000' } });
+    // Offline confirmation v1 (code only), still available outside production;
+    // v2 is covered by offline-deferred-signature.test.mjs.
+    server = await startAuthCore({ env: { OFFLINE_CONFIRMATION_MODE: 'immediate', OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY: '3', AUTHORIZATION_EXPIRY_SWEEP_MS: '300000' } });
     bank = await bankSession(server, await server.registerBank('bank-offline-forgery'));
     device = await bank.enrolDevice((await bank.createIdentity()).nexusId);
     other = await bank.enrolDevice((await bank.createIdentity()).nexusId);

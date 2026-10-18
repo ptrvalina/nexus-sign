@@ -63,7 +63,7 @@ const labelOf = (record) => record.authorizationId ?? `${record.recordType ?? 'r
  *     and sealed the same key.
  * Returns a list of problems (empty when the record is valid).
  */
-export function verifyEvidenceRecord(record, evidenceKeys, { standalone = false } = {}) {
+export function verifyEvidenceRecord(record, evidenceKeys, { standalone = false, rejectOfflineCode = false } = {}) {
   const keys = keyring(evidenceKeys);
   const label = labelOf(record);
   const payload = record.sealedPayload;
@@ -82,7 +82,7 @@ export function verifyEvidenceRecord(record, evidenceKeys, { standalone = false 
   }
   if (recordType === 'AUTHORIZATION') {
     if (payload.authorizationId !== record.authorizationId) problems.push(`${label}: record metadata does not match the sealed payload`);
-    problems.push(...verifyDeviceSignature(payload).map((p) => `${label}: ${p}`));
+    problems.push(...verifyDeviceSignature(payload, { rejectOfflineCode }).map((p) => `${label}: ${p}`));
     if (payload.schemaVersion === '3' && (standalone || record.credentialEnrolment !== undefined)) {
       // Exported alone, the record must bring the enrolment that proves its
       // key; removing the field must not skip the check.
@@ -115,7 +115,7 @@ function verifyEnrolmentLink(authorization, enrolment, keys) {
 }
 
 /** Steps 4 of verifyEvidenceRecord, on an AUTHORIZATION payload alone. */
-export function verifyDeviceSignature(payload) {
+export function verifyDeviceSignature(payload, { rejectOfflineCode = false } = {}) {
   if (typeof payload.signedPayloadBase64 !== 'string' || typeof payload.credentialPublicKeyPem !== 'string') {
     return ['sealed payload does not carry the signed bytes and device key'];
   }
@@ -138,9 +138,20 @@ export function verifyDeviceSignature(payload) {
     if (payload.signatureFormat !== 'hmac' || payload.signatureAlgorithm !== 'HMAC-SHA256') {
       problems.push('offline confirmation record does not carry an HMAC tag');
     }
+    // A bank that has moved to offline confirmation v2 accepts no code-only
+    // confirmation: whoever controls Auth Core can compute such a code.
+    if (rejectOfflineCode) problems.push('offline code without a device signature (OFFLINE_CODE) is not accepted (--reject-offline-code)');
     return problems;
   }
-  if (payload.confirmationMethod !== undefined && payload.confirmationMethod !== 'DEVICE_SIGNATURE') {
+  // Offline confirmation v2: the accepted code plus the device's ECDSA
+  // signature over the same bytes; the signature is checked like an online one.
+  if (payload.confirmationMethod === 'OFFLINE_SIGNED') {
+    if (typeof payload.offlineCodeTag !== 'string' || Buffer.from(payload.offlineCodeTag, 'base64').length !== 32
+        || typeof payload.offlineCodeAcceptedAt !== 'string' || typeof payload.deferredSignatureReceivedAt !== 'string') {
+      problems.push('offline confirmation v2 record does not carry the accepted code and its times');
+    }
+    if (payload.signatureFormat !== 'der' && payload.signatureFormat !== 'raw') problems.push('offline confirmation v2 record does not carry an ECDSA signature');
+  } else if (payload.confirmationMethod !== undefined && payload.confirmationMethod !== 'DEVICE_SIGNATURE') {
     return [...problems, `unknown confirmation method ${payload.confirmationMethod}`];
   }
   let deviceOk = false;
@@ -159,7 +170,8 @@ export function verifyDeviceSignature(payload) {
 export function describeSignedTransaction(payload) {
   const f = JSON.parse(Buffer.from(payload.signedPayloadBase64, 'base64').toString('utf8'));
   const beneficiary = Object.entries(f.beneficiary).map(([k, v]) => `${k}=${v}`).join(', ');
-  const how = payload.confirmationMethod === 'OFFLINE_CODE' ? 'confirmed offline with a code' : 'signed';
+  const how = payload.confirmationMethod === 'OFFLINE_CODE' ? 'confirmed offline with a code'
+    : payload.confirmationMethod === 'OFFLINE_SIGNED' ? 'confirmed offline with a code and signed (signature received later)' : 'signed';
   return `${f.operation_type} ${f.amount_minor} (minor units) ${f.currency} to [${beneficiary}], ref ${f.transaction_reference}, ${how} at ${payload.verifiedAt}`;
 }
 
@@ -173,7 +185,7 @@ export function describeSignedTransaction(payload) {
  *    from a confirmation), the chain reaches that record unchanged: records
  *    removed from the end are reported.
  */
-export function verifyEvidenceChain(records, evidenceKeys, { expectedHead } = {}) {
+export function verifyEvidenceChain(records, evidenceKeys, { expectedHead, rejectOfflineCode = false } = {}) {
   const keys = keyring(evidenceKeys);
   const problems = [];
   const ordered = [...records].sort((a, b) => (a.chainSequence ?? 0) - (b.chainSequence ?? 0));
@@ -181,7 +193,7 @@ export function verifyEvidenceChain(records, evidenceKeys, { expectedHead } = {}
   let previous = null;
   ordered.forEach((record, index) => {
     const label = labelOf(record);
-    problems.push(...verifyEvidenceRecord(record, keys));
+    problems.push(...verifyEvidenceRecord(record, keys, { rejectOfflineCode }));
     if (record.chainSequence !== undefined && record.chainSequence !== index + 1) {
       problems.push(`${label}: chain position ${record.chainSequence} where ${index + 1} was expected (records missing or duplicated)`);
     }

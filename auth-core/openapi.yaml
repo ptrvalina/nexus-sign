@@ -290,7 +290,13 @@ paths:
     post:
       tags: [Offline confirmation]
       summary: Submit the code the customer read from the phone
-      description: A wrong code counts towards the same five-attempt limit as a wrong signature. The evidence record is sealed with confirmationMethod OFFLINE_CODE.
+      description: >-
+        A wrong code counts towards the same five-attempt limit as a wrong signature. With
+        OFFLINE_CONFIRMATION_MODE=deferred_signature (v2, default, required in production) a correct code returns
+        PROVISIONAL and the authorization becomes VERIFIED (confirmationMethod OFFLINE_SIGNED) only when the device has
+        uploaded its signature over the same bytes; webhooks authorization.offline_provisional, authorization.verified,
+        authorization.offline_unsigned. With immediate (v1) a correct code returns VERIFIED and the evidence is sealed
+        with confirmationMethod OFFLINE_CODE.
       requestBody:
         required: true
         content:
@@ -798,6 +804,47 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /v1/mobile/authorizations/{authorizationId}/deferred-signature:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Upload the signature made during an offline confirmation (offline confirmation v2)
+      description: >-
+        The device's ECDSA signature over the canonical bytes it confirmed offline (QR prefix NXS2.). Only from the
+        credential the authorization names. The signature never confirms an authorization by itself.
+        docs/protocol/offline-confirmation-v2-deferred-signature.md.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SignatureRequest' } } }
+      responses:
+        '200':
+          description: VERIFIED (the code had been accepted) or ALREADY_RECORDED (repeat delivery)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [VERIFIED, ALREADY_RECORDED] }
+                  evidence: { $ref: '#/components/schemas/ChainPosition' }
+        '202':
+          description: RECEIVED; the code has not been submitted yet and will finalize when it is
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [RECEIVED] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: NOT_AWAITING_SIGNATURE (final state, deadline passed, or v1 deployment); discard the signature
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: INVALID_DEFERRED_SIGNATURE; the signature does not verify over this authorization
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
   /v1/recovery/sessions:
     post:
       tags: [Recovery]
@@ -1149,7 +1196,13 @@ components:
         cid: { type: string, format: uuid, description: Credential ID }
         iv: { type: string, description: base64url, 12 bytes }
         ct: { type: string, description: base64url ciphertext followed by the 16-byte tag }
-    AuthorizationState: { type: string, enum: [PENDING_USER, VERIFIED, EXPIRED, REJECTED, CANCELLED] }
+    AuthorizationState:
+      type: string
+      description: >-
+        OFFLINE_PROVISIONAL (offline confirmation v2): the code was accepted, the device signature has not arrived;
+        not confirmed. OFFLINE_UNSIGNED (final): a code was accepted and no valid device signature arrived before
+        the deadline, or the credential stopped being ACTIVE; treat as a security event.
+      enum: [PENDING_USER, VERIFIED, EXPIRED, REJECTED, CANCELLED, OFFLINE_PROVISIONAL, OFFLINE_UNSIGNED]
     Authorization:
       type: object
       properties:
@@ -1189,7 +1242,11 @@ components:
       type: object
       required: [status]
       properties:
-        status: { type: string, enum: [VERIFIED, FAILED, EXPIRED] }
+        status:
+          type: string
+          description: PROVISIONAL only for an offline code with OFFLINE_CONFIRMATION_MODE=deferred_signature; it is not a confirmation.
+          enum: [VERIFIED, PROVISIONAL, FAILED, EXPIRED]
+        signatureDeadline: { type: string, format: date-time, description: 'PROVISIONAL: until when the device signature may arrive' }
         reason: { type: string, example: signature_verification_failed }
         attempts: { type: integer, description: Invalid attempts so far (limit 5) }
         evidence: { $ref: '#/components/schemas/ChainPosition' }

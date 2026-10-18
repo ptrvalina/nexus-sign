@@ -417,12 +417,14 @@ CREATE INDEX IF NOT EXISTS idx_push_messages_awaiting_receipt
 CREATE INDEX IF NOT EXISTS idx_push_messages_identity ON push_messages(nexus_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_push_messages_authorization ON push_messages(authorization_id) WHERE authorization_id IS NOT NULL;
 
--- Lifecycle state machines enforced by the database (migrations 017, 018).
--- Authorization lifecycle:
---   PENDING_USER -> VERIFIED | EXPIRED | CANCELLED | REJECTED (all final)
--- The transaction it binds never changes; the signature fields change only on
--- the transition to VERIFIED. Bank transaction lifecycle of a VERIFIED
--- authorization: PENDING -> COMMIT_REQUESTED -> COMMITTED | FAILED | CANCELLED.
+-- Authorization lifecycle (migrations 017, 018, 022):
+--   PENDING_USER -> VERIFIED | EXPIRED | CANCELLED | REJECTED | OFFLINE_PROVISIONAL
+--   OFFLINE_PROVISIONAL -> VERIFIED | OFFLINE_UNSIGNED
+-- VERIFIED, EXPIRED, CANCELLED, REJECTED and OFFLINE_UNSIGNED are final. The
+-- transaction it binds never changes; the signature fields change only on the
+-- transition to VERIFIED and the offline code fields only when a code is
+-- accepted. Bank transaction lifecycle of a VERIFIED authorization:
+-- PENDING -> COMMIT_REQUESTED -> COMMITTED | FAILED | CANCELLED.
 CREATE OR REPLACE FUNCTION authorization_lifecycle() RETURNS trigger AS $$
 DECLARE
   allowed BOOLEAN;
@@ -436,6 +438,8 @@ BEGIN
      OR NEW.amount_minor IS DISTINCT FROM OLD.amount_minor
      OR NEW.currency IS DISTINCT FROM OLD.currency
      OR NEW.beneficiary IS DISTINCT FROM OLD.beneficiary
+     OR NEW.policy_reference IS DISTINCT FROM OLD.policy_reference
+     OR NEW.policy_version IS DISTINCT FROM OLD.policy_version
      OR NEW.canonical_payload_hash IS DISTINCT FROM OLD.canonical_payload_hash
      OR NEW.nonce IS DISTINCT FROM OLD.nonce
      OR NEW.issued_at IS DISTINCT FROM OLD.issued_at
@@ -444,7 +448,8 @@ BEGIN
   END IF;
 
   IF NEW.state IS DISTINCT FROM OLD.state THEN
-    allowed := OLD.state = 'PENDING_USER' AND NEW.state IN ('VERIFIED','EXPIRED','CANCELLED','REJECTED');
+    allowed := (OLD.state = 'PENDING_USER' AND NEW.state IN ('VERIFIED','EXPIRED','CANCELLED','REJECTED','OFFLINE_PROVISIONAL'))
+            OR (OLD.state = 'OFFLINE_PROVISIONAL' AND NEW.state IN ('VERIFIED','OFFLINE_UNSIGNED'));
     IF NOT allowed THEN
       RAISE EXCEPTION 'authorization % : % -> % is not a permitted transition', OLD.authorization_id, OLD.state, NEW.state USING ERRCODE = 'integrity_constraint_violation';
     END IF;
@@ -454,12 +459,36 @@ BEGIN
       OR NEW.signature_format IS DISTINCT FROM OLD.signature_format
       OR NEW.confirmation_method IS DISTINCT FROM OLD.confirmation_method
       OR NEW.verified_at IS DISTINCT FROM OLD.verified_at)
-     AND NOT (NEW.state = 'VERIFIED' AND OLD.state = 'PENDING_USER') THEN
+     AND NOT (NEW.state = 'VERIFIED' AND OLD.state IN ('PENDING_USER','OFFLINE_PROVISIONAL')) THEN
     RAISE EXCEPTION 'authorization % : signature fields are set once, on verification', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
   IF NEW.state = 'VERIFIED' AND (NEW.signature IS NULL OR NEW.verified_at IS NULL) THEN
     RAISE EXCEPTION 'authorization % : VERIFIED needs a signature and verified_at', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
+
+  -- The accepted offline code: written once, when the code is accepted.
+  IF (NEW.offline_code_tag IS DISTINCT FROM OLD.offline_code_tag
+      OR NEW.offline_code_accepted_at IS DISTINCT FROM OLD.offline_code_accepted_at
+      OR NEW.offline_signature_deadline IS DISTINCT FROM OLD.offline_signature_deadline)
+     AND NOT (OLD.state = 'PENDING_USER' AND NEW.state IN ('VERIFIED','OFFLINE_PROVISIONAL')
+              AND OLD.offline_code_tag IS NULL AND OLD.offline_code_accepted_at IS NULL AND OLD.offline_signature_deadline IS NULL) THEN
+    RAISE EXCEPTION 'authorization % : the offline code fields are set once, when the code is accepted', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.state = 'OFFLINE_PROVISIONAL'
+     AND (NEW.offline_code_tag IS NULL OR NEW.offline_code_accepted_at IS NULL OR NEW.offline_signature_deadline IS NULL) THEN
+    RAISE EXCEPTION 'authorization % : OFFLINE_PROVISIONAL needs the accepted code and its signature deadline', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.confirmation_method = 'OFFLINE_SIGNED' AND NEW.offline_code_tag IS NULL THEN
+    RAISE EXCEPTION 'authorization % : OFFLINE_SIGNED needs the accepted code', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.offline_unsigned_reason IS DISTINCT FROM OLD.offline_unsigned_reason
+     AND NOT (OLD.state = 'OFFLINE_PROVISIONAL' AND NEW.state = 'OFFLINE_UNSIGNED') THEN
+    RAISE EXCEPTION 'authorization % : the unsigned reason is set once, on OFFLINE_UNSIGNED', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.state = 'OFFLINE_UNSIGNED' AND NEW.offline_unsigned_reason IS NULL THEN
+    RAISE EXCEPTION 'authorization % : OFFLINE_UNSIGNED needs a reason', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+
   IF NEW.expires_at IS DISTINCT FROM OLD.expires_at AND OLD.state <> 'PENDING_USER' THEN
     RAISE EXCEPTION 'authorization % : expiry of a final authorization is immutable', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
@@ -633,3 +662,41 @@ CREATE TABLE IF NOT EXISTS device_request_nonces (
     PRIMARY KEY (credential_id, nonce)
 );
 CREATE INDEX IF NOT EXISTS idx_device_request_nonces_expires_at ON device_request_nonces(expires_at);
+
+-- Offline confirmation v2, deferred device signature (migration 022, FI-004).
+ALTER TABLE authorization_requests ALTER COLUMN state TYPE VARCHAR(24);
+ALTER TABLE authorization_requests DROP CONSTRAINT IF EXISTS authorization_requests_state_check;
+ALTER TABLE authorization_requests ADD CONSTRAINT authorization_requests_state_check
+  CHECK (state IN ('PENDING_USER','VERIFIED','EXPIRED','CANCELLED','REJECTED','OFFLINE_PROVISIONAL','OFFLINE_UNSIGNED'));
+ALTER TABLE authorization_requests DROP CONSTRAINT IF EXISTS authorization_requests_confirmation_method_check;
+ALTER TABLE authorization_requests ADD CONSTRAINT authorization_requests_confirmation_method_check
+  CHECK (confirmation_method IS NULL OR confirmation_method IN ('DEVICE_SIGNATURE','OFFLINE_CODE','OFFLINE_SIGNED'));
+-- base64 HMAC tag of the accepted code, when it was accepted, and (v2) until
+-- when the device signature may arrive.
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_code_tag TEXT;
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_code_accepted_at TIMESTAMPTZ;
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_signature_deadline TIMESTAMPTZ;
+-- OFFLINE_UNSIGNED: deadline | credential_not_active | identity_not_active.
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_unsigned_reason VARCHAR(32);
+CREATE INDEX IF NOT EXISTS idx_auth_offline_provisional
+    ON authorization_requests(offline_signature_deadline) WHERE state = 'OFFLINE_PROVISIONAL';
+CREATE INDEX IF NOT EXISTS idx_auth_offline_accepted
+    ON authorization_requests(credential_id, offline_code_accepted_at) WHERE offline_code_accepted_at IS NOT NULL;
+
+-- The device's ECDSA signature over the canonical bytes, uploaded after an
+-- offline confirmation; at most one per authorization, never changed.
+CREATE TABLE IF NOT EXISTS offline_deferred_signatures (
+    authorization_id           UUID PRIMARY KEY REFERENCES authorization_requests(authorization_id),
+    credential_id              UUID NOT NULL REFERENCES credentials(credential_id),
+    signature                  TEXT NOT NULL,
+    signature_format           VARCHAR(8) NOT NULL CHECK (signature_format IN ('der','raw')),
+    received_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE OR REPLACE FUNCTION offline_deferred_signatures_append_only() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'offline_deferred_signatures is append-only (% rejected)', TG_OP USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_offline_deferred_signatures_append_only ON offline_deferred_signatures;
+CREATE TRIGGER trg_offline_deferred_signatures_append_only BEFORE UPDATE OR DELETE ON offline_deferred_signatures
+  FOR EACH ROW EXECUTE FUNCTION offline_deferred_signatures_append_only();

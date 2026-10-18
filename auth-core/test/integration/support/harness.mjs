@@ -212,6 +212,14 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
         output,
       };
     },
+    /** Kills the process at once (SIGKILL: no drain, no cleanup), as a crash
+     * would; the database is kept. Then stop() only releases the resources. */
+    async crash() {
+      if (child.exitCode === null) {
+        child.kill('SIGKILL');
+        await exited;
+      }
+    },
     async stop() {
       if (child.exitCode === null) {
         child.kill('SIGTERM');

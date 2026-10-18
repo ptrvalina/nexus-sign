@@ -405,27 +405,48 @@ if (OFFLINE_SERVER_KEY) {
   expect(auth.status === 201, 'authorization created for offline confirmation', auth.text);
   const id = auth.json.authorizationId;
   const challenge = await call('GET', `/v1/authorizations/${id}/offline-challenge`, { token: BANK });
-  expect(challenge.status === 200 && challenge.json?.qrPayload?.startsWith('NXS1.'), 'bank gets the QR content for its screen', challenge.text);
+  const qr = challenge.json?.qrPayload ?? '';
+  // NXS2.: offline confirmation v2 (deferred device signature, the default);
+  // NXS1.: v1, code only (OFFLINE_CONFIRMATION_MODE=immediate).
+  const v2 = qr.startsWith('NXS2.');
+  expect(challenge.status === 200 && (v2 || qr.startsWith('NXS1.')), `bank gets the QR content for its screen (offline protocol v${v2 ? 2 : 1})`, challenge.text);
 
-  // The phone, without network: read the QR, check the bytes, derive the code.
+  // The phone, without network: read the QR, check the bytes, (v2: sign
+  // them and keep the signature,) derive the code.
   const canonical = Buffer.from(challenge.json.qrPayload.slice(5), 'base64url');
   const fields = JSON.parse(canonical.toString('utf8'));
   expect(Buffer.from(JSON.stringify(normalize(fields))).equals(canonical) && fields.credential_id === CREDENTIAL_ID && fields.amount_minor === '125000',
     'QR carries the canonical bytes for this device and amount', fields);
+  const pendingSignature = v2 ? signBytes(device, canonical) : null;
   const code = offlineCode(deviceOfflineKey, OFFLINE_SERVER_KEY, CREDENTIAL_ID, canonical);
 
   const wrongCode = String((Number(code) + 1) % 100000000).padStart(8, '0');
   const wrong = await call('POST', `/v1/authorizations/${id}/offline-confirmation`, { token: BANK, body: { code: wrongCode } });
   expect(wrong.json?.status === 'FAILED' && wrong.json?.attempts === 1, 'a wrong offline code is refused and counted', wrong.text);
   const right = await call('POST', `/v1/authorizations/${id}/offline-confirmation`, { token: BANK, body: { code } });
-  expect(right.json?.status === 'VERIFIED', 'the code derived on the phone confirms the authorization', right.text);
+  if (v2) {
+    expect(right.json?.status === 'PROVISIONAL' && typeof right.json?.signatureDeadline === 'string',
+      'v2: the code alone leaves the authorization provisional until the device signature arrives', right.text);
+    const state = await call('GET', `/v1/authorizations/${id}`, { token: BANK });
+    expect(state.json?.state === 'OFFLINE_PROVISIONAL', 'v2: the bank sees OFFLINE_PROVISIONAL, not VERIFIED', state.text);
+  } else {
+    expect(right.json?.status === 'VERIFIED', 'the code derived on the phone confirms the authorization', right.text);
+  }
   const again = await call('POST', `/v1/authorizations/${id}/offline-confirmation`, { token: BANK, body: { code } });
   expect(again.json?.status === 'FAILED', 'an offline code is single-use', again.text);
 
+  if (v2) {
+    // Back online: the phone uploads the signature it made with the code.
+    const upload = await call('POST', `/v1/mobile/authorizations/${id}/deferred-signature`, { device: MOBILE, body: { signature: pendingSignature, signatureFormat: 'der' } });
+    expect(upload.status === 200 && upload.json?.status === 'VERIFIED', 'v2: the device signature uploaded later verifies the authorization', upload.text);
+    const repeat = await call('POST', `/v1/mobile/authorizations/${id}/deferred-signature`, { device: MOBILE, body: { signature: pendingSignature, signatureFormat: 'der' } });
+    expect(repeat.status === 200 && repeat.json?.status === 'ALREADY_RECORDED', 'v2: a repeated upload is recognised and changes nothing', repeat.text);
+  }
   const evidence = await call('GET', `/v1/authorizations/${id}/evidence`, { token: BANK });
-  expect(evidence.json?.sealedPayload?.confirmationMethod === 'OFFLINE_CODE'
+  const method = v2 ? 'OFFLINE_SIGNED' : 'OFFLINE_CODE';
+  expect(evidence.json?.sealedPayload?.confirmationMethod === method
     && verifyEvidenceRecord(evidence.json, evidence.json.evidencePublicKeys ?? evidence.json.evidencePublicKeyPem, { standalone: true }).length === 0,
-    'offline confirmation is sealed in the evidence chain as OFFLINE_CODE', evidence.text);
+    `offline confirmation is sealed in the evidence chain as ${method}${v2 ? ' and the device signature verifies offline' : ''}`, evidence.text);
 } else {
   console.log('SKIP  offline confirmation (OFFLINE_CONFIRMATION_ENABLED is not true on the server)');
 }

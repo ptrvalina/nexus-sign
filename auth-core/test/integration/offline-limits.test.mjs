@@ -10,7 +10,9 @@ import { bankSession, deviceSignature, offlineCode, submitSignature } from './su
 describe('offline confirmation limits', { skip: skipWithoutServices }, () => {
   let server; let bank; let device;
   before(async () => {
-    server = await startAuthCore({ env: { OFFLINE_CONFIRMATION_MAX_AMOUNT: 'PLN:100000' } });
+    // v1 (code only), so that an accepted code reads VERIFIED; the caps apply
+    // to v2 in the same code path (offline-deferred-signature.test.mjs).
+    server = await startAuthCore({ env: { OFFLINE_CONFIRMATION_MODE: 'immediate', OFFLINE_CONFIRMATION_MAX_AMOUNT: 'PLN:100000' } });
     bank = await bankSession(server, await server.registerBank('bank-offline-limits'));
     device = await bank.enrolDevice((await bank.createIdentity()).nexusId);
   });

@@ -42,6 +42,9 @@ export function productionBlockers(config: Env): string[] {
   if (config.OFFLINE_CONFIRMATION_ENABLED && config.OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY === undefined) {
     blockers.push('OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY is required in production when OFFLINE_CONFIRMATION_ENABLED is true (FI-004)');
   }
+  if (config.OFFLINE_CONFIRMATION_ENABLED && config.OFFLINE_CONFIRMATION_MODE !== 'deferred_signature') {
+    blockers.push('OFFLINE_CONFIRMATION_MODE must be deferred_signature in production when OFFLINE_CONFIRMATION_ENABLED is true (FI-004: a code alone can be computed by whoever controls Auth Core)');
+  }
   if (config.OFFLINE_CONFIRMATION_ENABLED && !config.OFFLINE_CONFIRMATION_MAX_AMOUNT?.trim()) {
     blockers.push('OFFLINE_CONFIRMATION_MAX_AMOUNT is required in production when OFFLINE_CONFIRMATION_ENABLED is true (FI-004: offline codes can be computed by whoever holds the database and DEVICE_SECRET_ENCRYPTION_KEY)');
   }

@@ -11,7 +11,7 @@ import { recordAuditEvent } from '../services/auditService';
 import { enrolmentAttestation, platformMatches, verifyDeviceAttestation } from '../services/attestationVerificationService';
 import { env } from '../config/env';
 import { authorizationObjectOf, getAuthorizationForClient, type AuthorizationRecord } from '../services/authorizationRecord';
-import { verifyAuthorization } from '../services/authorizationConfirmation';
+import { submitDeferredSignature, verifyAuthorization } from '../services/authorizationConfirmation';
 import { canonicalizeAuthorization } from '../services/canonicalAuthorization';
 import { reportedState } from '../services/authorizationExpiry';
 import { beginRecoverySetup, completeRecoverySetup } from '../services/recoveryService';
@@ -366,6 +366,22 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const result = await verifyAuthorization(hsmAdapter, auth.authorizationId, s.clientId, body.signature, body.signatureFormat,
         { ipAddress: req.ip, userAgent: req.header('user-agent') });
       res.status(result.status === 'EXPIRED' ? 410 : 200).json(result);
+    } catch (e) { next(e); }
+  });
+
+  /** Offline confirmation v2 (FI-004): the device's signature over the bytes
+   * it confirmed offline, uploaded once it has a connection. Only from the
+   * credential the authorization names. 200 VERIFIED or ALREADY_RECORDED,
+   * 202 RECEIVED (the code has not arrived yet), 409 NOT_AWAITING_SIGNATURE,
+   * 422 INVALID_DEFERRED_SIGNATURE. */
+  router.post('/v1/mobile/authorizations/:authorizationId/deferred-signature', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const auth = await authorizationInScope(req.params.authorizationId, device);
+      const body = signatureSchema.parse(req.body);
+      const result = await submitDeferredSignature(hsmAdapter, auth.authorizationId, device.clientId, device.credentialId,
+        body.signature, body.signatureFormat, { ipAddress: req.ip, userAgent: req.header('user-agent') });
+      res.status(result.status === 'RECEIVED' ? 202 : 200).json(result);
     } catch (e) { next(e); }
   });
 

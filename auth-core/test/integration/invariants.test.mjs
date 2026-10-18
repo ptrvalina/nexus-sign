@@ -11,7 +11,9 @@ describe('security invariants', { skip: skipWithoutServices }, () => {
   let server; let bankA; let bankB; let deviceA; let deviceB;
 
   before(async () => {
-    server = await startAuthCore();
+    // Offline confirmation v1 for the concurrent-code invariant; the v2
+    // equivalent is in offline-deferred-signature.test.mjs.
+    server = await startAuthCore({ env: { OFFLINE_CONFIRMATION_MODE: 'immediate' } });
     bankA = await bankSession(server, await server.registerBank('bank-a'));
     bankB = await bankSession(server, await server.registerBank('bank-b'));
     deviceA = await bankA.enrolDevice((await bankA.createIdentity()).nexusId);

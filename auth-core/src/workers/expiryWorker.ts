@@ -1,6 +1,7 @@
 import type { Logger } from 'pino';
 import { env } from '../config/env';
 import { expireOverdueAuthorizations, expireOverdueVerificationSessions, purgeExpiredDeviceNonces } from '../services/authorizationExpiry';
+import { expireUnsignedOfflineConfirmations } from '../services/authorizationConfirmation';
 
 export interface ExpiryWorkerHandle {
   stop: () => void;
@@ -8,7 +9,8 @@ export interface ExpiryWorkerHandle {
 
 /**
  * Sweeps authorizations whose expiry has passed (FI-013), verification
- * sessions nobody completed and expired device request nonces (FI-008), every
+ * sessions nobody completed, offline confirmations whose device signature can
+ * no longer arrive (FI-004) and expired device request nonces (FI-008), every
  * AUTHORIZATION_EXPIRY_SWEEP_MS. Several Auth Core instances can run it at
  * once: rows are claimed with FOR UPDATE SKIP LOCKED.
  */
@@ -23,6 +25,8 @@ export function startExpiryWorker(logger: Logger): ExpiryWorkerHandle {
         if (count > 0) logger.info({ count }, 'Expired overdue authorizations');
         const sessions = await expireOverdueVerificationSessions();
         if (sessions > 0) logger.info({ count: sessions }, 'Expired unanswered verification sessions');
+        const unsigned = await expireUnsignedOfflineConfirmations();
+        if (unsigned > 0) logger.warn({ count: unsigned }, 'Offline confirmations without a device signature (OFFLINE_UNSIGNED)');
         if (env.DEVICE_NONCE_STORE === 'postgres') await purgeExpiredDeviceNonces();
       })
       .catch((error: unknown) => { logger.error({ err: error }, 'Authorization expiry sweep failed'); })
