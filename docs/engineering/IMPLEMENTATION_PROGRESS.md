@@ -14,10 +14,32 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 5 | `7c1c0a8` | FI-001 (SDKs) | Signalling rules, call state machine in both core SDKs, WebRTC modules, demo integration, CI jobs |
 | 6 | `9dee0af` | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
 | Report | `1bbd12e` | — | Milestone report (Russian) |
+| 9 | `75736c8`, `0582f54` | FI-004 (enforcement), FI-005 (in-HSM check) | Bank commit re-verifies sealed evidence; `confirmed` flag; v1 behind the insecure flag; enforcement suite; demo bank status; SoftHSM capability check |
 | 8 | `88d9a0d`, `d06a378`, `e068c40` | FI-004 (deferred device signature), FI-005 (KEK attributes) | Offline confirmation v2 in Auth Core and the SDKs, migration 022, verifier `--reject-offline-code`; KEK must be generated in the HSM |
 | 7 | `e8e90e7` | FI-005 (HSM wrapping), FI-004 (threat model, daily limit) | Master keys wrapped by an HSM KEK, `masterKeys.js`, offline forgery tests, native build guide, baseline script, WebRTC provenance update |
 
-## Latest full regression (run `phase8-173638`, 2026-10-18)
+## Latest full regression (run `phase9-185423`, 2026-10-18, code at `0582f54`)
+
+Tools: Node 22.22.2, PostgreSQL 16.13, Redis 7.0.15, SoftHSM 2.7.0, OpenJDK 21.0.10, kotlinc 2.0.21, Playwright 1.56.1 with Chromium build 1194, Python 3.11.15. Every line exit code 0.
+
+| Suite | Result |
+|---|---|
+| Typecheck, build | ok |
+| Unit | 101/101 |
+| Vectors, OpenAPI | ok, 44 routes |
+| Repository hygiene | ok |
+| Integration (incl. SoftHSM) | 164/164 (new: `offline-enforcement` 7, `hsm-in-place-decryption` 3) |
+| Media (Chromium WebRTC) | 3/3 |
+| End to end | 77/77 |
+| Demo bank | 7/7 (new: `status.test.mjs` 2) |
+| Sandbox | OK |
+| Android SDK, JVM (stubs) | 57/57 |
+| Android call module type check | ok, 17 classes |
+| SDK call conformance | 1/1 |
+
+Mutation runs (separate from the regression): 20 mutations against `offline-deferred-signature` and `offline-enforcement`; 19 caught, 1 survived (a binding check duplicated by the byte and signature checks; removing all three is caught).
+
+## Previous full regression (run `phase8-173638`, 2026-10-18)
 
 Same command as below, on the phase 8 working tree before the commits (the commits contain exactly that tree's code). Baseline run on `760d066` before any change: `phase8-baseline-115010`, identical to `batch7-112422`.
 

@@ -122,3 +122,29 @@ Code review of `src/crypto/masterKeyVault.ts`, `src/crypto/secretBox.ts`, `src/c
 | Production mode | `MASTER_KEY_SOURCE=hsm` required; plaintext keys next to `hsm` refused (tests) |
 | Plaintext keys in memory | **Yes.** After startup the three master keys and every configured `_PREVIOUS` key are Buffers in the Auth Core process for its lifetime (and in the operator tools while they run). Per-use copies of the offline key `K` are wiped after the code comparison (phase 8); other decrypted secrets (webhook secrets, admin TOTP seeds) are short-lived values not explicitly wiped. JavaScript gives no guarantee that the runtime has not copied a Buffer |
 | Could the application avoid plaintext master keys? | Possible without changing the stored format (D-032): master keys as non-extractable HSM objects and `C_Decrypt` per secret. Not implemented: needs vendor validation and does not stop an attacker who controls the process from using the HSM |
+
+## Phase 9: checks and the in-HSM option (2026-10-18)
+
+Checks of the current code, with the test that shows each (local, SoftHSM 2.7.0; not a vendor HSM):
+
+| Requirement | Evidence | Status |
+|---|---|---|
+| Production requires the HSM for master keys | `productionBlockers`: `MASTER_KEY_SOURCE must be hsm in production`; unit test `production-posture.test.mjs` | Verified (unit) |
+| No fallback to plaintext keys | With `hsm`, `masterKeyMaterial` returns only what was unwrapped at startup and throws if nothing was loaded; plaintext values next to `hsm` stop the start (`master-key-hsm` test) | Verified locally |
+| Imported KEK refused | `master-key-hsm`: KEK created with `C_CreateObject` from a known value is refused (`CKA_LOCAL`, `CKA_NEVER_EXTRACTABLE`) | Verified on SoftHSM |
+| KEK not extractable | Startup refuses `CKA_EXTRACTABLE` true or `CKA_SENSITIVE` false; `create-kek` sets both | Verified on SoftHSM |
+| HSM failure stops startup | HSM unavailable, wrong PIN, unknown KEK, wrong purpose, decrypt-forbidden KEK (tests) | Verified on SoftHSM |
+| KEK change and key rotation survive restarts | `master-key-hsm` (KEK change, rotation across restarts), `key-rotation` | Verified locally; interruption of the rotation tool mid-run not tested |
+| Backup and restore | Described above (vendor cloning or wrapped backup of the KEK; wrapped values with the configuration backup) | Documented only; not exercised |
+| No key material in logs | Log scans in `master-key-hsm` | Verified locally |
+| Plaintext master keys in process memory | Unchanged | **Open** |
+
+### Can the application stop holding the master keys?
+
+`test/integration/hsm-in-place-decryption.test.mjs` (SoftHSM) records:
+
+1. **Format: yes.** A secret in the stored `k1` format (AES-256-GCM, 96-bit IV, 128-bit tag, associated data `<purpose>:<owner>`) decrypts with `C_Decrypt` and `CKM_AES_GCM` under an HSM key object that holds the same master key; wrong associated data is refused by the HSM. No change of the stored format is needed.
+2. **Migration of the existing keys: not on SoftHSM.** Turning a wrapped master key into a non-extractable HSM object without the plaintext passing through the process needs `C_UnwrapKey`; SoftHSM 2.7.0 answers `CKR_MECHANISM_INVALID` for `CKM_AES_GCM`, and the RFC 5649 alternative (`CKM_AES_KEY_WRAP_PAD` through `C_Encrypt`) is also refused. The workable path is a **new** master key generated in the HSM (`C_GenerateKey`, never extractable) and a rotation of every stored secret to it (`rotateSecretKeys.js` would then encrypt through the HSM). Vendor HSMs differ: some do not allow a caller-supplied GCM IV for `C_Encrypt` (FIPS mode), which the stored format needs.
+3. **Cost: about 20 µs per secret on SoftHSM**, in-process. A network HSM adds its round trip (typically milliseconds) to every offline code check, webhook signing, push key use and admin TOTP check.
+
+What it would and would not change: a memory dump of Auth Core would no longer contain the master keys, but whoever controls the process can still ask the HSM to decrypt any secret, so the offline-confirmation boundary (FI-004) does not move. Not implemented in phase 9: it needs a vendor HSM to validate (mechanisms, IV policy, latency, availability), and a design for HSM outages on the hot paths. Status of "keys in process memory": **not closed**.

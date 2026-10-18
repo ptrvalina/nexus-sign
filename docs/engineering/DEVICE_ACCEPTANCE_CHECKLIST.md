@@ -2,6 +2,8 @@
 
 What has to be shown on physical phones before gate G5 can pass. **Status 2026-10-18: BLOCKED.** Nothing in this list has been executed: this environment has no Xcode, no Android SDK, no physical devices and no TURN server reachable from a mobile network. Gate G5 stays FAIL/BLOCKED until the results table has entries. Record every run in the table at the end, with device, OS version, app build (commit) and the result of each item.
 
+Minimum for phase 9 acceptance (each line is a checklist item below): camera and microphone permissions (E1); start and end of a call (E2, E3, E11, E12); operator refusal (E10); network loss and recovery, ICE restart (E7); TURN from an external and a mobile network (E8); app in background (E6); device revoked during a call (E18); session expiry (E13); repeated result (E23); forged result (E21); terms on the phone equal what the device signs (C1, E24); no recording (E22); release of camera, microphone and temporary resources (E25); offline confirmation v2 (F3–F8). Calls run inside the bank's app through the NEXUS-SIGN SDK (demo apps), with no separate app and no third-party branded service.
+
 Setup: Auth Core and the demo bank on a computer ([demo/README.md](../../demo/README.md)), operator verification enabled (`verificationSetup.js operator local-bank AUDIO,VIDEO`), an operator account in the admin console, TURN reachable for tests across networks.
 
 Minimum devices: one iPhone with Face ID (iOS 17 or later), one iPhone with Touch ID or iOS 15/16 if supported, one Android phone with StrongBox (Pixel 6 or later), one Android phone without StrongBox (TEE only), Android 9 (minSdk 28) if available.
@@ -66,6 +68,9 @@ Minimum devices: one iPhone with Face ID (iOS 17 or later), one iPhone with Touc
 | E20 | Policy met only partly (VIDEO required, operator verified AUDIO only) | Biometric approval is refused by Auth Core until the required channel is VERIFIED |
 | E21 | Forged, expired, replayed or other-transaction provider result tokens (if an external provider is used) | Refused; plan unchanged (server-side tests exist: `verification-results.test.mjs`) |
 | E22 | No recording | Confirm no media files on the device (app container) and no media in Auth Core, Redis or logs; do not record the test session itself unless a separately approved test design requires it |
+| E23 | Operator decision sent twice (double click, network retry in the console) | One decision recorded; the second is refused or ignored; the plan changes once |
+| E24 | Terms on the phone during and after the call | The amount, currency, payee and IBAN on the phone's confirmation screen and biometric prompt equal the operator panel and the bank's own record; the bytes the device signs (`canonicalPayloadBase64`) carry the same values (compare with the evidence export after VERIFIED) |
+| E25 | Resources after every ending (operator hang-up, customer hang-up, expiry, revocation, app kill) | Camera and microphone released (system indicators off), no WebRTC process or capture session left (Xcode Instruments / Android `dumpsys media.camera`), no temporary files in the app container |
 
 ## F. Offline confirmation
 

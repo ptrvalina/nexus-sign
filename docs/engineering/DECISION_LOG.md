@@ -136,3 +136,15 @@ The KEK check required `CKA_SENSITIVE` and not `CKA_EXTRACTABLE`. An AES key imp
 ## D-032 Master keys stay in process memory (FI-005, not changed)
 
 Assessed whether the application could stop holding the master keys: the stored format (`k1$keyId$iv$tag$ct`, AES-256-GCM, associated data per secret) is decryptable by an HSM with `C_Decrypt` and `CKM_AES_GCM` if the master key itself is an HSM object, so a per-operation HSM design (D-027 option b) is format-compatible. It requires importing each master key into the HSM as a non-extractable object (unwrap with the KEK; whether `C_UnwrapKey` accepts `CKM_AES_GCM` is vendor-specific), one HSM round trip per offline code, webhook delivery and admin login, and HSM availability on those paths. Not implemented in this phase: no vendor HSM to validate it, and it does not change the boundary for an attacker controlling the process (who can still ask the HSM). The per-use copy of `K` is now wiped after the comparison.
+
+## D-033 FI-004: OFFLINE_PROVISIONAL is never an authorization to execute (owner decision, phase 9)
+
+The phase 9 instruction settles the question left open in D-029: `OFFLINE_PROVISIONAL` does not authorize a bank operation; `VERIFIED` requires a valid signature of the enrolled device over the exact canonical bytes; production refuses code-only confirmation; v2 stays the default. Implemented as: no option to treat provisional as verified; `confirmed` flag in the bank's `GET` (true only for `VERIFIED`) and in the offline webhooks; the demo bank shows a payment as confirmed only for `VERIFIED` with `confirmed: true`; v1 needs `ALLOW_INSECURE_DEVELOPMENT=true` outside production. This is a technical authorization rule, not a statement about the legal effect of a signature.
+
+## D-034 The bank commit re-verifies the evidence (FI-004, phase 9)
+
+`requestCommit` used to trust `state = 'VERIFIED'`. The database trigger permits `PENDING_USER → VERIFIED` with any non-empty signature value, so a database writer could produce a row the commit accepted. Now the commit loads the single sealed `AUTHORIZATION` record and requires: valid HSM seal, binding to this authorization, credential, identity and stored terms, the same confirmation method as the row, a device signature (`DEVICE_SIGNATURE` or `OFFLINE_SIGNED`) that verifies with the key sealed at enrolment, and on a v2 deployment no `OFFLINE_CODE`. Cost: one seal and one ECDSA verification per commit. It does not help against a party controlling the running process.
+
+## D-035 Service-level device check, tested without the HTTP layer
+
+The phase 8 mutation removing the "same device" check in `submitDeferredSignature` survived because the route's scope check also refuses. A test now calls the compiled service function from a separate process, bypassing the routes, and shows that the service itself refuses (and that the same call with the bound credential succeeds). Both layers keep the check.

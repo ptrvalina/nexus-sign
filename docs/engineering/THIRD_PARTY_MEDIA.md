@@ -112,3 +112,9 @@ Release pages fetched again with the web fetch tool (the shell still cannot reac
 | Build and reproducibility | Built outside the packaging repository and re-packaged (script names); not reproducible from what is published | Prebuilt XCFramework; the build parameters (GN args) are not published for 153.0.0 |
 
 Options for the owner (not acted on, no automatic upgrade): (a) keep 153.0.0 and obtain the tag, checksum and source commit from the maintainer; (b) move the iOS pin to a release that the official page documents (150.0.0 is the newest such release), after evaluating its changes and security fixes; (c) build libwebrtc for both platforms from a named upstream commit (TPM-7). Each needs the evaluation described under "Update process".
+
+## Re-check 2026-10-18 (phase 9)
+
+- Releases page of stasel/WebRTC fetched again: M150 (150.0.0) is "Latest"; 153.0.0 does not appear on the first page (M150 back to M137). The tags page could not be read (the site disallows automated fetching), so the existence of the 153.0.0 tag is **still unconfirmed**; a web search returned only Swift Package Index build pages that could not be opened.
+- No artifact was downloaded (Maven Central and Google Maven refused by the proxy; GitHub downloads not enabled), so no SHA-256 was computed for either binary and no licence or NOTICE file inside them was read.
+- Versions unchanged. Commands to close every field: [SUPPLY_CHAIN_CLOSURE.md](SUPPLY_CHAIN_CLOSURE.md#webrtc-artifacts-tpm-1--tpm-7).

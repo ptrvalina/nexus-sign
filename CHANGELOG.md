@@ -30,6 +30,10 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ### Changed
 
+- Auth Core: `bank-commit-request` re-verifies the authorization's sealed evidence before it accepts (HSM seal, binding to the authorization and its stored terms, device signature with the key sealed at enrolment; on a v2 deployment no code-only `OFFLINE_CODE` record); otherwise 409 `EVIDENCE_INVALID` and an `integrity_violation` audit event (FI-004).
+- Auth Core: `GET /v1/authorizations/{id}` and the webhooks `authorization.verified`, `authorization.offline_provisional` and `authorization.offline_unsigned` carry `confirmed` (true only for `VERIFIED`).
+- Auth Core: `OFFLINE_CONFIRMATION_MODE=immediate` is a development setting: outside production it needs `ALLOW_INSECURE_DEVELOPMENT=true`.
+
 - Offline confirmation: with offline confirmation enabled and `OFFLINE_CONFIRMATION_MODE` unset, a correct code now returns `PROVISIONAL` instead of `VERIFIED` (v2 is the default). Set `OFFLINE_CONFIRMATION_MODE=immediate` outside production to keep the previous behaviour. SDKs up to 2.0.0 refuse the `NXS2.` QR code.
 - Database: `policy_reference` and `policy_version` of an authorization are immutable (trigger, migration 022).
 - HSM: the key-encryption key must have `CKA_LOCAL` and `CKA_NEVER_EXTRACTABLE` (generated in the HSM); an imported KEK is refused at startup.

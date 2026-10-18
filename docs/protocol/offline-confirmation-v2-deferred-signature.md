@@ -57,6 +57,8 @@ The bytes after the prefix are the same base64url canonical bytes. Auth Core iss
 | `403` | The request is signed by another credential than the one the authorization names | no |
 | network error, `429`, `5xx` | Not processed | **yes**, retried |
 
+Owner decision (phase 9): `OFFLINE_PROVISIONAL` is not an authorization to execute; there is no configuration or API that lets an integration treat it as `VERIFIED`. The bank's `GET` carries `confirmed: true` only for `VERIFIED`, and `bank-commit-request` re-verifies the sealed evidence before it accepts.
+
 Auth Core never decides on the signature alone: a valid signature for a `PENDING_USER` authorization is stored, not used to confirm it. The authorization becomes `VERIFIED` only when **both** the code (through the bank) and the signature (from the device) have been accepted.
 
 ## Authorization states

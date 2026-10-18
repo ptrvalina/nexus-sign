@@ -69,3 +69,23 @@ Amount cap per currency (`OFFLINE_CONFIRMATION_MAX_AMOUNT`) and per-credential d
 - Longer codes: raise guessing cost but do not affect the insider case.
 - Letting a deferred signature alone confirm a `PENDING_USER` authorization: cryptographically equivalent to an online confirmation, but it would make the deferred endpoint a second online path with different expiry rules; v2 requires both the code and the signature.
 - A second signed format with its own domain: the existing canonical bytes already bind every field the decision depends on, including the purpose (`domain`).
+
+## Phase 9: scenario verification against the code
+
+Each row names the test that exercises it on the current code (`offline-deferred-signature.test.mjs` = DS, `offline-enforcement.test.mjs` = EN). "Prevented" means Auth Core refuses; "detected" means it is visible to the bank or an auditor but not stopped.
+
+| Scenario | Attacker gets | Still possible | Prevented | Only detected | Trusted components still needed | Test |
+|---|---|---|---|---|---|---|
+| Database write access (application role) | rows | set `state = 'VERIFIED'` with junk in `signature`; insert rows into `evidence_records` and `offline_deferred_signatures`; deny service | **commit** of such a row (evidence re-verified: seal, binding, device signature); finalization with an inserted signature row; changing terms, policy, offline fields | the false `VERIFIED` is visible in `GET` until the bank checks evidence; `integrity_violation` audited on the commit attempt | HSM evidence key, enrolment records, Auth Core process | EN 3, 4; DS 14, 15 |
+| Database + device master key (`env`) | `K` | compute codes → `OFFLINE_PROVISIONAL` | `VERIFIED`, commit | `OFFLINE_UNSIGNED` after the deadline | device signing key on the phone | DS 16 |
+| Knowledge of `K` alone | codes | as above | as above | as above | — | DS 16 |
+| Running Auth Core (code execution, HSM session) | everything the process can do | delay or block uploads and webhooks; refuse service; serve a different QR to the bank screen (the phone shows those terms); seal a v1-style `OFFLINE_CODE` record; seal a fake `CREDENTIAL_ENROLLED` and then a validly signed record with an attacker key; mark rows `VERIFIED`; answer the bank's commit request as it likes | nothing inside Auth Core can be relied on | v1 record: a v2 deployment's commit check and `verify-evidence --reject-offline-code` refuse it; invalid ECDSA: any verifier; fake enrolment: only by the bank reconciling `evidence.appended` enrolments with its own enrolment actions | bank-side verifier with keys obtained out of band, bank reconciliation | EN 6 (v1 record), DS 13, 20 |
+| Forged evidence record (copied, re-pointed, altered) | a row | — | commit (names another authorization; hash/seal mismatch) | verifier fails it | HSM evidence public keys | EN 4, DS 13 |
+| Forged device registration (database only) | a row | — | use of the key (credential integrity against the sealed enrolment) | `integrity_violation` | sealed enrolment | `evidence-integrity` (key replaced in the database cannot approve; verifier rejects a key that differs from the sealed enrolment) |
+| Signature by another enrolled device | its own key | — | upload (403 / 422); service-level check without HTTP | audit `deferred_signature_invalid` | — | DS 4, EN 1 |
+| Replacement device signs for the replaced one | new credential | — | upload (403); replaced device cannot authenticate (401); sweep ends the authorization `OFFLINE_UNSIGNED` | webhook `authorization.offline_unsigned` | — | EN 5 |
+| Device revoked before the upload | — | — | upload; commit | `OFFLINE_UNSIGNED` (`credential_not_active`) | — | DS 5 |
+| Signature reuse (repeat, other authorization, after deadline) | a valid signature | — | second transition (`ALREADY_RECORDED`, one evidence record); use for another authorization (422); late use (409) | `deferred_signature_late` with `verified: true` | — | DS 1, 3, 8, 8b, 10 |
+| Alternative endpoint or webhook | API access | — | device `/signature`, bank `/signature`, second code, escalation: all refuse an `OFFLINE_PROVISIONAL` authorization; Auth Core has no inbound webhook that changes state | — | — | EN 2 |
+| Old SDK | code only | — | `NXS2.` refused by the SDK parser; a code alone is never `VERIFIED` | — | — | Android `OfflineSignatureQueueTest`; DS 1 |
+| Configuration change | config access | set `immediate` outside production with `ALLOW_INSECURE_DEVELOPMENT=true` | `immediate` in production (startup refused); `immediate` outside production without the insecure flag (startup refused) | startup warning lists `OFFLINE_CONFIRMATION_MODE=immediate` | deployment review | DS 18, EN 7, unit posture test |
