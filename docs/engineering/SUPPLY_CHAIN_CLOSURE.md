@@ -54,3 +54,18 @@ Keep: `baseline-report.txt`, the lockfile and its SHA-256, `verification-metadat
 | Known vulnerabilities | compare the WebRTC milestone (M150) with Chromium/WebRTC security advisories | same for the milestone of 153.0.0 |
 
 Gate G7 stays open until these are recorded in [THIRD_PARTY_MEDIA.md](THIRD_PARTY_MEDIA.md). Versions are not changed until then.
+
+## Re-check 2026-10-18 (phase 10)
+
+Network unchanged (npm and PyPI: DNS fails; Maven Central and Google Maven: proxy 403; GitHub API and downloads: not enabled for the session; Docker daemon absent). No lockfile was provided. Nothing in the table above moved to "pinned".
+
+What was possible without the network:
+
+| Check | Command | Result | Authority |
+|---|---|---|---|
+| Licence inventory of the dependency tree used for the local tests | walk of `package.json` files under the assembled `node_modules` (132 packages) | MIT 121, Apache-2.0 5, ISC 5, BSD-3-Clause 1; no copyleft licence | **Not authoritative**: the tree was assembled from GitHub sources for testing, not resolved from a lockfile; the production tree may differ |
+| Secret patterns in the repository | `auth-core/scripts/check-repository.sh` | ok | Pattern check only; not gitleaks |
+| Vector copies identical | `npm run test:vectors` | ok | — |
+| Gradle wrapper jar hash | `sha256sum android-sdk/gradle/wrapper/gradle-wrapper.jar` | `7d3a4ac4…6172` (both modules) | Not compared with Gradle's published checksums here |
+
+Not run, with the reason: `npm ci` and `npm audit` (no lockfile, no registry), SBOM by syft and container scan by Trivy (tools cannot be installed; no Docker daemon), gitleaks and Semgrep/CodeQL (cannot be installed), Gradle dependency verification (no Maven access), `swift package resolve` (no Swift). The commands for a trusted machine are above; exit codes are to be recorded there.

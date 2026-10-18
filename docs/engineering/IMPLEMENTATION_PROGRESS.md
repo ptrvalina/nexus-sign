@@ -14,11 +14,18 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 5 | `7c1c0a8` | FI-001 (SDKs) | Signalling rules, call state machine in both core SDKs, WebRTC modules, demo integration, CI jobs |
 | 6 | `9dee0af` | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
 | Report | `1bbd12e` | — | Milestone report (Russian) |
+| 10 | `588a0a6`, `8635a04`, `b7e6cb6` | FI-004 (evidence trust), FI-005 (rotation interrupted) | Commit check covers chain position; `confirmed` from verified evidence; forged-seal suite on SoftHSM; parser format checks and vectors; rotation tool killed mid-run |
 | 9 | `75736c8`, `0582f54` | FI-004 (enforcement), FI-005 (in-HSM check) | Bank commit re-verifies sealed evidence; `confirmed` flag; v1 behind the insecure flag; enforcement suite; demo bank status; SoftHSM capability check |
 | 8 | `88d9a0d`, `d06a378`, `e068c40` | FI-004 (deferred device signature), FI-005 (KEK attributes) | Offline confirmation v2 in Auth Core and the SDKs, migration 022, verifier `--reject-offline-code`; KEK must be generated in the HSM |
 | 7 | `e8e90e7` | FI-005 (HSM wrapping), FI-004 (threat model, daily limit) | Master keys wrapped by an HSM KEK, `masterKeys.js`, offline forgery tests, native build guide, baseline script, WebRTC provenance update |
 
-## Latest full regression (run `phase9-185423`, 2026-10-18, code at `0582f54`)
+## Latest full regression (run `phase10-194621`, 2026-10-18, code at `b7e6cb6`)
+
+Same tools as below. Every line exit code 0: typecheck and build ok; unit 101/101; vectors ok (valid 8, invalid 37); OpenAPI 44 routes; repository hygiene ok; integration 178/178 (new: `evidence-forgery-hsm` 13, `key-rotation-interrupted` 1); media 3/3; E2E 77/77; demo bank 7/7; sandbox OK (74 tests); Android JVM (stubs) 57/57; Android call module type check ok (17 classes); SDK call conformance 1/1.
+
+Mutation run (separate, code at `8635a04`, the same code as `b7e6cb6`; suites `offline-deferred-signature`, `offline-enforcement`, `evidence-forgery-hsm` with SoftHSM, a run with skipped tests counts as invalid): 25 mutations, 23 caught by a failing check, 2 refused by another layer (M16 binding, M22 device-key comparison: the commit is still refused by the byte or signature check).
+
+## Phase 9 full regression (run `phase9-185423`, 2026-10-18, code at `0582f54`)
 
 Tools: Node 22.22.2, PostgreSQL 16.13, Redis 7.0.15, SoftHSM 2.7.0, OpenJDK 21.0.10, kotlinc 2.0.21, Playwright 1.56.1 with Chromium build 1194, Python 3.11.15. Every line exit code 0.
 

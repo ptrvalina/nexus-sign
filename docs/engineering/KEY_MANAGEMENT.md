@@ -148,3 +148,13 @@ Checks of the current code, with the test that shows each (local, SoftHSM 2.7.0;
 3. **Cost: about 20 µs per secret on SoftHSM**, in-process. A network HSM adds its round trip (typically milliseconds) to every offline code check, webhook signing, push key use and admin TOTP check.
 
 What it would and would not change: a memory dump of Auth Core would no longer contain the master keys, but whoever controls the process can still ask the HSM to decrypt any secret, so the offline-confirmation boundary (FI-004) does not move. Not implemented in phase 9: it needs a vendor HSM to validate (mechanisms, IV policy, latency, availability), and a design for HSM outages on the hot paths. Status of "keys in process memory": **not closed**.
+
+## Phase 10 (2026-10-18)
+
+| Item | Evidence | Status |
+|---|---|---|
+| Rotation tool killed mid-run | `key-rotation-interrupted.test.mjs`: 260 stored offline keys, second batch held on a row lock, tool killed with SIGKILL; the first batch (200) stays under the new key, the interrupted batch is rolled back entirely (60 under the old key), every secret decrypts unchanged, Auth Core with both keys in the ring confirms offline, a second run re-encrypts the remaining 60, then the old key is not needed | Verified locally (software HSM; master keys from the environment) |
+| KEK change interrupted | `masterKeys.js rewrap` writes new `*_WRAPPED` values to standard output and changes no stored data; an interruption leaves the old configuration valid | By design; nothing to roll back |
+| Restart at each step of a rotation | before the tool, after it, and in the middle (above); the ring accepts both keys throughout | Verified locally |
+| Rotation to a master key generated inside the HSM | needs the tool to encrypt through the HSM (`C_Encrypt` with a caller-supplied GCM IV): not implemented; the SoftHSM capability check shows the stored format decrypts in the HSM, but not every vendor HSM accepts a caller IV | Not implemented; vendor HSM BLOCKED |
+| Plaintext master keys in process memory | unchanged | Open |

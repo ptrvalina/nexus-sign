@@ -148,3 +148,11 @@ The phase 9 instruction settles the question left open in D-029: `OFFLINE_PROVIS
 ## D-035 Service-level device check, tested without the HTTP layer
 
 The phase 8 mutation removing the "same device" check in `submitDeferredSignature` survived because the route's scope check also refuses. A test now calls the compiled service function from a separate process, bypassing the routes, and shows that the service itself refuses (and that the same call with the bound credential succeeds). Both layers keep the check.
+
+## D-036 Commit check covers the chain position; `confirmed` follows the evidence (phase 10)
+
+A record with a genuine HSM seal could still be inserted next to the chain rather than appended to it (any party able to seal). The commit check now requires the sealed `chainSequence` and `previousEvidenceHash` to match the stored row and the predecessor. `confirmed` in the bank's `GET` was derived from the state column, so a database write produced `confirmed: true`; it is now true only when the same evidence check passes at read time, with `evidenceProblem` otherwise. It remains a value computed by Auth Core, not a cryptographic fact for the bank.
+
+## D-037 Device parsers check ID and nonce formats (phase 10)
+
+The protocol requires valid formats on the device; the parsers checked amount, currency and timestamps only. Added: lowercase UUIDs for `authorization_id` and `credential_id`, 9-digit `nexus_id`, 64-character lowercase hex `nonce`, on Android, iOS and in the sandbox, with vectors. Auth Core always issued these formats; the canonical encoding is unchanged, so no version change. Look-alike payee names remain valid (they are signed and shown as they are; FI-034).
