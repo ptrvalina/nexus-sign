@@ -41,6 +41,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     private val attestationProvider = AttestationProvider(appContext, config.playIntegrityCloudProjectNumber)
     private val networkClient = NetworkClient(config)
     private val pushKeys by lazy { PushKeyStore(appContext, config.bankId) }
+    private val offlineSignatures by lazy { OfflineSignatureQueue(SharedPreferencesSignatureStorage(appContext, config.bankId)) }
 
     init {
         useDeviceAuthentication(state.registeredCredentialId())
@@ -287,6 +288,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      * [NexusOfflineChallenge.transaction].
      */
     fun readOfflineChallenge(qrPayload: String): NexusOfflineChallenge {
+        val version = DeviceProtocol.qrPayloadVersion(qrPayload)
         val bytes = DeviceProtocol.qrPayloadBytes(qrPayload)
         val transaction = try {
             SignedPayload.parse(bytes)
@@ -297,19 +299,47 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw NEXUSSignError.AuthorizationPayloadInvalid("wrong_device", "the QR code is for another device")
         }
         requireNotExpired(transaction)
-        return NexusOfflineChallenge(transaction, bytes)
+        return NexusOfflineChallenge(transaction, bytes, requiresDeviceSignature = version == 2)
     }
 
     /**
      * Asks for biometric confirmation showing the transaction and returns the
      * 8-digit code the customer types on the bank's screen. Works without
      * network. The code is valid only for this exact transaction.
+     *
+     * Offline confirmation v2 ([NexusOfflineChallenge.requiresDeviceSignature]):
+     * first the signing key signs the transaction (its own prompt: Android
+     * binds one key to one prompt) and the signature is stored; only then is
+     * the code computed (second prompt). Auth Core confirms the payment when
+     * the signature arrives: call [submitPendingOfflineSignatures] whenever
+     * the app is online.
      */
     suspend fun confirmOffline(challenge: NexusOfflineChallenge, activity: FragmentActivity): String {
         if (state.registeredCredentialId() == null) throw NEXUSSignError.NotRegistered
         if (!keyManager.hasOfflineKey()) throw NEXUSSignError.OfflineConfirmationUnavailable
         requireNotExpired(challenge.transaction)
         requireBiometrics(activity)
+
+        if (challenge.requiresDeviceSignature) {
+            val authorizationId = challenge.transaction.authorizationId
+            if (!UUID_PATTERN.matches(authorizationId)) throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_qr", "authorization ID is not a UUID")
+            val signature = try {
+                keyManager.signatureForAuthorization()
+            } catch (e: NEXUSSignError.CredentialInvalidated) {
+                forgetRegistration()
+                throw e
+            }
+            val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), challenge.transaction.confirmationText())
+                .cryptoObject?.signature ?: signature
+            val signatureDer = try {
+                authorized.update(challenge.canonicalPayload)
+                authorized.sign()
+            } catch (e: Exception) {
+                throw NEXUSSignError.KeyOperationFailed(e)
+            }
+            // Stored before the code exists: no code without its signature.
+            offlineSignatures.add(authorizationId, Base64.getEncoder().encodeToString(signatureDer))
+        }
 
         val mac = try {
             keyManager.offlineMac()
@@ -326,6 +356,27 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw NEXUSSignError.KeyOperationFailed(e)
         }
         return DeviceProtocol.offlineCode(tag)
+    }
+
+    /**
+     * Offline confirmation v2: uploads the signatures made by [confirmOffline]
+     * that Auth Core does not have yet. Call it when the app starts and
+     * whenever it regains a connection. Signatures Auth Core accepted, or can
+     * never accept (the payment was finalized otherwise, or the signature is
+     * not valid for it), are removed; the others are kept for the next call.
+     */
+    suspend fun submitPendingOfflineSignatures(): OfflineSignatureDelivery {
+        if (state.registeredCredentialId() == null) return OfflineSignatureDelivery(0, 0, offlineSignatures.pending().size)
+        return offlineSignatures.deliver { item ->
+            if (!UUID_PATTERN.matches(item.authorizationId)) return@deliver UploadOutcome.Refused(0)
+            try {
+                UploadOutcome.ofStatus(networkClient.uploadDeferredSignature(item.authorizationId, item.signature))
+            } catch (e: NEXUSSignError.ServerError) {
+                UploadOutcome.ofStatus(e.statusCode)
+            } catch (e: NEXUSSignError.NetworkUnavailable) {
+                UploadOutcome.Retry
+            }
+        }
     }
 
     // --- Secure push (bank push mode NEXUS) ---

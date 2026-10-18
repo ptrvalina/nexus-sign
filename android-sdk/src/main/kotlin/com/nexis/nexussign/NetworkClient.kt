@@ -94,6 +94,16 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
         return decode(send("/v1/mobile/authorizations/$authorizationId/signature", body, TokenSource.Device))
     }
 
+    /** Offline confirmation v2: the deferred device signature. Returns the
+     * HTTP status; every non-2xx answer is a [NEXUSSignError.ServerError]. */
+    suspend fun uploadDeferredSignature(authorizationId: String, signatureBase64: String): Int {
+        val body = buildJsonObject {
+            put("signature", signatureBase64)
+            put("signatureFormat", "der")
+        }
+        return send("/v1/mobile/authorizations/$authorizationId/deferred-signature", body, TokenSource.Device).code
+    }
+
     @kotlinx.serialization.Serializable
     class PushRegistrationResponse(val status: String, val provider: String, val serverPublicKeyPem: String? = null, val keyId: String)
 

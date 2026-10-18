@@ -12,6 +12,9 @@ enum DeviceProtocol {
     static let offlineKDFSalt = "NEXUS-SIGN/OFFLINE/v1"
     static let offlineCodeDomain = "NEXUS-SIGN/OFFLINE-CODE/v1"
     static let qrPrefix = "NXS1."
+    /// Offline confirmation v2: the same bytes; the device also signs them
+    /// and uploads the signature later (deferred device signature).
+    static let qrPrefixV2 = "NXS2."
     static let codeDigits = 8
 
     static func requestSigningInput(method: String, path: String, timestamp: String, nonce: String, credentialID: String, body: Data) -> Data {
@@ -51,12 +54,18 @@ enum DeviceProtocol {
     }
 
     /// The canonical authorization bytes carried by an offline QR code.
+    /// 1 for `NXS1.`, 2 for `NXS2.`; anything else is refused.
+    static func qrPayloadVersion(_ qrPayload: String) throws -> Int {
+        let text = qrPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix(qrPrefix) { return 1 }
+        if text.hasPrefix(qrPrefixV2) { return 2 }
+        throw NEXUSSignError.authorizationPayloadInvalid(reason: "invalid_qr", detail: "unknown QR format")
+    }
+
     static func qrPayloadBytes(_ qrPayload: String) throws -> Data {
         let text = qrPayload.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.hasPrefix(qrPrefix) else {
-            throw NEXUSSignError.authorizationPayloadInvalid(reason: "invalid_qr", detail: "unknown QR format")
-        }
-        var base64 = String(text.dropFirst(qrPrefix.count))
+        let prefix = try qrPayloadVersion(text) == 2 ? qrPrefixV2 : qrPrefix
+        var base64 = String(text.dropFirst(prefix.count))
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)

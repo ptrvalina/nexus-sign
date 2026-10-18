@@ -69,8 +69,13 @@ When the bank has enabled it, the customer can confirm a transaction shown as a 
 ```kotlin
 val challenge = sdk.readOfflineChallenge(scannedText)        // verifies the bytes, no network
 show(challenge.transaction)                                   // same fields as online
-val code = sdk.confirmOffline(challenge, activity)            // biometric prompt, then 8 digits
+val code = sdk.confirmOffline(challenge, activity)            // biometric prompt(s), then 8 digits
+
+// Offline confirmation v2: whenever the app starts and when the connection returns
+lifecycleScope.launch { sdk.submitPendingOfflineSignatures() }
 ```
+
+With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default on Auth Core 2.0.0) the SDK first signs the transaction with the signing key — its own biometric prompt, because Android binds a key to one prompt — and stores the signature, then shows the second prompt for the code. Auth Core confirms the payment when the signature arrives; `submitPendingOfflineSignatures()` uploads what is pending and keeps what could not be delivered ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). Pending signatures are kept in `com.nexis.nexussign.<bankId>.offline`; exclude it from backup like the keys file.
 
 The offline key is an HMAC key in the Keystore that can only be used through the `BiometricPrompt` showing the transaction (`CryptoObject(Mac)`); it works from Android 9. Check `isOfflineConfirmationAvailable()` before offering it. See [docs/architecture/device-authentication-and-offline-confirmation.md](../docs/protocol/device-authentication-and-offline-confirmation.md).
 

@@ -67,7 +67,12 @@ When the bank has enabled it, the customer can confirm a transaction shown as a 
 let challenge = try sdk.readOfflineChallenge(qrPayload: scannedText)   // verifies the bytes, no network
 show(challenge.transaction)                                             // same fields as online
 let code = try await sdk.confirmOffline(challenge)                      // Face ID / Touch ID, then 8 digits
+
+// Offline confirmation v2: when the app starts and when the connection returns
+Task { await sdk.submitPendingOfflineSignatures() }
 ```
+
+With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default on Auth Core 2.0.0) one biometric evaluation authorizes both Secure Enclave keys: the signing key signs the transaction and the signature is stored before the code is computed. Auth Core confirms the payment when the signature arrives ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). This code has not been compiled or run on a device in the environment that wrote it.
 
 The Secure Enclave key agreement runs inside the biometric prompt that shows the transaction. Check `isOfflineConfirmationAvailable()` before offering it. See [device authentication and offline confirmation](../docs/protocol/device-authentication-and-offline-confirmation.md).
 

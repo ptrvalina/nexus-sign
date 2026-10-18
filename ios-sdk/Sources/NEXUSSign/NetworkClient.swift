@@ -60,6 +60,13 @@ final class NetworkClient {
         return try await send("POST", "/v1/mobile/authorizations/\(authorizationID)/signature", body: body)
     }
 
+    /// Offline confirmation v2: the deferred device signature. Any 2xx means
+    /// Auth Core has it; other answers are `serverError(statusCode:)`.
+    func uploadDeferredSignature(authorizationID: String, signatureBase64: String) async throws {
+        let body: [String: Any] = ["signature": signatureBase64, "signatureFormat": "der"]
+        _ = try await perform("POST", "/v1/mobile/authorizations/\(authorizationID)/deferred-signature", body: body, token: .device)
+    }
+
     struct PushRegistrationResponse: Decodable {
         let status: String
         let provider: String

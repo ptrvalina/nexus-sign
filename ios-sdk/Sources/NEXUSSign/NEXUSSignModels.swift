@@ -105,6 +105,15 @@ public struct NexusOfflineChallenge {
     /// The transaction exactly as it is confirmed; render the screen from this.
     public let transaction: NexusSignedTransaction
     let canonicalPayload: Data
+    /// Offline confirmation v2 (QR `NXS2.`): `confirmOffline` also signs the
+    /// transaction and keeps the signature for upload.
+    public let requiresDeviceSignature: Bool
+
+    init(transaction: NexusSignedTransaction, canonicalPayload: Data, requiresDeviceSignature: Bool = false) {
+        self.transaction = transaction
+        self.canonicalPayload = canonicalPayload
+        self.requiresDeviceSignature = requiresDeviceSignature
+    }
 }
 
 struct VerifyResponse: Decodable { let status: NEXUSVerificationOutcome; let reason: String? }
