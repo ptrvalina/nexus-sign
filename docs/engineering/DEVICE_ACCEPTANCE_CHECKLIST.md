@@ -73,6 +73,12 @@ Minimum devices: one iPhone with Face ID (iOS 17 or later), one iPhone with Touc
 |---|---|---|
 | F1 | QR challenge within the cap | Code accepted |
 | F2 | Above `OFFLINE_CONFIRMATION_MAX_AMOUNT` | No QR offered (409); device signature works |
+| F3 | v2 (`NXS2.`), phone in airplane mode: confirm, type the code | Bank sees `PROVISIONAL`; Android shows two biometric prompts with the transaction, iOS one; record what each prompt shows |
+| F4 | Then switch the network on and start the app | `submitPendingOfflineSignatures()` delivers 1; authorization `VERIFIED`, evidence `OFFLINE_SIGNED`; `verify-evidence.mjs` passes |
+| F5 | Cancel the second Android prompt after the first | No code shown; the stored signature is uploaded later and answered `RECEIVED` or 409; nothing is confirmed |
+| F6 | Kill the app after the code, before going online | The signature survives the restart and is delivered |
+| F7 | Old app (SDK 2.0.0-rc.2) with an `NXS2.` QR | QR refused (`invalid_qr`); no code |
+| F8 | Revoke the device while a confirmation is provisional | Bank receives `authorization.offline_unsigned` (`credential_not_active`) |
 
 ## G. Recovery and replacement
 

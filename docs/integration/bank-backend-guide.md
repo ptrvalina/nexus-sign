@@ -252,6 +252,8 @@ Webhooks report the outcome of each authorization, bank transaction state change
 | `authorization.verified` | `authorizationId`, `nexusId`, `transactionReference`, `confirmationMethod`, `evidence` (`evidenceId`, `chainSequence`, `evidenceHash`), `evidenceHead`. Keep `evidenceHead`: a verifier given the latest head the bank holds (`verify-evidence.mjs --expect-head`) detects records removed from the end of the chain |
 | `authorization.rejected` | `authorizationId`, `nexusId`, `transactionReference`, `reason` (`signature_attempt_limit`, `verification_failed`, `REJECTED`) |
 | `authorization.expired` | `authorizationId`, `nexusId`, `transactionReference`, `expiresAt`. Sent once, when the authorization is moved to `EXPIRED` by a late confirmation attempt or by the periodic sweep (`AUTHORIZATION_EXPIRY_SWEEP_MS`). `GET /v1/authorizations/{id}` reports `EXPIRED` as soon as `expiresAt` has passed |
+| `authorization.offline_provisional` | `authorizationId`, `nexusId`, `transactionReference`, `offlineCodeAcceptedAt`, `signatureDeadline`. Offline confirmation v2: the code was correct, the device signature has not arrived. **Not a confirmation** (section 10) |
+| `authorization.offline_unsigned` | `authorizationId`, `nexusId`, `transactionReference`, `reason` (`deadline`, `credential_not_active`, `identity_not_active`). A code was accepted and no valid device signature arrived: a security event (section 10) |
 | `evidence.appended` | `nexusId`, `recordType`, `evidenceId`, `chainSequence`, `evidenceHash`, `previousEvidenceHash`, `sealKeyId`, `hsmSignature`. Sent for every record added to a customer's evidence chain (enrolment, recovery set-up, confirmation), in the same transaction. Keep these heads outside Auth Core: with them `verify-evidence.mjs --heads` detects records removed from the end of a chain, which the chain alone cannot show (FI-019). The head is sealed by the evidence key, so the bank can check it came from Auth Core. New in 2.0.0 |
 | `authorization.bank_transaction.commit_requested` | `authorizationId`, `bankTransactionReference` |
 | `authorization.bank_transaction.committed` | `authorizationId`, `state`, `error` |
@@ -351,7 +353,7 @@ The customer confirms with a phone that has no network. Requirements: `OFFLINE_C
    ```
 
    ```json
-   { "authorizationId": "...", "qrPayload": "NXS1.eyJhbW91bnRfbWlub3Ii...", "codeDigits": 8, "expiresAt": "..." }
+   { "authorizationId": "...", "qrPayload": "NXS2.eyJhbW91bnRfbWlub3Ii...", "codeDigits": 8, "expiresAt": "..." }
    ```
 
 3. The customer scans it in the bank app, sees the transaction, passes the biometric prompt and reads an 8-digit code.
@@ -362,9 +364,12 @@ The customer confirms with a phone that has no network. Requirements: `OFFLINE_C
      -H 'Content-Type: application/json' -d '{"code":"40718266"}'
    ```
 
-The result has the same form as a signature submission: `{"status":"VERIFIED","evidence":{...}}`, or `FAILED` with `reason` and `attempts`, or 410 with `EXPIRED`. Wrong codes count toward the same five-attempt limit as wrong signatures. A correct code runs the same checks as a signature, including the verification plan, and seals evidence with `confirmationMethod: OFFLINE_CODE`.
+Wrong codes count toward the same five-attempt limit as wrong signatures; a correct code runs the same checks as a signature, including the verification plan. What a correct code returns depends on `OFFLINE_CONFIRMATION_MODE`:
 
-An offline code is computed with a key that Auth Core also holds. Auth Core can verify it; a third party cannot. The bank decides per payment type whether offline confirmation is acceptable ([what an offline code proves](../protocol/device-authentication-and-offline-confirmation.md#what-an-offline-code-proves)).
+- **`deferred_signature` (v2, default, required in production; QR `NXS2.`):** `{"status":"PROVISIONAL","signatureDeadline":"..."}` and the webhook `authorization.offline_provisional`. **This is not a confirmation.** While offline the phone also signed the transaction with its device key; when it is online again it uploads that signature, the authorization becomes `VERIFIED` (`confirmationMethod: OFFLINE_SIGNED`, webhook `authorization.verified` with evidence). If the phone had already uploaded the signature when the code arrives, the answer is `VERIFIED` at once. Without a signature by the deadline (default 72 hours), or when the credential is revoked first, the authorization becomes `OFFLINE_UNSIGNED` and `authorization.offline_unsigned` is sent: treat it as a security event (a code was accepted that the device never signed).
+- **`immediate` (v1, development only; QR `NXS1.`):** `{"status":"VERIFIED","evidence":{...}}`, evidence `confirmationMethod: OFFLINE_CODE`.
+
+Execute the payment only on `VERIFIED`. `bank-commit-request` is refused (409) for `OFFLINE_PROVISIONAL`. If the bank's own process executes on `PROVISIONAL`, it accepts the v1 risk for that payment: a code is an HMAC under a key Auth Core also holds, so whoever controls Auth Core could compute it ([threat model](../security/offline-confirmation-threat-model.md)). Evidence verifiers must be of this release to accept `OFFLINE_SIGNED`; after switching to v2, run them with `--reject-offline-code` so that no code-only record is accepted ([offline confirmation v2](../protocol/offline-confirmation-v2-deferred-signature.md)).
 
 ## 11. Adaptive verification
 

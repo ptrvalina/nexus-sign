@@ -113,3 +113,26 @@ Checked first what the stack supports: pkcs11js exposes C_Encrypt/C_Decrypt with
 ## D-028 FI-004: bound the residual risk now; the complete fix waits for the owner
 
 Traced the protocol (docs/security/offline-confirmation-threat-model.md): without `K` no party, including a compromised bank backend or a database writer, gets a code accepted (tests). With `K` — database plus the device master key, or a running Auth Core — codes can be computed; that is inherent in a shared-key MAC. Added a per-credential daily ceiling next to the amount cap (both deployment-side, required in production) and made the master key HSM-wrapped (D-027), which removes the "database plus configuration" path. The complete correction is a deferred device signature, a protocol extension with SDK and evidence changes; it is written up for an owner decision, not implemented.
+
+## D-029 FI-004: deferred device signature implemented as offline confirmation v2
+
+The phase 8 instruction asked for the deferred signature to be designed and implemented without silently choosing a risky variant. Choices made, each the conservative option:
+
+- **Format:** the existing canonical bytes and signing key, not a new signed structure; the bytes already bind every required field including the purpose (`domain`). A second format would be a second parser on three platforms.
+- **When `VERIFIED`:** only with both the code and the signature. A code alone is `OFFLINE_PROVISIONAL`; a signature alone is stored, not used. Auth Core's commit flow needs `VERIFIED`, so a bank using it waits by construction. **Open for the owner and the banks:** whether a bank may execute on `PROVISIONAL` (its own systems can); the documentation recommends not to.
+- **Default and production:** `deferred_signature` by default and required in production; v1 kept for development and existing data. Changing the default changes behaviour for every configuration that had offline confirmation enabled without setting the mode; recorded in the upgrade notes.
+- **Old SDKs:** refused through the new QR prefix rather than left to produce codes that can never be completed.
+- **Deadline:** 72 hours by default (1–720); after it, or when the credential or identity is no longer `ACTIVE`, the confirmation ends `OFFLINE_UNSIGNED`.
+- **Late signatures:** never used after `OFFLINE_UNSIGNED`; audited with the verification result.
+
+## D-030 Policy reference and version are immutable
+
+While adding the v2 states to the authorization trigger: `policy_reference` and `policy_version` are part of the signed bytes but were not in the trigger's immutable list. A change was caught by the hash check at confirmation time, so no wrong confirmation was possible, but the row could be changed. Migration 022 adds both to the immutable fields.
+
+## D-031 KEK must be generated in the HSM (FI-005)
+
+The KEK check required `CKA_SENSITIVE` and not `CKA_EXTRACTABLE`. An AES key imported with `C_CreateObject` from a known value satisfies both, so a copy of the KEK could exist outside the HSM. Auth Core now also requires `CKA_LOCAL` and `CKA_NEVER_EXTRACTABLE` (test: imported KEK refused). `masterKeys.js create-kek` already generates such keys. Vendor HSMs set these attributes per the PKCS#11 specification; to be confirmed on the vendor HSM.
+
+## D-032 Master keys stay in process memory (FI-005, not changed)
+
+Assessed whether the application could stop holding the master keys: the stored format (`k1$keyId$iv$tag$ct`, AES-256-GCM, associated data per secret) is decryptable by an HSM with `C_Decrypt` and `CKM_AES_GCM` if the master key itself is an HSM object, so a per-operation HSM design (D-027 option b) is format-compatible. It requires importing each master key into the HSM as a non-extractable object (unwrap with the KEK; whether `C_UnwrapKey` accepts `CKM_AES_GCM` is vendor-specific), one HSM round trip per offline code, webhook delivery and admin login, and HSM availability on those paths. Not implemented in this phase: no vendor HSM to validate it, and it does not change the boundary for an attacker controlling the process (who can still ask the HSM). The per-use copy of `K` is now wiped after the comparison.

@@ -14,9 +14,32 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 5 | `7c1c0a8` | FI-001 (SDKs) | Signalling rules, call state machine in both core SDKs, WebRTC modules, demo integration, CI jobs |
 | 6 | `9dee0af` | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
 | Report | `1bbd12e` | — | Milestone report (Russian) |
+| 8 | `88d9a0d`, `d06a378`, `e068c40` | FI-004 (deferred device signature), FI-005 (KEK attributes) | Offline confirmation v2 in Auth Core and the SDKs, migration 022, verifier `--reject-offline-code`; KEK must be generated in the HSM |
 | 7 | `e8e90e7` | FI-005 (HSM wrapping), FI-004 (threat model, daily limit) | Master keys wrapped by an HSM KEK, `masterKeys.js`, offline forgery tests, native build guide, baseline script, WebRTC provenance update |
 
-## Latest full regression (run `batch7-112422`, 2026-10-18)
+## Latest full regression (run `phase8-173638`, 2026-10-18)
+
+Same command as below, on the phase 8 working tree before the commits (the commits contain exactly that tree's code). Baseline run on `760d066` before any change: `phase8-baseline-115010`, identical to `batch7-112422`.
+
+| Suite | Result |
+|---|---|
+| Typecheck, build | ok |
+| Unit | 100/100 |
+| Vectors | ok |
+| OpenAPI | 44 routes match |
+| Repository hygiene | ok |
+| Integration (incl. SoftHSM) | 154/154 (new: `offline-deferred-signature` 19, `master-key-hsm` +1) |
+| Media (Chromium WebRTC) | 3/3 |
+| End to end | 77/77 (offline section now runs v2) |
+| Demo bank | 5/5 |
+| Sandbox | OK (simulates offline v1 only) |
+| Android SDK, JVM (stubs) | 57/57 |
+| Android call module type check | ok, 17 classes |
+| SDK call conformance | 1/1 |
+
+Mutation check of the v2 suite: 13 mutations, 12 caught; the surviving one (service-level check that the uploading device is the bound credential) is also enforced by the route's scope check.
+
+## Earlier full regression (run `batch7-112422`, 2026-10-18)
 
 New in this run compared with `batch6-104748`: unit 99 → 100, integration 118 → 134 (`master-key-hsm` 10, `offline-forgery` 6). Commits after `e8e90e7` changed documentation only.
 

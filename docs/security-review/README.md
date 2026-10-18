@@ -10,7 +10,7 @@ Scope under review: NEXUS-SIGN Auth Core, the iOS and Android SDKs, the optional
 |---|---|
 | Product and architecture | [README](../../README.md), [architecture](../architecture/), [audit: architecture and data flows](../audit/forensic-inventory/2026-10-16/03_ARCHITECTURE_AND_DATA_FLOWS.md) |
 | Threat model | [threat model](../security/threat-model.md), [offline confirmation threat model](../security/offline-confirmation-threat-model.md) |
-| Protocols | [authorization protocol v1](../protocol/authorization-protocol-v1.md), [device authentication and offline confirmation](../protocol/device-authentication-and-offline-confirmation.md), [verification result v1](../protocol/verification-result-v1.md), [evidence format](../protocol/evidence-format.md), [secure push](../protocol/secure-push.md) |
+| Protocols | [authorization protocol v1](../protocol/authorization-protocol-v1.md), [device authentication and offline confirmation](../protocol/device-authentication-and-offline-confirmation.md), [offline confirmation v2](../protocol/offline-confirmation-v2-deferred-signature.md), [verification result v1](../protocol/verification-result-v1.md), [evidence format](../protocol/evidence-format.md), [secure push](../protocol/secure-push.md) |
 | Audio/video calls | [ADR 0017](../adr/0017-in-app-audio-video-calls.md), [operations](../operations/audio-video-calls.md), [third-party media](../engineering/THIRD_PARTY_MEDIA.md) |
 | Key management | [key management](../engineering/KEY_MANAGEMENT.md), [key rotation runbook](../operations/runbooks/key-rotation.md), [attestation](../security/attestation.md) |
 | Dependencies | [dependency inventory](DEPENDENCY_INVENTORY.md) (not authoritative) |
@@ -24,7 +24,7 @@ Scope under review: NEXUS-SIGN Auth Core, the iOS and Android SDKs, the optional
 2. **Device request authentication:** `middleware/mobileAuth.ts`, nonce store (PostgreSQL), clock handling, the mTLS gateway exemption list (`middleware/mtlsGateway.ts`).
 3. **Evidence:** sealing (`evidenceService.ts`, PKCS#11 adapter), chain and head checkpoints (`evidence.appended`, `verify-evidence.mjs --heads`), integrity checks before key use (`credentialIntegrity.ts`).
 4. **Key management:** `masterKeyVault.ts`, `secretBox.ts`, `cli/masterKeys.ts`, `cli/rotateSecretKeys.ts`, migration 020 (the trigger exception for re-encryption).
-5. **Offline confirmation:** confirm the residual risk statement and the limits; evaluate the deferred-signature proposal.
+5. **Offline confirmation v2:** `submitDeferredSignature`, `acceptOfflineCode` and `expireUnsignedOfflineConfirmations` in `authorizationConfirmation.ts`, migration 022 (trigger), `offline-deferred-signature.test.mjs`; whether any path reports `VERIFIED` on a code alone; the residual cases in the threat model (forged v1 and enrolment records by a controlled Auth Core, provisional acted upon); the SDK ordering (signature stored before the code).
 6. **Verification results and calls:** `crypto/jws.ts`, `verificationResult.ts` (claims, single use, key lookup), `verificationCall.ts` (Lua state machine, authorization of device and operator, closure), admin routes and console (`public/admin/calls.js`), TURN credential issuance.
 7. **Admin console:** session and TOTP, CSRF, bank scope, four-eyes approvals.
 8. **Mobile platforms:** key storage and access control (Secure Enclave, Keystore/StrongBox), pinning, the call modules' permission and lifecycle handling.
@@ -33,7 +33,7 @@ Scope under review: NEXUS-SIGN Auth Core, the iOS and Android SDKs, the optional
 
 - No native build, no device run, no vendor HSM, no authentic lockfile, no dependency or container scans, no load tests (REMAINING_RISKS.md R-01 … R-12).
 - WebRTC binaries: provenance, checksums and licence inventory unverified (R-04).
-- Offline codes are symmetric (R-07). Per-operation attestation is absent (R-08).
+- Offline codes are symmetric; v2 needs the device signature for `VERIFIED`, residual cases in R-07. Per-operation attestation is absent (R-08).
 - A call shows a person; it does not identify them (R-17).
 
 ## Environment to reproduce the test results

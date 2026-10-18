@@ -92,3 +92,23 @@ Consequence: the pin `exact: "153.0.0"` is kept, because changing it without evi
 ### What closes TPM-1 to TPM-7
 
 Run on a machine with access to Maven Central and GitHub (commands in `docs/engineering/NATIVE_BUILD_GUIDE.md`): download the AAR, `.pom`, `.asc` and the XCFramework zip; compute SHA-256; verify the Maven PGP signature against a key fingerprint published by the project itself (not by a third party); compare the SwiftPM `binaryTarget` checksum in stasel's `Package.swift` at the tag; read the licence and NOTICE files inside each artifact; record everything here.
+
+## Re-check 2026-10-18 (phase 8)
+
+Release pages fetched again with the web fetch tool (the shell still cannot reach Maven Central, Google Maven, the npm registry or GitHub downloads: proxy 403 / no DNS; no GitHub account linked). Manifests unchanged: `android-sdk-calls/build.gradle.kts` pins `io.github.webrtc-sdk:android:150.7871.01`; `ios-sdk-calls/Package.swift` pins `stasel/WebRTC` `exact: "153.0.0"`. No version was changed.
+
+| Field | Android: `io.github.webrtc-sdk:android` | iOS: `stasel/WebRTC` |
+|---|---|---|
+| Exact name and version in the manifest | `io.github.webrtc-sdk:android:150.7871.01` | `https://github.com/stasel/WebRTC.git`, `exact: "153.0.0"` |
+| Official source | github.com/webrtc-sdk/android (packaging), Maven Central (artifact) | github.com/stasel/WebRTC (releases, `Package.swift` with `binaryTarget`) |
+| Official release / commit | Release v150.7871.01, marked Latest; tag commit `7b6390fb098303b31af76906bf15f7decaa4ef95` | **153.0.0 not on the releases page** (pages show M150 "Latest" back to M137). For comparison, the official M150 (150.0.0) entry states commit `6ed87f05…`, WebRTC commit `1f975dfd…` and an SHA-256 `f9890492…cf6b2` |
+| Checksum of a downloaded artifact | **Not obtained** (no download possible) | **Not obtained**. The 153.0.0 checksum known from third-party texts remains unverified; the M150 checksum is the maintainer's statement, not a hash we computed |
+| Native source revision | Not stated on the release (third-party claim only) | For 153.0.0: none from the maintainer; for 150.0.0: stated on the release page |
+| Licence of the wrapper | Repository: MIT; POM: BSD-3-Clause (inconsistent) | Repository licence not re-read in this phase |
+| Licence of WebRTC itself | BSD-3-Clause with the WebRTC patent grant (upstream); applies to the libwebrtc code, not automatically to everything in the binary | same |
+| Licences of embedded components | Not inventoried (BoringSSL, libvpx, Opus, libyuv, usrsctp, abseil and others are usual in libwebrtc builds; presence and versions unknown for these binaries) | same |
+| Codecs used by our modules | VP8, VP9 (filtered factories), Opus | VP8, VP9 (filtered factories), Opus |
+| Codecs present in the binary | **Unknown.** Filtering what our code negotiates does not show what is compiled in; H.264 may be present | **Unknown**; the distribution states the H.264 encoder is enabled |
+| Build and reproducibility | Built outside the packaging repository and re-packaged (script names); not reproducible from what is published | Prebuilt XCFramework; the build parameters (GN args) are not published for 153.0.0 |
+
+Options for the owner (not acted on, no automatic upgrade): (a) keep 153.0.0 and obtain the tag, checksum and source commit from the maintainer; (b) move the iOS pin to a release that the official page documents (150.0.0 is the newest such release), after evaluating its changes and security fixes; (c) build libwebrtc for both platforms from a named upstream commit (TPM-7). Each needs the evaluation described under "Update process".

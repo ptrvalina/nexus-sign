@@ -195,6 +195,8 @@ The signed bytes are the protocol v1 object, so the amount, currency, beneficiar
 
 A transaction confirmed offline with an 8-digit code ([offline confirmation](device-authentication-and-offline-confirmation.md)) is sealed and chained the same way, with `confirmationMethod: OFFLINE_CODE`, `signatureFormat: hmac`, `signatureAlgorithm: HMAC-SHA256` and the HMAC tag behind the code in `signature`. The record binds the exact bytes the phone displayed, but the code was computed with a key Auth Core also holds, so the customer's part cannot be re-verified by a third party. The verifier checks everything else and counts these records separately (`offline_codes=… (not third-party verifiable)`).
 
+With [offline confirmation v2](offline-confirmation-v2-deferred-signature.md) the record is sealed only when the device's own signature has arrived: `confirmationMethod: OFFLINE_SIGNED`, `signature`/`signatureFormat`/`signatureAlgorithm` are the device's ECDSA signature (verified like `DEVICE_SIGNATURE`), and the payload adds `offlineCodeTag` (base64, 32 bytes), `offlineCodeAcceptedAt` and `deferredSignatureReceivedAt`. Verifiers before this addition report `unknown confirmation method`. `verify-evidence.mjs --reject-offline-code` fails every `OFFLINE_CODE` record.
+
 ## Running the verifier
 
 `auth-core/scripts/verify-evidence.mjs` implements these rules with Node.js only and does not import any Auth Core code:

@@ -37,3 +37,7 @@ Whoever holds the database and `DEVICE_SECRET_ENCRYPTION_KEY` can compute a vali
 - **Master key protection:** the key ring and re-encryption tool (FI-005) allow rotation; wrapping the master key in the HSM is still open.
 - **Evidence:** records keep `confirmationMethod: OFFLINE_CODE`; the verifier counts them separately. Banks that need non-repudiation require online confirmation (device signature) for that payment type.
 - **Option not implemented:** a deferred device signature, uploaded by the phone when it is online again, could upgrade an offline confirmation to a verifiable one. It needs a protocol and SDK change and an owner decision.
+
+## Amendment (2026-10-18, phase 8)
+
+Superseded in part by [ADR 0018](0018-deferred-device-signature.md): with `OFFLINE_CONFIRMATION_MODE=deferred_signature` (default, required in production) a code no longer confirms an authorization by itself; the device's deferred signature over the same bytes is required. The code protocol of this ADR is unchanged and still used in both versions.

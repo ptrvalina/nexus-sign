@@ -7,13 +7,13 @@
 | Release | `VERSION` at the repository root (2.0.0-rc.2) | Also `version` in `auth-core/package.json`, `info.version` in `auth-core/openapi.yaml` and `sandbox/openapi.yaml`, `NEXUSSignVersion.current` (iOS) and `NEXUS_SIGN_SDK_VERSION` (Android); `npm run check:repository` fails when they differ |
 | Auth Core API | Path prefix `/v1` | `auth-core/openapi.yaml` |
 | Authorization protocol | `protocol_version: "1"`, `domain: "NEXUS-SIGN/TRANSACTION-AUTH"` | [authorization-protocol-v1.md](protocol/authorization-protocol-v1.md), `auth-core/test-vectors/signed-payload-v1.json` |
-| Device protocols | `NEXUS-SIGN/DEVICE-REQUEST/v1`, `NEXUS-SIGN/OFFLINE/v1`, `NEXUS-SIGN/OFFLINE-CODE/v1`, QR prefix `NXS1.` | [device authentication and offline confirmation](protocol/device-authentication-and-offline-confirmation.md), `auth-core/test-vectors/device-protocols-v1.json` |
+| Device protocols | `NEXUS-SIGN/DEVICE-REQUEST/v1`, `NEXUS-SIGN/OFFLINE/v1`, `NEXUS-SIGN/OFFLINE-CODE/v1`, QR prefixes `NXS1.` (v1, code only) and `NXS2.` (v2, deferred device signature) | [device authentication and offline confirmation](protocol/device-authentication-and-offline-confirmation.md), `auth-core/test-vectors/device-protocols-v1.json` |
 | Evidence | `schemaVersion: "3"` in the sealed payload, record types `AUTHORIZATION`, `CREDENTIAL_ENROLLED`, `RECOVERY_CONFIGURED` | [evidence-format.md](protocol/evidence-format.md), [ADR 0009](adr/0009-evidence-schema-3.md) |
 | Recovery protocol | `protocol: 2`; `NEXUS-SIGN/RECOVERY-WRAP/v2` (HKDF salt), `NEXUS-SIGN/RECOVERY-KEY/v2` (associated data), `NEXUS-SIGN/RECOVERY-SETUP/v2`, `NEXUS-SIGN/RECOVERY-PROOF/v2` (signing inputs) | [recovery protocol 2](protocol/recovery-protocol-v2.md), `auth-core/test-vectors/recovery-v2.json` |
 | Android key attestation challenge | `NEXUS-SIGN/KEY-ATTESTATION/v1` | [attestation](security/attestation.md#android-key-attestation), `key_attestation` in `auth-core/test-vectors/device-protocols-v1.json` |
 | Secure push | `NEXUS-SIGN/PUSH/v1`, `NEXUS-SIGN/PUSH-RECEIPT/v1`, envelope `v: 1` | [secure push](protocol/secure-push.md), `auth-core/test-vectors/secure-push-v1.json` |
 | Webhook signature | `v1=` prefix of `X-NEXUS-SIGN-Signature` | [bank backend guide](integration/bank-backend-guide.md#webhooks) |
-| Database schema | Numbered migrations (`002` to `018`) | `auth-core/migrations/`, `auth-core/src/db/schema.sql` |
+| Database schema | Numbered migrations (`002` to `022`) | `auth-core/migrations/`, `auth-core/src/db/schema.sql` |
 
 Auth Core, the iOS SDK, the Android SDK and the sandbox are released together under the repository version. The Swift package and the Android library declare no version of their own; a host app takes both SDKs from the same repository release.
 
