@@ -12,9 +12,15 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 3 | `e212be5` | FI-001 (server, console) | In-app calls: signalling relay, TURN credentials, operator console, real WebRTC tests |
 | 4 | `fa72341` | FI-003, FI-006 | Display rules (140 characters, account first), optional TLS pinning |
 | 5 | `7c1c0a8` | FI-001 (SDKs) | Signalling rules, call state machine in both core SDKs, WebRTC modules, demo integration, CI jobs |
-| 6 | this commit | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
+| 6 | `9dee0af` | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
+| Report | `1bbd12e` | — | Milestone report (Russian) |
+| 7 | `e8e90e7` | FI-005 (HSM wrapping), FI-004 (threat model, daily limit) | Master keys wrapped by an HSM KEK, `masterKeys.js`, offline forgery tests, native build guide, baseline script, WebRTC provenance update |
 
-## Latest full regression (run `batch6-104748`, 2026-10-18)
+## Latest full regression (run `batch7-112422`, 2026-10-18)
+
+New in this run compared with `batch6-104748`: unit 99 → 100, integration 118 → 134 (`master-key-hsm` 10, `offline-forgery` 6). Commits after `e8e90e7` changed documentation only.
+
+## Previous full regression (run `batch6-104748`, 2026-10-18)
 
 Command: `scratchpad/audit/regress.sh batch6` (copies the working tree, starts PostgreSQL 16, Redis 7 and SoftHSM 2.7.0 locally).
 

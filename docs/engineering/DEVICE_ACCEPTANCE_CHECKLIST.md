@@ -1,6 +1,6 @@
 # Device acceptance checklist
 
-What has to be shown on physical phones before gate G5 can pass. Nothing in this list has been executed: this environment has no Xcode, no Android SDK and no devices. Record every run in the table at the end, with device, OS version, app build (commit) and the result of each item.
+What has to be shown on physical phones before gate G5 can pass. **Status 2026-10-18: BLOCKED.** Nothing in this list has been executed: this environment has no Xcode, no Android SDK, no physical devices and no TURN server reachable from a mobile network. Gate G5 stays FAIL/BLOCKED until the results table has entries. Record every run in the table at the end, with device, OS version, app build (commit) and the result of each item.
 
 Setup: Auth Core and the demo bank on a computer ([demo/README.md](../../demo/README.md)), operator verification enabled (`verificationSetup.js operator local-bank AUDIO,VIDEO`), an operator account in the admin console, TURN reachable for tests across networks.
 
@@ -61,6 +61,11 @@ Minimum devices: one iPhone with Face ID (iOS 17 or later), one iPhone with Touc
 | E15 | Phone call (GSM) during the verification call | Audio routing is restored or the call ends cleanly; record behaviour |
 | E16 | Bluetooth headset | Audio uses the headset; switching works |
 | E17 | Battery and heat | 5-minute VIDEO call: record battery drop and device temperature warnings |
+| E18 | Device credential revoked by the bank during a VIDEO call | Both sides receive the server's `credential_revoked`; camera and microphone stop within ~2 s; the app shows the end |
+| E19 | Authorization confirmed elsewhere (e.g. online signature on another screen) during a call | Call ends with `authorization_closed` |
+| E20 | Policy met only partly (VIDEO required, operator verified AUDIO only) | Biometric approval is refused by Auth Core until the required channel is VERIFIED |
+| E21 | Forged, expired, replayed or other-transaction provider result tokens (if an external provider is used) | Refused; plan unchanged (server-side tests exist: `verification-results.test.mjs`) |
+| E22 | No recording | Confirm no media files on the device (app container) and no media in Auth Core, Redis or logs; do not record the test session itself unless a separately approved test design requires it |
 
 ## F. Offline confirmation
 

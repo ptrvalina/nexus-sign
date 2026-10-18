@@ -1,16 +1,16 @@
-# Release gates (re-assessed 2026-10-18)
+# Release gates (re-assessed 2026-10-18, after phase 6)
 
-Gates as defined in the forensic inventory (`docs/audit/forensic-inventory/2026-10-16/13_RELEASE_GATE_MATRIX.csv`), re-assessed after remediation batches 1–6. Status values: PASS, PARTIAL, FAIL, BLOCKED. A gate passes only on evidence that was executed and recorded; source code alone does not move a gate to PASS.
+Gates as defined in the forensic inventory (`docs/audit/forensic-inventory/2026-10-16/13_RELEASE_GATE_MATRIX.csv`), re-assessed after remediation batches 1–7. Status values: PASS, PARTIAL, FAIL, BLOCKED. A gate passes only on evidence that was executed and recorded; source code alone does not move a gate to PASS.
 
 | Gate | Name | Audit (2026-10-16) | Now | Evidence now | What is still missing |
 |---|---|---|---|---|---|
-| G0 | Repository integrity and reproducible baseline | PARTIAL | PARTIAL | Local git history with baseline `885d053` and six remediation commits; `check-repository.sh` ok; full regression reproducible with `regress.sh` | Lockfile (FI-009); GitHub head unavailable; dependency scans not run (R-09, R-20) |
+| G0 | Repository integrity and reproducible baseline | PARTIAL | PARTIAL (FI-009 BLOCKED) | Local git history with baseline `885d053` and the remediation commits up to `e8e90e7`; `verify-baseline.sh` prepared; `check-repository.sh` ok; full regression reproducible with `regress.sh` | Lockfile (FI-009); GitHub head unavailable; dependency scans not run (R-09, R-20) |
 | G1 | Functional completeness | PARTIAL | PARTIAL | Expiry fixed; verified A/V results; in-app calls end to end in browsers; SDK call logic; demo flows | Native media unbuilt; sandbox still simulates A/V (R-13); per-operation attestation absent (R-08) |
-| G2 | Protocol and cryptographic correctness | PARTIAL | PARTIAL | Vectors valid 6 / invalid 28 incl. display rules; verification result v1 with 20 refusal cases; signalling rules; offline caps | Swift parser and prompt unexecuted; FI-004 inherent; FI-007 open; no formal analysis |
+| G2 | Protocol and cryptographic correctness | PARTIAL | PARTIAL | Vectors valid 6 / invalid 28 incl. display rules; verification result v1 with 20 refusal cases; signalling rules; offline caps and daily limit; offline forgery tests; offline threat model | Swift parser and prompt unexecuted; FI-004 residual risk until the owner decides on the deferred signature; FI-007 open; no formal analysis |
 | G3 | Backend and database reliability | PARTIAL | PARTIAL | Integration suites on PostgreSQL 16 / Redis 7 incl. key rotation across restarts, nonce durability after Redis loss, drained shutdown | Load, soak and two-instance tests (FI-024); BOOTSTRAP tokens in Redis (R-06) |
 | G4 | iOS and Android release builds | BLOCKED | BLOCKED | CI jobs defined, now including `ios-sdk-calls`, `android-sdk-calls`, `sdk-call-conformance` | No toolchain here; CI not run for this work; no SDK release pipeline (FI-022) |
-| G5 | Real-device verification | FAIL | FAIL | Checklist written ([DEVICE_ACCEPTANCE_CHECKLIST.md](DEVICE_ACCEPTANCE_CHECKLIST.md)) | No device run |
-| G6 | Real HSM integration and key management | FAIL | PARTIAL | PKCS#11 suite 10/10 on SoftHSM 2.7.0 (correction of the audit); master key rotation implemented and tested | Vendor HSM; master keys not HSM-wrapped (R-05); key ceremony |
+| G5 | Real-device verification | FAIL | BLOCKED | Checklist with 22 call items ([DEVICE_ACCEPTANCE_CHECKLIST.md](DEVICE_ACCEPTANCE_CHECKLIST.md)) | No devices or TURN over a mobile network in this environment; no run recorded |
+| G6 | Real HSM integration and key management | FAIL | PARTIAL | PKCS#11 suite 10/10 on SoftHSM 2.7.0; master keys wrapped by an HSM KEK, 10/10 tests incl. failure modes and rotations ([KEY_MANAGEMENT.md](KEY_MANAGEMENT.md)) | Vendor HSM: BLOCKED (none available); key ceremony; keys still in process memory (R-05) |
 | G7 | Audio/video end-to-end implementation and security | FAIL | PARTIAL | Server session control, authenticated results, signalling relay with enforced order, TURN credentials, operator console; real DTLS-SRTP media between browsers incl. ICE restart; SDK state machine tested against Auth Core | Native modules not built or run on devices; WebRTC binary provenance and licences open (R-04); operator procedure and legal meaning of a call (R-17) |
 | G8 | Independent security assessment | FAIL | FAIL | — | External assessment (R-18) |
 | G9 | Deployment, monitoring, backup and DR | PARTIAL | PARTIAL | Runbooks updated (key rotation, calls, upgrade to 2.0.0); metrics token; coturn reference configuration | Restore and rollback drills (R-12); staging deployment |
@@ -27,3 +27,15 @@ Gates as defined in the forensic inventory (`docs/audit/forensic-inventory/2026-
 | 5. General production | No | All gates |
 | 6. Security-critical production (high-value payments) | No | All gates, plus per-operation attestation (R-08) and a decision on offline codes (R-07) |
 | 7. Production with in-app calls | No | G7 complete: native builds, device tests, WebRTC provenance and licences, operator procedures |
+
+## Release assessment (2026-10-18)
+
+| Category | Items |
+|---|---|
+| Verified complete (locally, by executed tests) | Expiry reporting and sweep; verified A/V results; channels only with verifiers; signalling relay rules, closure and operator release; browser-to-browser media incl. ICE restart; display rules on the server and Android JVM; master key rotation; nonce durability; sealed chain heads; metrics token; demo pairing code |
+| Implemented, not fully verified | Native call modules (Android type-checked against stubs, iOS uncompiled); Swift parsing, pinning and call state machine; HSM master key wrapping (SoftHSM only); Android SDK on Android itself |
+| Still vulnerable or partially mitigated | FI-004 offline codes (bounded); FI-007 device integrity after enrolment; FI-008 BOOTSTRAP tokens in Redis; master keys in process memory; confusable payee names (FI-034) |
+| Blocked by environment or access | FI-009 lockfile and source baseline; dependency, secret, CodeQL and container scans; WebRTC artifact download, checksums, licence files; native builds (G4) |
+| Requires real-device testing | Prompt layout (FI-003), pinning vs MITM (FI-006), all call items E1–E22, enrolment and keys (B), recovery (G) |
+| Requires a real HSM | AES-GCM wrapping and attribute policy on the vendor HSM; evidence sealing on the vendor HSM; key ceremony and backup |
+| Requires independent security or legal assessment | G8 external assessment; G10 evidential value of signatures, offline codes and operator decisions; privacy of call metadata; WebRTC licence and codec patent position |
