@@ -145,6 +145,8 @@ node dist/cli/setClientCertificates.js <clientId> <new hex>             # after 
 
 ### Master keys: WEBHOOK_, DEVICE_ and ADMIN_SECRET_ENCRYPTION_KEY (scheduled rotation)
 
+With `MASTER_KEY_SOURCE=hsm` (production) the keys are generated and configured wrapped: use `masterKeys.js generate` instead of `openssl rand`, and `<NAME>_WRAPPED` / `<NAME>_PREVIOUS_WRAPPED` instead of `<NAME>` / `<NAME>_PREVIOUS`. The KEK rotation is described in [key management](../../engineering/KEY_MANAGEMENT.md#kek-rotation).
+
 The same procedure for each of the three keys; `<NAME>` is the key being rotated.
 
 1. Generate the new key: `openssl rand -base64 32`, into the secrets manager.

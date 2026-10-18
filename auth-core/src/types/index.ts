@@ -33,6 +33,7 @@ export type AuditEventType =
   | 'verification_provider_retired'
   | 'operator_verification_changed'
   | 'master_key_rotated'
+  | 'offline_confirmation_limit_reached'
   | 'push_verification_completed'
   | 'push_registered'
   | 'push_unregistered'

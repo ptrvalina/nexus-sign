@@ -182,6 +182,20 @@ async function checkOfflineCode(
     if (!row) throw new AuthorizationNotFoundError(id);
     if (!OPEN_STATES.includes(row.state)) return { result: { status: 'FAILED', reason: `Authorization is ${row.state}` } };
 
+    // FI-004: a per-credential daily ceiling, checked under the lock so
+    // parallel submissions cannot pass it together.
+    const ceiling = env.OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY;
+    if (ceiling !== undefined) {
+      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`offline:${credentialId}`]);
+      const used = await tx.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM authorization_requests
+         WHERE credential_id = $1 AND confirmation_method = 'OFFLINE_CODE' AND verified_at > now() - interval '24 hours'`, [credentialId]);
+      if (used.rows[0].n >= ceiling) {
+        await recordAuditEvent('offline_confirmation_limit_reached', { ...auditContext, nexusId: row.nexus_id, clientId },
+          { authorizationId: id, credentialId, limit: ceiling }, tx);
+        return { result: { status: 'FAILED', reason: 'The device has reached its offline confirmation limit for 24 hours; confirm online' } };
+      }
+    }
     const stored = await tx.query<{ offline_secret_encrypted: string | null }>(
       `SELECT offline_secret_encrypted FROM credentials WHERE credential_id = $1`, [credentialId]);
     const encrypted = stored.rows[0]?.offline_secret_encrypted;

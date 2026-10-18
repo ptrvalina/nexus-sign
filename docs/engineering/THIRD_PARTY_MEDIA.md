@@ -14,7 +14,7 @@ The core SDKs (`ios-sdk`, `android-sdk`) have no WebRTC dependency. Only the opt
 | Why this version | Newest WebRTC milestone published (Maven Central page: "1 month ago"; mvnrepository: 2026-09-01) | The newest release for which a source revision and a checksum were found (below). Moving to 155.0.0 needs the same evidence first |
 | Source | Project URL in the POM: github.com/webrtc-sdk/android (not inspected, see below) | WebRTC source from webrtc.googlesource.com/src, built by the repository's `scripts/build.sh` in its GitHub Actions workflow `webrtc-release.yml` (repository README) |
 | Source revision of the pinned binary | **Not verified.** The version scheme suggests Chromium milestone 150, branch-head 7871, patch 01. That is an inference, not evidence | Release notes of M153: `branch-heads/8010`, commit `9ea5afcad008b940468c2a15aec339592cf5a935`, as quoted in a third-party pull request, not read on the release page itself |
-| Checksum | **Not recorded.** The Maven Central page lists none; the `.sha1`/`.asc` files could not be fetched here (Maven repositories are not reachable from this environment). CI job `android-sdk-calls` records the SHA-256 of the resolved AAR as an artifact | SHA-256 `3e3a8946f27510133e3feed04d05fa23505bbe366e977620503bfc7986c2b78f` for M153, from the same third-party copy of the release notes. SwiftPM verifies the `binaryTarget` checksum in stasel's `Package.swift` on download; CI job `ios-sdk-calls` prints `Package.resolved` |
+| Checksum | **Not recorded.** (2026-10-18: still not obtained.) The Maven Central page lists none; the `.sha1`/`.asc` files could not be fetched here (Maven repositories are not reachable from this environment). CI job `android-sdk-calls` records the SHA-256 of the resolved AAR as an artifact | SHA-256 `3e3a8946f27510133e3feed04d05fa23505bbe366e977620503bfc7986c2b78f` for M153, **from third-party texts only; unverified, see the 2026-10-18 section**. SwiftPM verifies the `binaryTarget` checksum in stasel's `Package.swift` on download; CI job `ios-sdk-calls` prints `Package.resolved` |
 | Declared licence | POM: "The 3-Clause BSD License" | README: build scripts BSD-3-Clause; WebRTC under the WebRTC licence. Swift Package Index shows the licence as "unknown" |
 | Modifications to upstream | **Not verified.** The artifact is published by a project other than Google; whether it carries patches over upstream libwebrtc is not established | README: "no modifications are made to the source code or the output binaries"; VP9, H.264 and AV1 encoders enabled; H.265 at SDP/RTP level only |
 | Platforms | minSdk of the AAR not checked; the module uses minSdk 28 like the SDK | iOS 15+, macOS 12+, Catalyst; arm64 device, arm64/x86_64 simulator (README) |
@@ -62,3 +62,33 @@ Floating versions (`latest`, `branch:`, `+`, `upToNextMajor`) are not allowed in
 | TPM-5 | Both: legal review of the codec patent position (H.264 code present but not negotiated) |
 | TPM-6 | Both: vulnerability review of the pinned WebRTC milestones, and an agreed patch interval |
 | TPM-7 | Both: decide whether the bank builds libwebrtc itself from the named source commits instead of using community binaries |
+
+## Verification attempt 2026-10-18 (phase 6D)
+
+Artifacts could not be downloaded here: Maven Central, Google Maven and the npm registry are unreachable from this environment, and GitHub release downloads are refused (no linked GitHub account). Nothing below was checked against a downloaded artifact. Third-party statements are recorded as claims, not as evidence.
+
+### iOS, stasel/WebRTC 153.0.0
+
+| Question | Finding | Status |
+|---|---|---|
+| Does release 153.0.0 exist on the official releases page? | The releases page as fetched lists M150 as "Latest" and releases down to M137; 153.0.0 and 155.0.0 do not appear. The README's SPM example names 155.0.0 and the Swift Package Index lists 155.0.0 as the latest of 61 releases. Third-party Dependabot pull requests bump to 153.0.0 | **CONFLICTING EVIDENCE**; existence of the 153.0.0 tag not confirmed from the official page |
+| Checksum `3e3a8946…b78f` | Appears in third-party texts only: a Dependabot pull request in another project and issue #168 on stasel/WebRTC (an open request by a third party, citing a GitHub Actions run; no maintainer answer). **Not verified**; it must not be relied on | UNVERIFIED (corrects the earlier wording of this file) |
+| Source commit `9ea5afca…` (branch-heads/8010) | Same third-party sources | UNVERIFIED |
+| Third-party licence inventory | Issue #168 asks the maintainers for exactly this (LICENSE.md, GN args for `//sdk:framework_objc`); no answer shown | OPEN (TPM-4) |
+
+Consequence: the pin `exact: "153.0.0"` is kept, because changing it without evidence would be an unverified upgrade; CI job `ios-sdk-calls` will fail at package resolution if the tag does not exist. **Release blocker TPM-3 stays open**, now including "confirm the tag exists".
+
+### Android, io.github.webrtc-sdk:android 150.7871.01
+
+| Question | Finding | Status |
+|---|---|---|
+| Release | GitHub release v150.7871.01 of webrtc-sdk/android, tag commit `7b6390fb098303b31af76906bf15f7decaa4ef95`, published by github-actions, notes "release: 150.7871.01 (#53)", 5 assets; no checksums shown | Read from the official page |
+| Native source revision | Unlike the 144.x releases, the 150.7871.01 notes carry no "Corresponds to" line to a webrtc-sdk/webrtc commit. A third-party issue (#56, open, no maintainer answer) states a native source `73cb8180…` and a signing key fingerprint `E65BD435…F446`; **claims only** | UNVERIFIED (TPM-1) |
+| Licence | The packaging repository declares **MIT** (`LICENSE`); the Maven POM declares **BSD-3-Clause**; a `Licenses` folder exists (contents not read). The licences of the packaging and of the native library differ by nature; which applies to which file is not stated | **INCONSISTENT DECLARATIONS** (TPM-4) |
+| Build process | Repository has `.github/workflows`, `downloadAar*.sh`, `prefixmove*.sh`, `RELEASING.md`; the names suggest the AAR is built elsewhere and re-packaged here. Not read | UNVERIFIED (TPM-1, TPM-7) |
+| Patches over upstream | Issue #56 asks which upstream WebRTC fixes (SCTP and others) are included; no answer shown | OPEN (TPM-6) |
+| Checksum and signature | Not obtained | OPEN (TPM-2) |
+
+### What closes TPM-1 to TPM-7
+
+Run on a machine with access to Maven Central and GitHub (commands in `docs/engineering/NATIVE_BUILD_GUIDE.md`): download the AAR, `.pom`, `.asc` and the XCFramework zip; compute SHA-256; verify the Maven PGP signature against a key fingerprint published by the project itself (not by a third party); compare the SwiftPM `binaryTarget` checksum in stasel's `Package.swift` at the tag; read the licence and NOTICE files inside each artifact; record everything here.

@@ -30,14 +30,18 @@ export function productionBlockers(config: Env): string[] {
     if (!config.ANDROID_REQUIRE_LOCKED_BOOTLOADER) blockers.push('ANDROID_REQUIRE_LOCKED_BOOTLOADER must be true in production');
     if (config.ANDROID_REQUIRED_DEVICE_VERDICT === 'MEETS_BASIC_INTEGRITY') blockers.push('ANDROID_REQUIRED_DEVICE_VERDICT must be MEETS_DEVICE_INTEGRITY or MEETS_STRONG_INTEGRITY in production');
   }
-  if (!config.WEBHOOK_SECRET_ENCRYPTION_KEY) blockers.push('WEBHOOK_SECRET_ENCRYPTION_KEY is required in production');
+  if (!masterKeyConfigured(config, 'WEBHOOK_SECRET_ENCRYPTION_KEY')) blockers.push('WEBHOOK_SECRET_ENCRYPTION_KEY is required in production');
+  if (config.MASTER_KEY_SOURCE !== 'hsm') blockers.push('MASTER_KEY_SOURCE must be hsm in production (FI-005: master keys wrapped by the HSM, not plaintext in the environment)');
   if (!config.ADMIN_COOKIE_SECURE) {
     blockers.push('ADMIN_COOKIE_SECURE must be true in production');
   }
   if (!config.ADMIN_MFA_REQUIRED) blockers.push('ADMIN_MFA_REQUIRED must be true in production');
-  if (!config.ADMIN_SECRET_ENCRYPTION_KEY) blockers.push('ADMIN_SECRET_ENCRYPTION_KEY is required in production (admin TOTP secrets)');
+  if (!masterKeyConfigured(config, 'ADMIN_SECRET_ENCRYPTION_KEY')) blockers.push('ADMIN_SECRET_ENCRYPTION_KEY is required in production (admin TOTP secrets)');
   if (!config.METRICS_BEARER_TOKEN || config.METRICS_BEARER_TOKEN.length < 32) blockers.push('METRICS_BEARER_TOKEN of at least 32 characters is required in production (FI-030)');
   if (config.DEVICE_NONCE_STORE === 'redis') blockers.push('DEVICE_NONCE_STORE must be postgres in production (FI-008: Redis failover can forget used nonces)');
+  if (config.OFFLINE_CONFIRMATION_ENABLED && config.OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY === undefined) {
+    blockers.push('OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY is required in production when OFFLINE_CONFIRMATION_ENABLED is true (FI-004)');
+  }
   if (config.OFFLINE_CONFIRMATION_ENABLED && !config.OFFLINE_CONFIRMATION_MAX_AMOUNT?.trim()) {
     blockers.push('OFFLINE_CONFIRMATION_MAX_AMOUNT is required in production when OFFLINE_CONFIRMATION_ENABLED is true (FI-004: offline codes can be computed by whoever holds the database and DEVICE_SECRET_ENCRYPTION_KEY)');
   }
@@ -67,6 +71,19 @@ export function configurationErrors(config: Env): string[] {
       errors.push(`${setting} is a development setting: set ALLOW_INSECURE_DEVELOPMENT=true to run with it outside production`);
     }
   }
+  if (config.MASTER_KEY_SOURCE === 'hsm') {
+    if (!config.PKCS11_MODULE_PATH || !config.PKCS11_PIN || !config.PKCS11_KEK_LABEL) errors.push('MASTER_KEY_SOURCE=hsm needs PKCS11_MODULE_PATH, PKCS11_PIN and PKCS11_KEK_LABEL');
+    for (const name of MASTER_KEY_ENV_NAMES) {
+      const c = config as Record<string, unknown>;
+      if (c[name] || c[`${name}_PREVIOUS`]) errors.push(`${name} must not be set in plaintext with MASTER_KEY_SOURCE=hsm; configure ${name}_WRAPPED`);
+      if (c[`${name}_PREVIOUS_WRAPPED`] && !c[`${name}_WRAPPED`]) errors.push(`${name}_PREVIOUS_WRAPPED is set but ${name}_WRAPPED is not`);
+    }
+  } else {
+    for (const name of MASTER_KEY_ENV_NAMES) {
+      const c = config as Record<string, unknown>;
+      if (c[`${name}_WRAPPED`] || c[`${name}_PREVIOUS_WRAPPED`]) errors.push(`${name}_WRAPPED is only read with MASTER_KEY_SOURCE=hsm`);
+    }
+  }
   // Master keys are checked at startup, not at first use (NXS-038).
   for (const name of ['WEBHOOK_SECRET_ENCRYPTION_KEY', 'DEVICE_SECRET_ENCRYPTION_KEY', 'ADMIN_SECRET_ENCRYPTION_KEY'] as const) {
     const value = config[name];
@@ -89,7 +106,7 @@ export function configurationErrors(config: Env): string[] {
   if (config.OFFLINE_CONFIRMATION_MAX_AMOUNT !== undefined && config.OFFLINE_CONFIRMATION_MAX_AMOUNT.trim() !== '') {
     try { parseOfflineLimits(config.OFFLINE_CONFIRMATION_MAX_AMOUNT); } catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
   }
-  if (config.OFFLINE_CONFIRMATION_ENABLED && !config.DEVICE_SECRET_ENCRYPTION_KEY) {
+  if (config.OFFLINE_CONFIRMATION_ENABLED && !masterKeyConfigured(config, 'DEVICE_SECRET_ENCRYPTION_KEY')) {
     errors.push('DEVICE_SECRET_ENCRYPTION_KEY is required when OFFLINE_CONFIRMATION_ENABLED is true');
   }
 
@@ -102,7 +119,7 @@ export function configurationErrors(config: Env): string[] {
     errors.push('FCM_PROJECT_ID and FCM_SERVICE_ACCOUNT_JSON must be set together');
   }
   if (config.PUSH_DELIVERY_ENABLED) {
-    if (!config.DEVICE_SECRET_ENCRYPTION_KEY) errors.push('DEVICE_SECRET_ENCRYPTION_KEY is required when PUSH_DELIVERY_ENABLED is true');
+    if (!masterKeyConfigured(config, 'DEVICE_SECRET_ENCRYPTION_KEY')) errors.push('DEVICE_SECRET_ENCRYPTION_KEY is required when PUSH_DELIVERY_ENABLED is true');
     if (!apns.every(Boolean) && !fcm.every(Boolean)) {
       errors.push('PUSH_DELIVERY_ENABLED needs APNs (APNS_*) and/or FCM (FCM_*) to be configured');
     }
@@ -131,4 +148,12 @@ export function parseOfflineLimits(value: string): Map<string, bigint> {
     limits.set(match[1], BigInt(match[2]));
   }
   return limits;
+}
+
+const MASTER_KEY_ENV_NAMES = ['WEBHOOK_SECRET_ENCRYPTION_KEY', 'DEVICE_SECRET_ENCRYPTION_KEY', 'ADMIN_SECRET_ENCRYPTION_KEY'] as const;
+
+/** A master key is configured in plaintext (MASTER_KEY_SOURCE=env) or wrapped (hsm). */
+export function masterKeyConfigured(config: Env, name: typeof MASTER_KEY_ENV_NAMES[number]): boolean {
+  const c = config as Record<string, unknown>;
+  return config.MASTER_KEY_SOURCE === 'hsm' ? Boolean(c[`${name}_WRAPPED`]) : Boolean(c[name]);
 }

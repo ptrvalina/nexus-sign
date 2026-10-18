@@ -4,6 +4,7 @@ import { pool } from '../db/pool';
 import { redis } from '../db/redis';
 import { revokeClientTokens } from '../services/tokenService';
 import { normalizeFingerprint } from '../middleware/mtlsGateway';
+import { loadMasterKeys } from '../crypto/masterKeyVault';
 
 /**
  * Registers (or rotates credentials for) a bank client allowed to call this
@@ -28,6 +29,7 @@ import { normalizeFingerprint } from '../middleware/mtlsGateway';
  * run this again with the same clientId to rotate it.
  */
 async function main(): Promise<void> {
+  await loadMasterKeys(); // MASTER_KEY_SOURCE=hsm: unwrap in the HSM (FI-005)
   const args = process.argv.slice(2);
   const options = args.filter((arg) => arg.startsWith('--'));
   const [clientId, webhookUrl] = args.filter((arg) => !arg.startsWith('--'));

@@ -175,12 +175,12 @@ Changes since 2.0.0-rc.2 that an upgrade must handle. Details: [CHANGELOG](../..
 
 1. **Before the window:**
     - generate `METRICS_BEARER_TOKEN` (`openssl rand -base64 32`) and give it to the monitoring system;
-    - with offline confirmation enabled, agree `OFFLINE_CONFIRMATION_MAX_AMOUNT` with the bank (per currency, minor units);
+    - with offline confirmation enabled, agree `OFFLINE_CONFIRMATION_MAX_AMOUNT` (per currency, minor units) and `OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY` with the bank;
     - bank backends: beneficiary values over 140 characters, empty or padded with spaces are refused with 400 (FI-003); the audio/video completion endpoint takes `{ resultToken }` only (FI-002); receivers must accept the new webhook types `authorization.verified`, `authorization.rejected`, `authorization.expired` and `evidence.appended`;
     - app teams: SDK 2.0.0 refuses signed bytes with beneficiary values the server no longer issues (`invalid_value`); optional `certificatePins`; optional call modules.
 2. **Stop traffic and back up** the database (steps 1 and 2 above).
 3. **Migrations** 019, 020 and 021 as the table owner, then `scripts/db/roles.sql` again (it grants `nexus_app` DELETE on `device_request_nonces`).
-4. **Configuration:** add `METRICS_BEARER_TOKEN`, `OFFLINE_CONFIRMATION_MAX_AMOUNT` (if offline confirmation is enabled) and, for verification calls, `WEBRTC_*` ([audio and video calls](audio-video-calls.md)). Leave `DEVICE_NONCE_STORE` unset (default `postgres`).
+4. **Configuration:** create the KEK on the HSM (key ceremony), wrap the existing master keys with `masterKeys.js wrap <purpose>` (the stored secrets do not change), set `MASTER_KEY_SOURCE=hsm`, `PKCS11_KEK_LABEL` and the `*_WRAPPED` values, and remove the plaintext keys ([key management](../engineering/KEY_MANAGEMENT.md)); add `METRICS_BEARER_TOKEN`, `OFFLINE_CONFIRMATION_MAX_AMOUNT` (if offline confirmation is enabled) and, for verification calls, `WEBRTC_*` ([audio and video calls](audio-video-calls.md)). Leave `DEVICE_NONCE_STORE` unset (default `postgres`).
 5. **Verification channels:** register provider keys or enable operator verification per bank (`verificationSetup.js`); channels without a verifier are no longer offered.
 6. **Start 2.0.0** and run the checks of step 12 above.
 7. **Optional, any time after the upgrade:** rotate the master keys ([key rotation](runbooks/key-rotation.md)); `rotateSecretKeys.js` also moves secrets written before 2.0.0 to the `k1` format.

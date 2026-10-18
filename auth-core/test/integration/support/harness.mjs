@@ -162,13 +162,19 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
   const deadline = Date.now() + 20_000;
   for (;;) {
     const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r(undefined), 150))]);
-    if (code !== undefined) throw new Error(`Auth Core exited with ${code} during startup:\n${log}`);
+    if (code !== undefined) {
+      // Release the Redis connection, or the test process cannot exit.
+      redis.client.disconnect();
+      if (!database) await db.drop();
+      throw new Error(`Auth Core exited with ${code} during startup:\n${log}`);
+    }
     try {
       const ready = await fetch(`${baseUrl}/readyz`);
       if (ready.status === 200) break;
     } catch { /* not listening yet */ }
     if (Date.now() > deadline) {
       child.kill('SIGKILL');
+      redis.client.disconnect();
       throw new Error(`Auth Core did not become ready:\n${log}`);
     }
   }

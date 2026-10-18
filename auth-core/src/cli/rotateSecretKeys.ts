@@ -3,6 +3,7 @@ import { pool, withTransaction } from '../db/pool';
 import { redis } from '../db/redis';
 import { decryptSecretBytes, keyRing, MASTER_KEY_NAMES, needsRewrap, rewrapSecret, type SecretPurpose } from '../crypto/secretBox';
 import { recordAuditEvent } from '../services/auditService';
+import { loadMasterKeys } from '../crypto/masterKeyVault';
 
 /**
  * Re-encrypts stored secrets under the current master key (FI-005).
@@ -85,6 +86,7 @@ async function preflight(columns: Column[]): Promise<string[]> {
 }
 
 async function main(): Promise<void> {
+  await loadMasterKeys(); // MASTER_KEY_SOURCE=hsm: unwrap in the HSM (FI-005)
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const which = args.find((a) => !a.startsWith('--')) ?? 'all';

@@ -27,7 +27,8 @@
     "set-client-certificates": "node dist/cli/setClientCertificates.js",
     "seal-credential-baseline": "node dist/cli/sealCredentialBaseline.js",
     "verification-setup": "node dist/cli/verificationSetup.js",
-    "rotate-secret-keys": "node dist/cli/rotateSecretKeys.js"
+    "rotate-secret-keys": "node dist/cli/rotateSecretKeys.js",
+    "master-keys": "node dist/cli/masterKeys.js"
   },
   "dependencies": {
     "express": "^4.19.2",

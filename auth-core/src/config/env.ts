@@ -34,6 +34,19 @@ const envSchema = z.object({
   /** Encrypts per-credential offline confirmation keys (32 bytes, base64).
    * Required when OFFLINE_CONFIRMATION_ENABLED is true. */
   DEVICE_SECRET_ENCRYPTION_KEY: z.string().optional(),
+  /** FI-005: where the master keys come from. `env` (default): the base64
+   * keys above. `hsm` (required in production): only wrapped keys are
+   * configured (`<NAME>_WRAPPED`, `<NAME>_PREVIOUS_WRAPPED`), made with the
+   * HSM key-encryption key PKCS11_KEK_LABEL and unwrapped in the HSM at
+   * startup (src/crypto/masterKeyVault.ts, cli/masterKeys.js). */
+  MASTER_KEY_SOURCE: z.enum(['env', 'hsm']).default('env'),
+  PKCS11_KEK_LABEL: z.string().optional(),
+  WEBHOOK_SECRET_ENCRYPTION_KEY_WRAPPED: z.string().optional(),
+  DEVICE_SECRET_ENCRYPTION_KEY_WRAPPED: z.string().optional(),
+  ADMIN_SECRET_ENCRYPTION_KEY_WRAPPED: z.string().optional(),
+  WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS_WRAPPED: z.string().optional(),
+  DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS_WRAPPED: z.string().optional(),
+  ADMIN_SECRET_ENCRYPTION_KEY_PREVIOUS_WRAPPED: z.string().optional(),
   /** Key rotation (FI-005): previous master keys, comma-separated base64,
    * accepted for decryption only until cli/rotateSecretKeys.js has
    * re-encrypted the stored secrets under the current key. */
@@ -113,6 +126,11 @@ const envSchema = z.object({
    * Currencies not listed are not offered offline. Required in production
    * when OFFLINE_CONFIRMATION_ENABLED is true. */
   OFFLINE_CONFIRMATION_MAX_AMOUNT: z.string().optional(),
+  /** FI-004: most offline confirmations one credential may make in 24 hours.
+   * Bounds how many authorizations a computed (forged) code could confirm
+   * before the bank notices. Unset: no limit; required in production when
+   * offline confirmation is enabled. */
+  OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY: z.coerce.number().int().min(1).max(1000).optional(),
 
   // --- Secure push (docs/protocol/secure-push.md) ---
 

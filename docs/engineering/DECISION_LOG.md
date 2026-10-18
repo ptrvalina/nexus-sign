@@ -105,3 +105,11 @@ Heads were delivered only with confirmations; enrolment and recovery records wer
 ## D-026 Metrics behind a bearer token (FI-030)
 
 A separate port would need deployment changes in every environment; a bearer token on the existing route is enough to keep bank systems behind the gateway from reading operational metrics. Required in production.
+
+## D-027 Master keys wrapped by an HSM key-encryption key (FI-005)
+
+Checked first what the stack supports: pkcs11js exposes C_Encrypt/C_Decrypt with `CK_PARAMS_AES_GCM`, and SoftHSM 2.7.0 lists CKM_AES_GCM (encrypt and decrypt), CKM_AES_KEY_WRAP(_PAD) and CKM_AES_KEY_GEN; a probe confirmed AES-GCM with associated data, refusal of wrong associated data (CKR_ENCRYPTED_DATA_INVALID) and that a sensitive key's value cannot be read. Options: (a) envelope encryption, master keys wrapped by an HSM KEK and unwrapped into process memory at startup; (b) master keys as HSM objects and every secret operation in the HSM. Chosen (a): it removes plaintext keys from the configuration and from configuration backups, keeps the hot paths independent of HSM latency, and leaves the stored format unchanged so (b) remains possible. Startup fails closed. Production requires it. Residual: process memory and anyone with the PIN and HSM reach (KEY_MANAGEMENT.md). Validated on SoftHSM only; a vendor HSM may need `CK_PARAMS_AES_GCM_v240` or different attribute policy.
+
+## D-028 FI-004: bound the residual risk now; the complete fix waits for the owner
+
+Traced the protocol (docs/security/offline-confirmation-threat-model.md): without `K` no party, including a compromised bank backend or a database writer, gets a code accepted (tests). With `K` — database plus the device master key, or a running Auth Core — codes can be computed; that is inherent in a shared-key MAC. Added a per-credential daily ceiling next to the amount cap (both deployment-side, required in production) and made the master key HSM-wrapped (D-027), which removes the "database plus configuration" path. The complete correction is a deferred device signature, a protocol extension with SDK and evidence changes; it is written up for an owner decision, not implemented.

@@ -8,6 +8,7 @@ import { selectHsmAdapter } from './crypto/selectHsmAdapter';
 import { startWebhookWorker } from './workers/webhookWorker';
 import { startPushWorker } from './workers/pushWorker';
 import { startExpiryWorker } from './workers/expiryWorker';
+import { loadMasterKeys } from './crypto/masterKeyVault';
 
 const logger = pino({
   level: env.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -49,6 +50,9 @@ process.on('unhandledRejection', (reason: unknown) => {
 
 async function main(): Promise<void> {
   assertStartupConfiguration();
+  // FI-005: with MASTER_KEY_SOURCE=hsm the master keys are unwrapped in the
+  // HSM now; a key that cannot be unwrapped stops the start.
+  await loadMasterKeys();
   const hsmAdapter = await selectHsmAdapter();
   await hsmAdapter.healthCheck();
   logger.info({ hsmAdapter: hsmAdapter.name, env: env.NODE_ENV }, 'Starting NEXUS-SIGN Auth Core');

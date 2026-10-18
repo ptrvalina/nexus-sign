@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { env } from '../config/env';
+import { MASTER_KEY_NAMES, masterKeyMaterial } from './masterKeyVault';
 
 /**
  * AES-256-GCM for the few secrets Auth Core must read back in plaintext:
@@ -17,9 +17,10 @@ import { env } from '../config/env';
  * the purpose (and the owning record) is bound into the ciphertext as
  * associated data.
  *
- * Key ring (FI-005): `<NAME>` is the current key and encrypts; `<NAME>_PREVIOUS`
- * (comma-separated) lists keys that are still accepted for decryption during a
- * rotation. Ciphertexts written since 2.0.0 name their key:
+ * Key ring (FI-005): the current key encrypts; previous keys are still
+ * accepted for decryption during a rotation. The keys come from
+ * masterKeyVault.ts: `<NAME>`/`<NAME>_PREVIOUS` in development, or wrapped
+ * by an HSM key-encryption key (`<NAME>_WRAPPED`, MASTER_KEY_SOURCE=hsm). Ciphertexts written since 2.0.0 name their key:
  *
  *   k1$<key id>$<iv>$<auth tag>$<ciphertext>      key id: first 8 bytes of SHA-256(key), hex
  *
@@ -33,11 +34,7 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const FORMAT = 'k1';
 
-export const MASTER_KEY_NAMES = {
-  webhook: 'WEBHOOK_SECRET_ENCRYPTION_KEY',
-  device: 'DEVICE_SECRET_ENCRYPTION_KEY',
-  admin: 'ADMIN_SECRET_ENCRYPTION_KEY',
-} as const;
+export { MASTER_KEY_NAMES };
 
 interface RingKey { id: string; key: Buffer }
 
@@ -45,23 +42,15 @@ export function masterKeyId(key: Buffer): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 16);
 }
 
-function decodeKey(name: string, raw: string): Buffer {
-  const key = Buffer.from(raw.trim(), 'base64');
-  if (key.length !== 32) throw new Error(`${name} must decode to exactly 32 bytes`);
-  return key;
-}
-
-/** Current and previous master keys of a purpose. */
+/** Current and previous master keys of a purpose (from the environment or,
+ * with MASTER_KEY_SOURCE=hsm, unwrapped by the HSM at startup). */
 export function keyRing(purpose: SecretPurpose): { current: RingKey; previous: RingKey[] } {
-  const name = MASTER_KEY_NAMES[purpose];
-  const raw = env[name];
-  if (!raw) throw new Error(`${name} is not configured`);
-  const current = decodeKey(name, raw);
-  const previousRaw = (env as Record<string, unknown>)[`${name}_PREVIOUS`];
-  const previous = typeof previousRaw === 'string' && previousRaw.trim() !== ''
-    ? previousRaw.split(',').map((value) => decodeKey(`${name}_PREVIOUS`, value))
-    : [];
-  return { current: { id: masterKeyId(current), key: current }, previous: previous.map((key) => ({ id: masterKeyId(key), key })) };
+  const material = masterKeyMaterial(purpose);
+  if (!material) throw new Error(`${MASTER_KEY_NAMES[purpose]} is not configured`);
+  return {
+    current: { id: masterKeyId(material.current), key: material.current },
+    previous: material.previous.map((key) => ({ id: masterKeyId(key), key })),
+  };
 }
 
 /** Associated data: the purpose and the owning record, so a ciphertext
