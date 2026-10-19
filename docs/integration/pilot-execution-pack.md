@@ -1,6 +1,6 @@
 # Pilot execution pack: what the pilot bank integrates, operates and tests
 
-Status: 2.0.0, phase 14. For the pilot bank's architects, payment operations and security. The reference implementation is in `bank-integration/`. It is **not integrated** with any bank. Nothing below is proven for a real bank backend or a real payment provider until the tests in section 9 have run in the bank's infrastructure.
+Status: 2.0.0, phase 14. For the pilot bank's architects, payment operations and security. The reference implementation is in `bank-integration/`. It is **not integrated** with any bank. Nothing below is proven for a real bank backend or a real payment provider until the tests in section 10 have run in the bank's infrastructure.
 
 ## 1. Contract of the execution boundary
 
