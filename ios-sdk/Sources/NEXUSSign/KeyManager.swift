@@ -259,6 +259,20 @@ final class KeyManager {
 
     // MARK: - Use
 
+    /// DER SubjectPublicKeyInfo of the active signing key, if there is one.
+    func activeSigningPublicKeyInfo() throws -> Data? {
+        guard let privateKey = try existingKey(.signing) else { return nil }
+        guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+            throw NEXUSSignError.keyOperationFailed(status: errSecParam)
+        }
+        var error: Unmanaged<CFError>?
+        guard let representation = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
+            let status = (error?.takeRetainedValue() as Error? as NSError?)?.code ?? Int(errSecParam)
+            throw NEXUSSignError.keyOperationFailed(status: OSStatus(status))
+        }
+        return SubjectPublicKeyInfo.der(fromRawECPoint: representation)
+    }
+
     /// SPKI PEM of the public half, as Auth Core expects.
     func publicKeyPEM(for privateKey: SecKey) throws -> String {
         guard let publicKey = SecKeyCopyPublicKey(privateKey) else {

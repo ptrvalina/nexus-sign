@@ -83,6 +83,13 @@ internal object DeviceProtocol {
         }
     }
 
+    /**
+     * Fingerprint of a signing key: lowercase hex SHA-256 of its DER
+     * SubjectPublicKeyInfo (vectors in `bank-trust-v1.json`). The bank
+     * approves the device key by this value (bank credential trust v1).
+     */
+    fun signingKeyFingerprint(subjectPublicKeyInfo: ByteArray): String = hex(sha256(subjectPublicKeyInfo))
+
     private fun hmac(key: ByteArray, data: ByteArray): ByteArray =
         Mac.getInstance("HmacSHA256").run {
             init(SecretKeySpec(key, "HmacSHA256"))

@@ -34,6 +34,17 @@ public final class NEXUSSignSDK {
     /// The credential ID confirmed by Auth Core, if the device is registered.
     public var credentialID: String? { keyManager.effectiveCredentialID }
 
+    /// Fingerprint of this device's signing key: hex SHA-256 of its DER
+    /// SubjectPublicKeyInfo, computed here from the key in the Secure Enclave,
+    /// not taken from any Auth Core response. After enrolment, replacement or
+    /// recovery the app sends it with the credential ID to the bank's own
+    /// backend, which approves exactly this key for the customer
+    /// (docs/protocol/bank-credential-trust-v1.md). Nil when not registered.
+    public func signingKeyFingerprint() throws -> String? {
+        guard try isRegistered(), let info = try keyManager.activeSigningPublicKeyInfo() else { return nil }
+        return SubjectPublicKeyInfo.fingerprint(info)
+    }
+
     /// True when this device can confirm transactions from a QR code without network.
     public func isOfflineConfirmationAvailable() throws -> Bool {
         try isRegistered() && keyManager.effectiveOfflineServerPublicKeyPEM != nil && keyManager.existingKey(.offline) != nil

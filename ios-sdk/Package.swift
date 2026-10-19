@@ -29,6 +29,7 @@ let package = Package(
                 .copy("Resources/device-protocols-v1.json"),
                 .copy("Resources/secure-push-v1.json"),
                 .copy("Resources/recovery-v2.json"),
+                .copy("Resources/bank-trust-v1.json"),
             ]
         )
     ]

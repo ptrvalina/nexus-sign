@@ -54,6 +54,17 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     fun isRegistered(): Boolean = state.registeredCredentialId() != null && keyManager.hasExistingKey()
 
     /** True when this device can confirm transactions from a QR code without network. */
+    /**
+     * Fingerprint of this device's signing key: hex SHA-256 of its DER
+     * SubjectPublicKeyInfo, computed here from the key in the Keystore, not
+     * taken from any Auth Core response. After enrolment, replacement or
+     * recovery the app sends it with the credential ID to the bank's own
+     * backend, which approves exactly this key for the customer
+     * (docs/protocol/bank-credential-trust-v1.md). Null when not registered.
+     */
+    fun signingKeyFingerprint(): String? =
+        if (!isRegistered()) null else keyManager.activeSigningPublicKeyInfo()?.let(DeviceProtocol::signingKeyFingerprint)
+
     fun isOfflineConfirmationAvailable(): Boolean = isRegistered() && keyManager.hasOfflineKey()
 
     /** The credential ID confirmed by Auth Core, if the device is registered. */

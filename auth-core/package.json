@@ -21,7 +21,7 @@
     "check:all": "npm run test && npm run test:vectors && npm run check:openapi && npm run check:repository",
     "smoke-test": "node scripts/e2e-smoke.mjs",
     "verify-evidence": "node scripts/verify-evidence.mjs",
-    "generate:vectors": "node test-vectors/generate-signed-payload-vectors.mjs && node test-vectors/generate-device-protocol-vectors.mjs && node test-vectors/generate-secure-push-vectors.mjs && node test-vectors/generate-recovery-vectors.mjs",
+    "generate:vectors": "node test-vectors/generate-signed-payload-vectors.mjs && node test-vectors/generate-device-protocol-vectors.mjs && node test-vectors/generate-secure-push-vectors.mjs && node test-vectors/generate-recovery-vectors.mjs && node test-vectors/generate-bank-trust-vectors.mjs",
     "register-client": "node dist/cli/registerClient.js",
     "create-admin-user": "node dist/cli/createAdminUser.js",
     "set-client-certificates": "node dist/cli/setClientCertificates.js",

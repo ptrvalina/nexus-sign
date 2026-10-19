@@ -1,0 +1,46 @@
+{
+  "description": "Signing key fingerprints (hex SHA-256 of DER SubjectPublicKeyInfo) and the canonical bytes of bank trust statements (signed with ECDSA P-256 SHA-256, DER).",
+  "fingerprints": [
+    {
+      "name": "p256-key-1",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoI8KSPMtpbRVeuK+gfVNiu9oa6kq\nWiWUr5Q4Jqtzj6xwoh09LdR7uFhLtozuRmLsDok0yXVQDUmPszSc7WuiuQ==\n-----END PUBLIC KEY-----\n",
+      "spkiDerBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoI8KSPMtpbRVeuK+gfVNiu9oa6kqWiWUr5Q4Jqtzj6xwoh09LdR7uFhLtozuRmLsDok0yXVQDUmPszSc7WuiuQ==",
+      "signingKeySha256": "98296852170eb45975b7f6c3b7ba39de51d37e0467e3ccee4f40bc9252e2d923"
+    },
+    {
+      "name": "p256-key-2",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbAGWkTnz76+7nea/ZBvNB9z5VH27\nIu+KHdNyytXNCBuXWrbGVy1nsn2A/cOiDdVb/SdZKQy6OroqD22b4YPj1g==\n-----END PUBLIC KEY-----\n",
+      "spkiDerBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbAGWkTnz76+7nea/ZBvNB9z5VH27Iu+KHdNyytXNCBuXWrbGVy1nsn2A/cOiDdVb/SdZKQy6OroqD22b4YPj1g==",
+      "signingKeySha256": "7da4a354a33038fb2a389b4812be51d8269749ff50a963a6f86c19e4869f28f6"
+    }
+  ],
+  "statements": [
+    {
+      "name": "approval",
+      "statement": {
+        "type": "NEXUS_CREDENTIAL_APPROVAL",
+        "version": 1,
+        "nexusId": "123456789",
+        "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+        "signingKeySha256": "98296852170eb45975b7f6c3b7ba39de51d37e0467e3ccee4f40bc9252e2d923",
+        "reference": "app-session-0001",
+        "approvedAt": "2026-10-19T10:00:00.000Z",
+        "bankKeyId": "7da4a354a33038fb2a389b4812be51d8269749ff50a963a6f86c19e4869f28f6"
+      },
+      "canonicalUtf8": "{\"approvedAt\":\"2026-10-19T10:00:00.000Z\",\"bankKeyId\":\"7da4a354a33038fb2a389b4812be51d8269749ff50a963a6f86c19e4869f28f6\",\"credentialId\":\"3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b\",\"nexusId\":\"123456789\",\"reference\":\"app-session-0001\",\"signingKeySha256\":\"98296852170eb45975b7f6c3b7ba39de51d37e0467e3ccee4f40bc9252e2d923\",\"type\":\"NEXUS_CREDENTIAL_APPROVAL\",\"version\":1}"
+    },
+    {
+      "name": "revocation",
+      "statement": {
+        "type": "NEXUS_CREDENTIAL_REVOCATION",
+        "version": 1,
+        "nexusId": "123456789",
+        "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+        "reason": "lost",
+        "revokedAt": "2026-10-19T12:00:00.000Z",
+        "bankKeyId": "7da4a354a33038fb2a389b4812be51d8269749ff50a963a6f86c19e4869f28f6"
+      },
+      "canonicalUtf8": "{\"bankKeyId\":\"7da4a354a33038fb2a389b4812be51d8269749ff50a963a6f86c19e4869f28f6\",\"credentialId\":\"3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b\",\"nexusId\":\"123456789\",\"reason\":\"lost\",\"revokedAt\":\"2026-10-19T12:00:00.000Z\",\"type\":\"NEXUS_CREDENTIAL_REVOCATION\",\"version\":1}"
+    }
+  ]
+}
