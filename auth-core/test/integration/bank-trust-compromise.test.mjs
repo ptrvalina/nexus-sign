@@ -17,7 +17,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ROOT, skipWithoutServices, startAuthCore } from './support/harness.mjs';
-import { bankSession, deviceSignature, newKey, submitSignature } from './support/actors.mjs';
+import { bankSession, call, deviceSignature, newKey, submitSignature } from './support/actors.mjs';
+import { createRecoveryKey, openRecoveryKey, proofSigningInput, setupSigningInput, signDerB64 } from './support/recovery.mjs';
 import { SOFTHSM_MODULE, generateKeyPair, initToken, skipWithoutSoftHsm, softHsmDirectory } from './support/softhsm.mjs';
 import { asCompromisedAuthCore } from './support/compromise.mjs';
 import { verifyEvidenceChain, verifyEvidenceRecord } from '../../scripts/lib/evidence.mjs';
@@ -281,6 +282,45 @@ describe('a compromised Auth Core cannot make the bank execute (SoftHSM)', { ski
     assert.match(refused.stderr, /DO NOT EXECUTE .*not approved by the bank/);
     const usage = spawnSync(process.execPath, [join(ROOT, 'scripts/bank-execution-check.mjs'), join(dir, 'registry.jsonl')], { encoding: 'utf8' });
     assert.equal(usage.status, 2);
+  });
+
+  test('11. recovery: the recovered device is refused until the bank approves its key; the old one after the bank revokes it', async () => {
+    const { approvalStatement, revocationStatement, signStatement, signingKeyFingerprint } = await bankTrust();
+    const identity = await bank.createIdentity();
+    const device = await bank.enrolDevice(identity.nexusId);
+    registry.push(signStatement(approvalStatement({ nexusId: device.nexusId, credentialId: device.credentialId, signingKeySha256: signingKeyFingerprint(device.signingKey.publicKeyPem), reference: 'enrol' }), bankKey.privateKey));
+    const before = await confirm(device);
+    const beforeEvidence = (await bank.call('GET', `/v1/authorizations/${before.authorizationId}/evidence`)).json;
+    // Recovery protocol 2, as the SDK does it (see recovery.test.mjs).
+    const words = ['legal', 'winner', 'thank', 'year', 'wave', 'sausage', 'worth', 'useful', 'legal', 'winner', 'thank', 'yellow'];
+    const parameters = (await call(server.baseUrl, 'GET', '/v1/mobile/recovery/setup', { device })).json;
+    const key = createRecoveryKey(words, parameters.salt, parameters.iterations, device.nexusId);
+    const setup = await call(server.baseUrl, 'POST', '/v1/mobile/recovery/setup', { device, body: {
+      protocol: 2, salt: parameters.salt, recoveryPublicKeyPem: key.publicKeyPem, wrappedRecoveryKey: key.wrapped.toString('base64'),
+      signature: signDerB64(device.signingKey.privateKey, setupSigningInput({ nexusId: device.nexusId, credentialId: device.credentialId, saltB64: parameters.salt, recoveryPublicKey: key.publicKey, wrapped: key.wrapped })),
+    } });
+    assert.equal(setup.status, 204, setup.text);
+    const session = (await bank.call('POST', '/v1/recovery/sessions', { body: { bankCustomerRef: identity.bankCustomerRef } })).json;
+    const newSigning = newKey(); const auth = newKey();
+    const proof = signDerB64(openRecoveryKey(words, session), proofSigningInput({ sessionId: session.sessionId, nonceB64: session.nonce, nexusId: session.nexusId, newSigningPublicKey: newSigning.publicKey }));
+    const completed = await call(server.baseUrl, 'POST', `/v1/recovery/sessions/${session.sessionId}/complete`, { token: session.accessToken,
+      body: { proof, newPublicKeyPem: newSigning.publicKeyPem, authPublicKeyPem: auth.publicKeyPem, platform: 'IOS', securityLevel: 'SECURE_ENCLAVE', deviceAttestation: { supported: false } } });
+    assert.equal(completed.status, 200, completed.text);
+    const recovered = { nexusId: device.nexusId, credentialId: completed.json.credentialId, signingKey: newSigning, authKey: auth };
+
+    const first = await confirm(recovered);
+    const evidence = await authCoreSaysYes(first);
+    const refused = await decide(evidence, expectedOf(first, recovered));
+    assert.equal(refused.allowed, false);
+    assert.ok(refused.problems.some((p) => /not approved by the bank/.test(p)), JSON.stringify(refused.problems));
+
+    // The app reports the new key's fingerprint; the bank approves it and revokes the old credential.
+    registry.push(signStatement(approvalStatement({ nexusId: recovered.nexusId, credentialId: recovered.credentialId, signingKeySha256: signingKeyFingerprint(newSigning.publicKeyPem), reference: 'recovery' }), bankKey.privateKey));
+    registry.push(signStatement(revocationStatement({ nexusId: device.nexusId, credentialId: device.credentialId, reason: 'recovered' }), bankKey.privateKey));
+    assert.deepEqual((await decide(evidence, expectedOf(first, recovered), { chain: await chainOf(device.nexusId) })).problems, []);
+    const old = await decide(beforeEvidence, expectedOf(before, device));
+    assert.equal(old.allowed, false);
+    assert.ok(old.problems.some((p) => /revoked by the bank/.test(p)), JSON.stringify(old.problems));
   });
 
   test('9. no negative case changed the bank side: the decision is the only execution signal used here', async () => {
