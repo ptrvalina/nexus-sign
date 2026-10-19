@@ -328,7 +328,9 @@ class VerificationCallController(
                 remoteDescription = true
                 for (candidate in pendingRemote.toList()) engine.addRemoteCandidate(candidate)
                 pendingRemote.clear()
-                if (_state.value == CallState.WaitingForOperator) _state.value = CallState.Connecting
+                // Atomic: a CONNECTED event handled meanwhile on another thread
+                // must not be overwritten.
+                _state.compareAndSet(CallState.WaitingForOperator, CallState.Connecting)
             }
             is CallMessage.Candidate -> {
                 if (signal.from != "operator") { ignoredMessages++; return }
