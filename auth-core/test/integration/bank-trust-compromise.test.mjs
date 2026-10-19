@@ -12,7 +12,11 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { skipWithoutServices, startAuthCore } from './support/harness.mjs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { ROOT, skipWithoutServices, startAuthCore } from './support/harness.mjs';
 import { bankSession, deviceSignature, newKey, submitSignature } from './support/actors.mjs';
 import { SOFTHSM_MODULE, generateKeyPair, initToken, skipWithoutSoftHsm, softHsmDirectory } from './support/softhsm.mjs';
 import { asCompromisedAuthCore } from './support/compromise.mjs';
@@ -172,7 +176,7 @@ describe('a compromised Auth Core cannot make the bank execute (SoftHSM)', { ski
     assert.ok(decision.problems.some((p) => /revoked by the bank/.test(p)), JSON.stringify(decision.problems));
 
     // Replacement through the bank's own flow: new token, new device, new approval.
-    const replacement = await bank.enrolDevice(device.nexusId, { replacement: { method: 'BRANCH', reference: 'R-1' } });
+    const replacement = await bank.enrolDevice(device.nexusId, { replacement: { method: 'BRANCH_VISIT', reference: 'R-1' } });
     registry.push(signStatement(approvalStatement({ nexusId: replacement.nexusId, credentialId: replacement.credentialId, signingKeySha256: signingKeyFingerprint(replacement.signingKey.publicKeyPem), reference: 'R-1' }), bankKey.privateKey));
     const next = await confirm(replacement);
     const fresh = await authCoreSaysYes(next);
@@ -244,6 +248,39 @@ describe('a compromised Auth Core cannot make the bank execute (SoftHSM)', { ski
     const d = await decide(evidence, expectedOf(auth, device)); // the bank asked for 125000
     assert.equal(d.allowed, false);
     assert.ok(d.problems.some((p) => /amount_minor/.test(p)), JSON.stringify(d.problems));
+  });
+
+  test('10. the command-line tools: a statement signed with the bank key; exit 0 to execute, 1 not to', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bank-trust-'));
+    const f = (name, content) => { const path = join(dir, name); writeFileSync(path, content); return path; };
+    const keyFile = f('bank-key.pem', bankKey.privateKey.export({ type: 'pkcs8', format: 'pem' }));
+    const trustKeys = f('bank-trust-keys.pem', bankTrustKeys.join('\n'));
+    const pinned = f('evidence-keys.pem', pinnedEvidenceKeys.join('\n'));
+    const device = await bank.enrolDevice((await bank.createIdentity()).nexusId);
+    const signingPem = f('signing.pem', device.signingKey.publicKeyPem);
+    const statement = execFileSync(process.execPath, [join(ROOT, 'scripts/bank-trust-statement.mjs'), 'approve', `--key=${keyFile}`,
+      `--nexus-id=${device.nexusId}`, `--credential-id=${device.credentialId}`, `--signing-key-pem=${signingPem}`, '--reference=cli'], { encoding: 'utf8' });
+    const registryFile = f('registry.jsonl', statement);
+    const run = async (who, auth) => {
+      const evidence = f(`${auth.authorizationId}.json`, JSON.stringify((await bank.call('GET', `/v1/authorizations/${auth.authorizationId}/evidence`)).json));
+      const expect = f(`${auth.authorizationId}-expected.json`, JSON.stringify(expectedOf(auth, who)));
+      return spawnSync(process.execPath, [join(ROOT, 'scripts/bank-execution-check.mjs'), evidence, `--public-keys=${pinned}`, `--bank-trust-keys=${trustKeys}`,
+        `--registry=${registryFile}`, `--expect=${expect}`], { encoding: 'utf8' });
+    };
+    const ok = await run(device, await confirm(device));
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /^EXECUTE/);
+
+    const attacker = { signingKey: newKey(), authKey: newKey(), offlineKey: newKey(), nexusId: device.nexusId };
+    attacker.credentialId = (await asCompromisedAuthCore(server, {
+      kind: 'enrol', nexusId: device.nexusId, clientId: client.clientId,
+      signingPublicKeyPem: attacker.signingKey.publicKeyPem, authPublicKeyPem: attacker.authKey.publicKeyPem, offlinePublicKeyPem: attacker.offlineKey.publicKeyPem,
+    })).credentialId;
+    const refused = await run(attacker, await confirm(attacker));
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.match(refused.stderr, /DO NOT EXECUTE .*not approved by the bank/);
+    const usage = spawnSync(process.execPath, [join(ROOT, 'scripts/bank-execution-check.mjs'), join(dir, 'registry.jsonl')], { encoding: 'utf8' });
+    assert.equal(usage.status, 2);
   });
 
   test('9. no negative case changed the bank side: the decision is the only execution signal used here', async () => {
