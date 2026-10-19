@@ -182,6 +182,8 @@ class VerificationCallController(
     private var pollJob: Job? = null
     private var expiryJob: Job? = null
     @Volatile private var released = false
+    /** Set once when the call starts ending; Ended is published after cleanup. */
+    @Volatile private var ending = false
 
     /** Number of messages ignored as duplicates or out of order (diagnostics). */
     @Volatile var ignoredMessages = 0
@@ -201,8 +203,8 @@ class VerificationCallController(
                 end(CallEndReason.Expired)
             }
             engine.prepare(joined.iceServers, joined.channel == VerificationChannel.VIDEO, events)
-            lock.withLock { if (!isEnded) sendOffer(iceRestart = false) }
-            if (!isEnded) {
+            lock.withLock { if (!ending) sendOffer(iceRestart = false) }
+            if (!ending) {
                 _state.value = CallState.WaitingForOperator
                 pollJob = scope.launch { pollLoop() }
             }
@@ -215,7 +217,7 @@ class VerificationCallController(
 
     /** The customer ends or declines the call. */
     suspend fun hangUp() {
-        if (isEnded) return
+        if (ending) return
         end(CallEndReason.CancelledByCustomer)
         try {
             signalling.cancel()
@@ -227,14 +229,14 @@ class VerificationCallController(
         }
     }
 
-    fun setMicrophoneEnabled(enabled: Boolean) { if (!isEnded) engine.setMicrophoneEnabled(enabled) }
-    fun setCameraEnabled(enabled: Boolean) { if (!isEnded) engine.setCameraEnabled(enabled) }
+    fun setMicrophoneEnabled(enabled: Boolean) { if (!ending) engine.setMicrophoneEnabled(enabled) }
+    fun setCameraEnabled(enabled: Boolean) { if (!ending) engine.setCameraEnabled(enabled) }
 
     private val events = object : MediaEvents {
         override fun onLocalCandidate(candidate: IceCandidateInit) {
             scope.launch {
                 lock.withLock {
-                    if (isEnded) return@withLock
+                    if (ending) return@withLock
                     if (offerSent) sendReliably(CallMessage.Candidate(candidate)) else pendingLocal += candidate
                 }
             }
@@ -282,7 +284,7 @@ class VerificationCallController(
 
     private suspend fun pollLoop() {
         var backoff = options.retryBackoffMillis
-        while (!isEnded) {
+        while (!ending) {
             val batch = try {
                 signalling.receive(lastSeq, options.pollWaitMillis).also { backoff = options.retryBackoffMillis }
             } catch (e: CancellationException) {
@@ -315,7 +317,7 @@ class VerificationCallController(
 
     /** Caller holds [lock]. */
     private suspend fun handle(signal: ReceivedSignal) {
-        if (isEnded) return
+        if (ending) return
         if (signal.seq <= lastSeq) { ignoredMessages++; return }
         lastSeq = signal.seq
         when (val message = signal.message) {
@@ -338,7 +340,7 @@ class VerificationCallController(
     }
 
     private suspend fun onMediaState(state: MediaConnectionState) {
-        if (isEnded) return
+        if (ending) return
         when (state) {
             MediaConnectionState.CONNECTED -> {
                 mediaConnected = true
@@ -367,7 +369,7 @@ class VerificationCallController(
 
     private suspend fun restartIce() {
         val giveUp = lock.withLock {
-            if (isEnded || awaitingAnswer) return
+            if (ending || awaitingAnswer) return
             if (restarts >= options.maxIceRestarts) return@withLock true
             restarts++
             _state.value = CallState.Reconnecting(restarts)
@@ -402,11 +404,14 @@ class VerificationCallController(
         else -> CallEndReason.Failed(e)
     }
 
-    /** Ends the call once: state, timers, polling and the media engine. */
+    /**
+     * Ends the call once: timers, polling and the media engine, and only then
+     * the state. Whoever observes [CallState.Ended] finds the media released.
+     */
     private fun end(reason: CallEndReason) {
         synchronized(this) {
-            if (_state.value is CallState.Ended) return
-            _state.value = CallState.Ended(reason)
+            if (ending) return
+            ending = true
         }
         reconnectJob?.cancel()
         expiryJob?.cancel()
@@ -416,5 +421,6 @@ class VerificationCallController(
             runCatching { engine.release() }
         }
         _capture.value = CaptureState(cameraOn = false, microphoneOn = false)
+        _state.value = CallState.Ended(reason)
     }
 }
