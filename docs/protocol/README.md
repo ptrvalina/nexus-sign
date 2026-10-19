@@ -8,5 +8,6 @@
 | [Recovery protocol 2](recovery-protocol-v2.md) | Recovery key wrapping, setup, proof, attempt limits and threat analysis |
 | [Secure push](secure-push.md) | Push modes, per-device sealing of messages, delivery receipts |
 | [Evidence format](evidence-format.md) | Sealed evidence records, chain rules and offline verification |
+| [Bank credential trust v1](bank-credential-trust-v1.md) | The bank's signed approval of each device key, revocations, and the bank's own execution decision, independent of Auth Core |
 
 Shared test vectors for all of them are in `auth-core/test-vectors/`.

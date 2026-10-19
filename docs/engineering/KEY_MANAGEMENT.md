@@ -158,3 +158,13 @@ What it would and would not change: a memory dump of Auth Core would no longer c
 | Restart at each step of a rotation | before the tool, after it, and in the middle (above); the ring accepts both keys throughout | Verified locally |
 | Rotation to a master key generated inside the HSM | needs the tool to encrypt through the HSM (`C_Encrypt` with a caller-supplied GCM IV): not implemented; the SoftHSM capability check shows the stored format decrypts in the HSM, but not every vendor HSM accepts a caller IV | Not implemented; vendor HSM BLOCKED |
 | Plaintext master keys in process memory | unchanged | Open |
+
+## Phase 12: keys the bank holds (2026-10-19)
+
+| Key or record | Holder | Rotation | Notes |
+|---|---|---|---|
+| Bank trust key (ECDSA P-256) | The bank, in its own HSM. Never Auth Core. | New key added to the bank's list of trust public keys. Statements signed with the old key stay valid while its public key stays in the list. Remove it from the list only after re-signing the registry. | Signs credential approvals and revocations ([bank credential trust v1](../protocol/bank-credential-trust-v1.md)). `bankKeyId` = SHA-256 of its SubjectPublicKeyInfo. |
+| Pinned evidence public keys | The bank, from the key ceremony record and each evidence key rotation (current and retired keys), out of band | Every evidence key rotation adds one | `bank-execution-check.mjs --public-keys`. The keys inside an export are never used for the decision. |
+| Chain heads | The bank, from every `evidence.appended` | — | `--expect-head`, `--heads`. Truncation after the last kept head cannot be detected. |
+
+`scripts/bank-trust-statement.mjs` signs with a private key file and exists for development and tests only. A production bank backend signs inside its HSM.

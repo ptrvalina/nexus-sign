@@ -132,3 +132,48 @@ Who executes: Auth Core never moves money. The bank's system executes, and the o
 | Many parallel requests on a refused record | every request refused with 409, no `COMMIT_REQUESTED`, one security event each | — | — | MB 10, 10b |
 | Revocation overlapping a commit request | a request decided after the revocation committed | — | a request that overlaps an uncommitted revocation is ordered before it | MB 11 |
 | Record moved out of the newest position of its chain | — | only with a chain head the bank kept | without kept heads: invisible in the chain | MB 2 note; `evidence-checkpoints` |
+
+## Phase 12: a fully compromised Auth Core, the bank in control of its own systems (2026-10-19)
+
+Model: the attacker controls Auth Core completely (its code, its database as owner, its HSM session). The bank's backend, its record of devices, its trust key, its pinned evidence keys, its kept chain heads and the customer's device and bank app stay under the bank's and the customer's control.
+
+| Can a compromised Auth Core on its own … | Result | Evidence |
+|---|---|---|
+| 1. register a new credential (no bank token, invented replacement authorization, attestation claimed verified) | **yes** | `bank-trust-compromise.test.mjs` 2, 10 (Auth Core's compiled `createCredential` on SoftHSM) |
+| 2. seal its enrolment with a valid HSM seal | **yes**: the real evidence key | 2, 3 |
+| 3. have the attacker sign a confirmation with the new key | **yes** | 2, 3 |
+| 4. get `VERIFIED`, `confirmed: true` and a 202 for the commit request | **yes** | 2, 3 (`authCoreSaysYes`) |
+| 5. produce an export the independent verifier accepts with the pinned evidence keys | **yes** | 2, 3 |
+| … get the bank to execute | **no**, if the bank runs its own check ([bank credential trust v1](../protocol/bank-credential-trust-v1.md)): the key is not one the bank approved with its own trust key | 2–11; 12 mutations of the check, all caught |
+
+Distinct properties, not interchangeable:
+
+| Property | Established by |
+|---|---|
+| Cryptographic validity of the device signature | anyone (verifier) |
+| Integrity of the evidence | anyone with the pinned evidence keys |
+| Genuineness of the device registration | the bank: the fingerprint reported by its app through its own channel matches the sealed key |
+| The bank's permission to trust the device | the bank: an approval signed with its trust key, not revoked |
+| Permission to execute this transaction | the bank: the decision, including the terms it asked for |
+
+Keys and where they live:
+
+| Key or data | Holder | May be taken from Auth Core? |
+|---|---|---|
+| Evidence sealing key | HSM used by Auth Core | — (it signs; a compromised Auth Core can use it) |
+| Evidence public keys and their rotation history | the bank, recorded at the key ceremony and at each rotation, out of band | **no**: the keys in an export are Auth Core's claim |
+| Bank trust key (statement signing) | the bank's HSM | never given to Auth Core |
+| Approvals, revocations | the bank's registry | no |
+| Chain heads | the bank, from every `evidence.appended` | received from Auth Core once, kept by the bank, then compared |
+| Device signing key fingerprint | the customer's device (SDK), via the bank's app | no |
+
+Detection: an unapproved registration, an unknown, revoked or substituted key, an evidence key the bank did not pin, a changed kept head, and a chain cut before a kept head are all detected. Records removed **after the last head the bank kept** are not detectable, and the guide does not claim otherwise.
+
+Residual risks:
+
+- denial of service by Auth Core;
+- a compromised bank backend or bank app;
+- attestation provenance checked only by Auth Core;
+- the customer's own compromised device (FI-007).
+
+Each needs a separate architectural decision. Auth Core itself does not enforce bank approvals: under the stated model such a check would run inside the compromised component. It is therefore not part of this protocol.

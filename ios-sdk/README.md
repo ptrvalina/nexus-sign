@@ -15,10 +15,11 @@ Native iOS SDK embedded into the bank's existing mobile application.
 1. The bank backend creates a NEXUS ID for the customer.
 2. When `bootstrap()` asks for a token, the host app gets one from its own backend, which calls Auth Core `POST /v1/mobile/sessions` with `{ nexusId, purpose: "BOOTSTRAP" }`.
 3. `NEXUSSignSDK.bootstrap()` requests a `BOOTSTRAP` token and creates three Secure Enclave keys: signing, request authentication and offline. One App Attest attestation covers all three. From then on the SDK signs every request with the authentication key; it holds no token.
-4. The bank backend creates a transaction authorization.
-5. The SDK fetches the exact authorization object and verifies it.
-6. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
-7. Auth Core verifies the signature and consumes the authorization atomically.
+4. The host app sends the credential ID and `try signingKeyFingerprint()` (the SHA-256 of the signing key, computed on the device) to its own backend, which approves exactly that key for the customer before it executes anything confirmed with it; the same after replacement and recovery ([bank credential trust](../docs/protocol/bank-credential-trust-v1.md)).
+5. The bank backend creates a transaction authorization.
+6. The SDK fetches the exact authorization object and verifies it.
+7. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
+8. Auth Core verifies the signature and consumes the authorization atomically. The bank executes only after its own check of the evidence.
 
 ## Configuration
 

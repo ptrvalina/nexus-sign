@@ -168,3 +168,27 @@ The HSM seal covers the sealed payload, not the columns of the row around it. Th
 ## D-040 No second pool connection while the authorization row is locked (phase 11)
 
 Under 20 parallel commit requests on an authorization whose evidence is refused, part of the requests ended in HTTP 500 (statement timeout waiting for the row lock): the request holding the lock read the credential and wrote the security event through the pool while the waiting requests held the remaining connections. Nothing was committed, but the answer was wrong and security events were missing for refused requests. The commit check now reads through its transaction, and the security events of a refusal are written after the transaction has ended (`evidence-metadata-binding.test.mjs` 10, 10b).
+
+## D-041 Device trust is decided by the bank, outside Auth Core (phase 12)
+
+A fully compromised Auth Core can enrol or substitute a device key, seal it with the real evidence key and accept confirmations signed by it; every Auth Core answer and the export are then positive (`bank-trust-compromise.test.mjs`, reproduced on `be3bee7`). Options compared:
+
+1. Auth Core checks a bank approval before it accepts a confirmation. This runs inside the compromised component, so it adds nothing under this model. It would also need an API and a migration. Not chosen.
+2. The bank countersigns the enrolment evidence, sealed back into the chain. The countersignature would have to be checked by the bank anyway; it adds a round trip and a format change. Not needed.
+3. **A bank-signed approval of `(nexusId, credentialId, signing key fingerprint)` in the bank's own registry, and the bank's own execution decision over the export. Chosen.** It uses only data the bank already holds or can get from its app. No device protocol change and no Auth Core change.
+4. Anchoring keys and heads outside Auth Core. Already in place (`--public-keys`, `--expect-head`, `--heads`); the decision now requires the pinned keys and uses the heads.
+
+The decision is `scripts/lib/bankTrust.mjs`, with the tools `bank-trust-statement.mjs` and `bank-execution-check.mjs`. It is specified in [bank credential trust v1](../protocol/bank-credential-trust-v1.md). Responsibility moves to the bank: keep the trust key, registry, pinned keys and heads outside Auth Core, and run the check before every execution.
+
+## D-042 The SDK reports the signing key fingerprint computed on the device (phase 12)
+
+Without a key fingerprint from the device, the bank could only approve the key Auth Core reports, which a compromised Auth Core chooses. `signingKeyFingerprint()` (Android and iOS) returns the SHA-256 of the active signing key's SubjectPublicKeyInfo, read from the Keystore or Secure Enclave. The change is additive: no change to the wire protocol, the registration response or the stored keys. Vectors are in `bank-trust-v1.json`; the Android JVM test runs against them. The iOS code and test are not compiled here.
+
+## D-043 Two races in the Android call controller (phase 12)
+
+The intermittent SDK call conformance failure of phase 11 had two causes, both in `VerificationCallController`:
+
+1. `end()` published `Ended` before releasing the media engine.
+2. The answer handler checked `WaitingForOperator` and then wrote `Connecting`. A `CONNECTED` event handled on another thread could land in between, so the state went back from `Connected` to `Connecting`. Confirmed by a trace.
+
+Fixes: the controller now releases first and publishes `Ended` last, with an internal `ending` flag, and the move to `Connecting` is a `compareAndSet`. Results: conformance 19/25 runs passed before, 50/50 after. The iOS controller is an actor and was not changed; nothing was run there.

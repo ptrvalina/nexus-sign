@@ -14,13 +14,18 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 5 | `7c1c0a8` | FI-001 (SDKs) | Signalling rules, call state machine in both core SDKs, WebRTC modules, demo integration, CI jobs |
 | 6 | `9dee0af` | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
 | Report | `1bbd12e` | — | Milestone report (Russian) |
+| 12 | `8ce4c04`…`8f0d36e` (tests `8ce4c04`, `1d08ae6`, `059573e`, `148059a`, `8f0d36e`; fixes `793d911`, `be3bee7`; features `dcfa557`, `fcd575a`) | FI-004 (compromised Auth Core), FI-001 (call controller) | Bank credential trust v1: the bank's own execution decision from bank-signed approvals of device-computed key fingerprints; SDK `signingKeyFingerprint()`; two Android call controller races |
 | 11 | `9b8c2a5`…`4a1935f` (tests `9b8c2a5`, `6122192`, `07579e0`, `ed34add`, `e644ea0`, `4a1935f`; fixes `8969a2b`, `165f259`) | FI-004 (evidence row metadata) | Evidence row columns bound to the sealed payload at commit, in `confirmed`, in the enrolment check and in the verifier; enrolment cache limited to the ECDSA result; no second pool connection under the commit row lock |
 | 10 | `588a0a6`, `8635a04`, `b7e6cb6` | FI-004 (evidence trust), FI-005 (rotation interrupted) | Commit check covers chain position; `confirmed` from verified evidence; forged-seal suite on SoftHSM; parser format checks and vectors; rotation tool killed mid-run |
 | 9 | `75736c8`, `0582f54` | FI-004 (enforcement), FI-005 (in-HSM check) | Bank commit re-verifies sealed evidence; `confirmed` flag; v1 behind the insecure flag; enforcement suite; demo bank status; SoftHSM capability check |
 | 8 | `88d9a0d`, `d06a378`, `e068c40` | FI-004 (deferred device signature), FI-005 (KEK attributes) | Offline confirmation v2 in Auth Core and the SDKs, migration 022, verifier `--reject-offline-code`; KEK must be generated in the HSM |
 | 7 | `e8e90e7` | FI-005 (HSM wrapping), FI-004 (threat model, daily limit) | Master keys wrapped by an HSM KEK, `masterKeys.js`, offline forgery tests, native build guide, baseline script, WebRTC provenance update |
 
-## Latest full regression (run `phase11-122631`, 2026-10-19, code at `4a1935f`)
+## Latest full regression (run `phase12-153141`, 2026-10-19, code at `8f0d36e`)
+
+Same tools as below. Every line exit code 0: typecheck and build ok; unit 104/104; vectors ok (valid 8, invalid 37; 5 shared files incl. `bank-trust-v1.json`); OpenAPI 44 routes; repository hygiene ok; integration 202/202, 0 skipped (new: `bank-trust-compromise` 11 on SoftHSM); media 3/3; E2E 77/77; demo bank 7/7; sandbox OK (74 tests); Android JVM (stubs) 60/60; Android call module type check ok (17 classes); SDK call conformance 1/1, and separately 50/50 repeated runs (19/25 on the code before the fixes).
+
+## Phase 11 full regression (run `phase11-122631`, 2026-10-19, code at `4a1935f`)
 
 Same tools as below. Typecheck and build ok; unit 101/101; vectors ok (valid 8, invalid 37); OpenAPI 44 routes; repository hygiene ok; integration 191/191, 0 skipped (new: `evidence-metadata-binding` 13 on SoftHSM); media 3/3; E2E 77/77; demo bank 7/7; sandbox OK (74 tests); Android JVM (stubs) 57/57; Android call module type check ok (17 classes). **SDK call conformance: exit code 1 in the full run** (JVM `CallConformanceTest`, `engine.released` expected 1, was 0, asserted right after the call ended); three separate runs of the same suite afterwards: exit code 0 each. Not changed in this phase (SDK call code is outside its scope); recorded as an intermittent failure, not as a pass.
 

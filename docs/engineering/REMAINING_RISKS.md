@@ -1,6 +1,6 @@
-# Remaining risks (2026-10-18)
+# Remaining risks (2026-10-19)
 
-Open after remediation batches 1–9 (phase 9 re-check 2026-10-18) on branch `remediation/2.0.0`. Each risk names the finding of the forensic inventory (FI-xxx) where there is one, the gate it blocks, and what would close it. Severity: High, Medium, Low.
+Open after remediation batches 1–12 (phase 12 re-check 2026-10-19) on branch `remediation/2.0.0`. Each risk names the finding of the forensic inventory (FI-xxx) where there is one, the gate it blocks, and what would close it. Severity: High, Medium, Low.
 
 | ID | Risk | Finding | Severity | Gate | What closes it |
 |---|---|---|---|---|---|
@@ -25,3 +25,5 @@ Open after remediation batches 1–9 (phase 9 re-check 2026-10-18) on branch `re
 | R-19 | Legal, privacy and regulatory acceptance (evidential status of signatures, offline codes, operator decisions; processing of call metadata) | — | High | G10 | Counsel and the pilot bank's acceptance criteria |
 | R-20 | Local git history is not the GitHub history; commits here (885d053 … ) exist only in this environment | FI-009 | Medium | G0 | Push to the owner's repository after review, or re-apply as patches |
 | R-21 | Build inputs not pinned by hash: container base images by tag (`node:22-alpine`, `python:3.12-slim`), Gradle distribution without `distributionSha256Sum`, no Gradle dependency verification, no `Package.resolved` (found in phase 9) | FI-009 | Medium | G0, G4 | Steps in [SUPPLY_CHAIN_CLOSURE.md](SUPPLY_CHAIN_CLOSURE.md) on a machine with registry access |
+| R-22 | A compromised Auth Core can enrol or substitute a device key and get VERIFIED, `confirmed: true`, a 202 and a verifying export (reproduced). Protection is the bank's own check: approvals signed with the bank's trust key, using the fingerprint from the bank's app ([bank credential trust v1](../protocol/bank-credential-trust-v1.md)). It holds only where the bank implements and runs that check, keeps its trust key, registry, pinned evidence keys and heads outside Auth Core, and uses SDK 2.0 with `signingKeyFingerprint()`. Not integrated in a real bank backend; the demo bank does not run it | FI-004 | High | G2, G10 | Bank backend integration and acceptance test; iOS build of `signingKeyFingerprint()` |
+| R-23 | Under the same compromise: denial of service; device attestation checked only by Auth Core; records removed after the last head the bank kept are undetectable | — | Medium | G2 | Bank-side attestation check (separate phase); keep a head for every confirmation |
