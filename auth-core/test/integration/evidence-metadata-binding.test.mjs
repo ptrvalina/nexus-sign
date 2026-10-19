@@ -135,7 +135,46 @@ describe('evidence record metadata must match the sealed payload (SoftHSM)', { s
       const c = await confirmed();
       await tamper(c.evidenceId, assignments);
       await expectRefused(c.id, reason);
+      // The independent verifier sees the same record as inconsistent (a record
+      // whose type is no longer AUTHORIZATION is not exported for the authorization).
+      const r = await bank.call('GET', `/v1/authorizations/${c.id}/evidence`);
+      if (r.status === 200) {
+        const problems = verifyEvidenceRecord(r.json, r.json.evidencePublicKeys ?? r.json.evidencePublicKeyPem);
+        assert.ok(problems.length > 0, `verifier after ${assignments}`);
+      } else {
+        assert.match(assignments, /record_type/, `export refused only when the type changed: ${r.status}`);
+      }
     }
+  });
+
+  test('9. enrolment record with another metadata column changed (type, chain position, authorization)', async () => {
+    for (const assignments of [
+      `record_type = 'RECOVERY_CONFIGURED'`,
+      `chain_sequence = chain_sequence + 100`,
+      `previous_evidence_hash = repeat('b', 64)`,
+    ]) {
+      const c = await confirmed();
+      const enrolment = (await q(`SELECT enrolment_evidence_id FROM credentials WHERE credential_id = $1`, [c.device.credentialId])).rows[0].enrolment_evidence_id;
+      await tamper(enrolment, assignments);
+      const next = await bank.createAuthorization(c.device);
+      const s = await deviceSignature(server, c.device, next.authorizationId).catch((e) => ({ error: e }));
+      if (!s.error) {
+        const r = await submitSignature(server, c.device, next.authorizationId, s.signature);
+        assert.notEqual(r.json?.status, 'VERIFIED', `${assignments}: ${r.text}`);
+      }
+      assert.equal((await bank.call('GET', `/v1/authorizations/${c.id}`)).json.confirmed, false, assignments);
+      const r = await commit(c.id);
+      assert.equal(r.status, 409, `${assignments}: ${r.text}`);
+      const row = (await q(`SELECT bank_transaction_state FROM authorization_requests WHERE authorization_id = $1`, [c.id])).rows[0];
+      assert.equal(row.bank_transaction_state, 'PENDING', assignments);
+    }
+    // An enrolment record that names an authorization (enrolments name none).
+    const c = await confirmed();
+    const spare = await bank.createAuthorization(c.device);
+    const enrolment = (await q(`SELECT enrolment_evidence_id FROM credentials WHERE credential_id = $1`, [c.device.credentialId])).rows[0].enrolment_evidence_id;
+    await tamper(enrolment, 'authorization_id = $2', [spare.authorizationId]);
+    assert.equal((await bank.call('GET', `/v1/authorizations/${c.id}`)).json.confirmed, false, 'authorization_id on an enrolment');
+    assert.equal((await commit(c.id)).status, 409);
   });
 
   test('8. enrolment record of the signing credential with a changed credential_id column', async () => {
