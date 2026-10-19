@@ -82,6 +82,12 @@ describe('evidence record metadata must match the sealed payload (SoftHSM)', { s
 
   test('2. only nexus_id changed in the row', async () => {
     const c = await confirmed();
+    // A later record of the same identity, so the moved record leaves a gap in
+    // the owner's chain (removing the newest record of a chain is a truncation,
+    // which the chain alone cannot show: evidence checkpoints cover that).
+    const later = await bank.createAuthorization(c.device);
+    const ls = await deviceSignature(server, c.device, later.authorizationId);
+    assert.equal((await submitSignature(server, c.device, later.authorizationId, ls.signature)).json.status, 'VERIFIED');
     const other = await bank.enrolDevice((await bank.createIdentity()).nexusId);
     await tamper(c.evidenceId, 'nexus_id = $2', [other.nexusId]);
     await expectRefused(c.id, /metadata does not match the sealed payload/);
