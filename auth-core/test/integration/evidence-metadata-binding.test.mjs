@@ -206,29 +206,45 @@ describe('evidence record metadata must match the sealed payload (SoftHSM)', { s
     assert.ok(problems.every((p) => /metadata does not match|enrolment/.test(p)), JSON.stringify(problems));
   });
 
+  // Well above the default pool size (10), so requests also queue for a
+  // connection behind those waiting on the row lock.
+  const PARALLEL = 40;
   test('10. parallel commit requests on a record with altered metadata: all refused, nothing recorded', async () => {
     const c = await confirmed();
     const other = await bank.enrolDevice((await bank.createIdentity()).nexusId);
     await tamper(c.evidenceId, 'credential_id = $2', [other.credentialId]);
-    const results = await Promise.all(Array.from({ length: 20 }, (_, i) => bank.call('POST', `/v1/authorizations/${c.id}/bank-commit-request`, { body: { bankTransactionReference: `B-par-${i}` } })));
+    const results = await Promise.all(Array.from({ length: PARALLEL }, (_, i) => bank.call('POST', `/v1/authorizations/${c.id}/bank-commit-request`, { body: { bankTransactionReference: `B-par-${i}` } })));
     assert.ok(results.every((r) => r.status === 409 && r.json.code === 'EVIDENCE_INVALID'), JSON.stringify(results.map((r) => r.status)));
     const row = (await q(`SELECT bank_transaction_state, bank_transaction_reference FROM authorization_requests WHERE authorization_id = $1`, [c.id])).rows[0];
     assert.equal(row.bank_transaction_state, 'PENDING');
     assert.equal(row.bank_transaction_reference, null);
     const events = await q(`SELECT event_type, count(*)::int AS n FROM audit_logs WHERE details->>'authorizationId' = $1 AND event_type IN ('integrity_violation', 'bank_commit_requested') GROUP BY event_type`, [c.id]);
-    assert.deepEqual(Object.fromEntries(events.rows.map((r) => [r.event_type, r.n])), { integrity_violation: 20 });
+    assert.deepEqual(Object.fromEntries(events.rows.map((r) => [r.event_type, r.n])), { integrity_violation: PARALLEL });
   });
 
   test('10b. parallel commit requests when the enrolment record has altered metadata: all refused', async () => {
     const c = await confirmed();
     const enrolment = (await q(`SELECT enrolment_evidence_id FROM credentials WHERE credential_id = $1`, [c.device.credentialId])).rows[0].enrolment_evidence_id;
-    await tamper(enrolment, `chain_sequence = chain_sequence + 100`);
-    const results = await Promise.all(Array.from({ length: 20 }, (_, i) => bank.call('POST', `/v1/authorizations/${c.id}/bank-commit-request`, { body: { bankTransactionReference: `B-enr-${i}` } })));
+    // A column that leaves the authorization record's own checks intact, so
+    // every request reaches the credential check under the row lock.
+    const other = await bank.enrolDevice((await bank.createIdentity()).nexusId);
+    await tamper(enrolment, 'credential_id = $2', [other.credentialId]);
+    const results = await Promise.all(Array.from({ length: PARALLEL }, (_, i) => bank.call('POST', `/v1/authorizations/${c.id}/bank-commit-request`, { body: { bankTransactionReference: `B-enr-${i}` } })));
     assert.ok(results.every((r) => r.status === 409 && r.json.code === 'EVIDENCE_INVALID'), JSON.stringify(results.map((r) => r.status)));
     const row = (await q(`SELECT bank_transaction_state FROM authorization_requests WHERE authorization_id = $1`, [c.id])).rows[0];
     assert.equal(row.bank_transaction_state, 'PENDING');
     const events = await q(`SELECT count(*)::int AS n FROM audit_logs WHERE event_type = 'integrity_violation' AND details->>'authorizationId' = $1`, [c.id]);
-    assert.equal(events.rows[0].n, 20, 'one security event per refused request');
+    assert.equal(events.rows[0].n, PARALLEL, 'one security event per refused request');
+  });
+
+  test('10c. parallel commit requests with different references on a genuine record: one accepted, the rest 409', async () => {
+    const c = await confirmed();
+    const results = await Promise.all(Array.from({ length: PARALLEL }, (_, i) => bank.call('POST', `/v1/authorizations/${c.id}/bank-commit-request`, { body: { bankTransactionReference: `B-gen-${i}` } })));
+    const statuses = results.map((r) => r.status);
+    assert.equal(statuses.filter((s) => s === 202).length, 1, JSON.stringify(statuses));
+    assert.equal(statuses.filter((s) => s === 409).length, PARALLEL - 1, JSON.stringify(statuses));
+    const audits = await q(`SELECT count(*)::int AS n FROM audit_logs WHERE event_type = 'bank_commit_requested' AND details->>'authorizationId' = $1`, [c.id]);
+    assert.equal(audits.rows[0].n, 1);
   });
 
   test('11. revocation of the credential overlapping a commit request', async () => {
