@@ -64,7 +64,7 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     bank = await bankSession(server, client);
     lib = await integration();
     bankDb = await createDatabase({ schema: false }); // the bank's own database
-    store = lib.createPostgresTrustStore(bankDb.pool);
+    store = lib.createPostgresTrustStore(bankDb.pool, { bankTrustKeys });
     await store.migrate();
     // Key ceremony: the evidence public key, recorded once by the bank.
     const probe = await bank.enrolDevice((await bank.createIdentity()).nexusId);
@@ -271,7 +271,7 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     try {
       const adapter = recordingAdapter();
       const one = boundary({ adapter }).boundary;
-      const two = boundary({ adapter, trust: lib.createPostgresTrustStore(otherPool) }).boundary;
+      const two = boundary({ adapter, trust: lib.createPostgresTrustStore(otherPool, { bankTrustKeys }) }).boundary;
       const results = await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? one : two).execute(p.paymentId)));
       assert.equal(adapter.calls.length, 1, JSON.stringify(results.map((r) => r.status)));
       assert.equal(results.filter((r) => r.status === 'EXECUTED' && !r.repeated).length, 1);
