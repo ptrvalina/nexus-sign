@@ -202,3 +202,34 @@ Still not addressed:
 - **A compromised bank backend or bank app.** It can call the adapter directly, change the registry or report a false fingerprint. The permit guards one process only.
 - **Device attestation.** Checked by Auth Core only.
 - **Integration.** The boundary is not integrated into a real bank backend or payment system.
+
+## Phase 14: several processes, crashes and unknown outcomes (2026-10-19)
+
+The gateway runs in its own process with its own database role, behind mutual TLS ([payment state machine](../architecture/payment-state-machine.md), [pilot execution pack](../integration/pilot-execution-pack.md)). Tests: `bank-execution-processes.test.mjs` (EP), with the gateway as a separate process, a provider double behind HTTP and barriers at each step.
+
+| Attempt | Result | Test |
+|---|---|---|
+| A second instance, or a module, issues its own permit (phase 13 design) | reproduced on `603dae9`; removed | reproduction log |
+| Gateway called without a certificate, with another CA's, or with another service's certificate | TLS refusal; 403 | EP «callers» |
+| Gateway called for a payment not approved, still `CHECKING`, for another attempt, or a second time | refused, nothing sent | EP «approval is for one attempt», «still checking» |
+| Request carrying a changed amount or beneficiary | the stored order is sent | EP «approval is for one attempt» |
+| Terms changed in the database after approval (owner, trigger disabled) | `REVIEW`, nothing sent (hash bound at approval) | EP «terms changed» |
+| Boundary role sets `SUBMITTED`; gateway role reads or writes tables | refused by the database | EP, EB «around the boundary» |
+| Forbidden transitions, deletes, changed terms, head moved back | refused by the database | EP «forbidden transitions», «chain head» |
+| Revocation before or at the approval; after it | refused; executed and reported as in flight (the cut-off is `APPROVED`) | EP «revocation at each step» |
+| Crash at each transition | the next attempt finishes; one transfer | EP «a crash at each transition» |
+| Gateway process killed after the provider executed | unknown; reconciled after restart; one transfer | EP «gateway killed» |
+| Pending, failed, nonsense, lost, late answers | `PENDING_PROVIDER`, `PROVIDER_FAILED`, then reconciled; one transfer | EP «provider answers» |
+| Provider not idempotent; no lookup in the contract | never resent; `REVIEW` | EP «not idempotent», «no answer and not found» |
+| Local state and provider disagree | finding recorded, state unchanged | EP «disagree» |
+| Repeated or forged webhooks; a correctly signed webhook for an unapproved key | one execution; 401; refused | EP «webhooks» |
+| Device replaced during the check | refused at the approval | EP «device replaced» |
+| Compromised Auth Core's answers with keys, a registry, heads | ignored; errors refuse | EP «compromised Auth Core» |
+
+Not covered:
+
+- a compromised bank backend: the boundary's role and certificate;
+- the schema owner's credentials;
+- a compromised provider;
+- exactly-once execution with a real provider (its contract: BLOCKED);
+- denial of service.

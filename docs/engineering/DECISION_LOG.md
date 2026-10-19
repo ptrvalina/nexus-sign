@@ -202,3 +202,27 @@ The phase 12 decision protected only where a bank chose to call it; a CLI is not
 ## D-045 Atomic where the bank's database can make it so; reconciliation where it cannot (phase 13)
 
 Claim, final check with the move to `EXECUTING`, revocation, and `EXECUTED` with the head are single PostgreSQL transactions. The credential's trust row is read `FOR SHARE` by the final check and locked `FOR UPDATE` by a revocation, so the two are ordered. The bank's database and the payment system cannot share a transaction. The contract therefore requires an idempotency key the payment system honours and `lookup` by that key; it marks `OUTCOME_UNKNOWN` and `REVIEW`, and `revoke()` reports payments already past their final check. No cross-system atomicity is claimed.
+
+## D-046 Authority to send a payment lives in the bank's database, not in memory (phase 14)
+
+The phase 13 one-time permit lived in the boundary's memory. A second instance issued its own permits, and any module holding the raw adapter called it directly (reproduced on `603dae9`). The payment gateway now runs as a separate component with its own PostgreSQL role. That role can only call `bank_submit`, `bank_resubmit` and `bank_operation_for_lookup`. They are `SECURITY DEFINER` functions that send the order stored with the payment, only for the attempt holding the `APPROVED` row, once. The boundary's role cannot set `SUBMITTED`: the trigger allows it only for the schema owner, under which the functions run. Callers of the gateway are authenticated with mutual TLS and an allow-list of certificate names. These are standard mechanisms (least privilege, server-side checks, mTLS); no custom cryptographic protocol is used. Bearer tokens and in-memory objects are not used as proof of authority.
+
+## D-047 The bank's decision, the command and the provider's confirmation are separate states (phase 14)
+
+`EXECUTING` is split:
+
+- `APPROVED`: the bank's decision; the revocation cut-off;
+- `SUBMITTED`: written by the gateway before it calls the provider;
+- the provider's answer: `EXECUTED`, `PROVIDER_FAILED` or `PENDING_PROVIDER`.
+
+No answer leads to `OUTCOME_UNKNOWN`, then `RECONCILING` by lookup. The database enforces the transition table for every role. Auth Core's `COMMITTED` is only the bank's report after `EXECUTED`.
+
+## D-048 Exactly-once execution is a property of the provider's contract (phase 14)
+
+The bank declares what its provider guarantees (`providerCapabilities: { idempotentSubmit, lookup }`, both false by default). Behaviour by contract:
+
+- **without lookup:** an unknown outcome goes to `REVIEW`;
+- **without idempotent submission:** a `not_found` goes to `REVIEW`;
+- **with both:** a `not_found` is resent with the same operation ID.
+
+A payment is never resent only because no answer came. The gate for exactly-once execution with a real provider stays BLOCKED until a provider contract is provided and tested.

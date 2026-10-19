@@ -1,98 +1,89 @@
-# Bank integration: the execution boundary
+# Bank integration: execution boundary and payment gateway
 
-This directory has two parts:
+This directory has three parts:
 
-- the **contract** a bank backend implements so that no payment confirmed through NEXUS-SIGN reaches its payment system without the bank's own trust check;
-- a **reference implementation** of that contract, tested against Auth Core on SoftHSM and PostgreSQL (`auth-core/test/integration/bank-execution-boundary.test.mjs`).
+- the **contract** a bank backend implements so that no payment confirmed through NEXUS-SIGN reaches its payment provider without the bank's own trust check and the bank's own approval;
+- the **state machine**, enforced by the bank's database;
+- a **reference implementation**, tested with Auth Core on SoftHSM, PostgreSQL, the gateway in its own process behind mutual TLS, and a provider double:
+  - `auth-core/test/integration/bank-execution-processes.test.mjs`;
+  - `bank-execution-boundary.test.mjs`;
+  - `bank-trust-compromise.test.mjs`.
 
-It is not a bank backend. This repository has no core banking system and no payment adapter. Integrating the boundary into a bank's real backend and payment system is the bank's work; until that is done, nothing here protects a real payment.
+It is not a bank backend, and it is not integrated with one. This repository has no core banking system and no payment provider. The provider double in the tests proves nothing about a real provider.
 
-Why it is needed: a compromised Auth Core can report `VERIFIED`, `confirmed: true` and a 202 for a device key the bank never approved ([bank credential trust v1](../docs/protocol/bank-credential-trust-v1.md), `bank-trust-compromise.test.mjs`). Those answers are not a reason to execute anything.
+Pilot integration: [pilot execution pack](../docs/integration/pilot-execution-pack.md). States and transitions: [payment state machine](../docs/architecture/payment-state-machine.md). Why: [bank credential trust v1](../docs/protocol/bank-credential-trust-v1.md).
 
-## Files
+## Components and their authority
 
-| File | What |
-|---|---|
-| `executionBoundary.mjs` | `createExecutionBoundary(...)`, which exposes `execute(paymentId)` and nothing else; `guardPaymentAdapter(raw)` |
-| `postgresTrustStore.mjs` | `createPostgresTrustStore(pool, { bankTrustKeys })`: the bank's trust registry and execution journal in the bank's PostgreSQL (`SCHEMA`, `migrate()`) |
-| `authCoreClient.mjs` | `createAuthCoreClient({ baseUrl, accessToken, timeoutMs })`, `withTimeouts` |
-| `index.mjs` | exports |
+| Component | Runs as | May do | May not do |
+|---|---|---|---|
+| Execution boundary (`executionBoundary.mjs`, `trustStore.mjs`) | the bank's backend, database role *boundary* | read everything; write statements, trust rows, heads, payments; move executions through `CHECKING`, `APPROVED`, `HELD`, `REFUSED` and record provider answers | set `SUBMITTED`: the database refuses it from this role; change terms or an approved order; move a head back; leave a final state |
+| Payment gateway (`paymentGateway.mjs`) | its own process, database role *gateway*, HTTPS with mutual TLS | call `bank_submit`, `bank_resubmit`, `bank_operation_for_lookup`; send the **stored** order to the provider; look payments up | read or write any table; send an order nobody approved, for another attempt, twice, or with other terms |
+| Schema owner (`schema.mjs`, `installSchema`) | migrations only | owns the tables, the trigger and the `SECURITY DEFINER` functions | not used by any running service |
+| Auth Core | outside the bank | answers about authorizations and evidence; sends webhooks | everything above: it holds no bank database credentials and no client certificate for the gateway |
 
-The boundary uses `auth-core/scripts/lib/bankTrust.mjs` (the decision) and `auth-core/scripts/lib/evidence.mjs` (the verifier). Neither imports Auth Core code. No runtime dependency: the `pg` pool is passed in.
+Authority to send a payment is the `APPROVED` row in the bank's database, for one attempt ID and one order hash. It is not a token and not an object in memory. The phase 13 in-memory permit could be issued by any second instance, and any module holding the raw adapter bypassed it (reproduced). It is removed.
+
+Caller authentication to the gateway uses mutual TLS with an allow-list of client certificate names: standard, no custom protocol. It is defence in depth. Even a caller with a valid certificate can only cause the payment that was already approved, with its stored order, to be sent once.
 
 ## Rules for the bank backend
 
 1. **One entry point.** Every path that can move money for a NEXUS-SIGN payment calls `boundary.execute(paymentId)`:
-   - the operator's "execute" button;
-   - the API;
-   - a handler for `authorization.verified` or `authorization.bank_transaction.commit_requested` webhooks, which may only enqueue `execute`;
-   - retry and recovery jobs;
-   - administrative tools.
+   - operator actions, the API, retries, administrative tools;
+   - the reconciliation job (`reconcileDue()`);
+   - the webhook handler (`createAuthCoreWebhookHandler`). A webhook only asks the boundary: Auth Core holds the webhook secret, so a compromised Auth Core can sign any event.
+2. **The provider only behind the gateway.** Only the gateway's process has the provider's credentials and network route. Only the boundary has the gateway's client certificate. The gateway's database role has no table rights.
+3. **The bank's own data decides.** Terms are recorded at `CREATED` and are immutable. Statements are signed with the bank's trust key. The pinned evidence keys and bank trust keys are configuration. Heads are kept from `evidence.appended` and move forward only. Nothing is taken from an Auth Core answer as trust.
+4. **The provider contract is declared, not assumed.** `providerCapabilities: { idempotentSubmit, lookup }` states what the bank's contract with the provider guarantees. Both default to false. Without them the boundary never resolves an unknown outcome automatically.
 
-   No other code calls the payment system for these payments.
-2. **The adapter only inside.** Wrap the payment system adapter with `guardPaymentAdapter(raw)` and give `issuePermit` to the boundary only. `adapter.execute` refuses any order without a one-time permit issued for exactly that order. Keep the raw adapter out of reach of other modules; the guard cannot enforce that across process or code boundaries the bank does not control.
-3. **The bank's own data decides.**
-   - **Payment and terms:** `createPayment` records `{ authorizationId, nexusId, transactionReference, operationType, amountMinor, currency, beneficiary }` when the bank creates the authorization at Auth Core.
-   - **Statements:** approvals and revocations signed with the bank's trust key, in its own store (`approve`, `revoke`). They are never imported from an Auth Core export.
-   - **Pinned evidence keys and bank trust keys:** configuration, never taken from an Auth Core answer.
-   - **Kept heads:** `keepHead` from `evidence.appended`, `approve(..., { head })` at approval, and the boundary itself after each execution. Heads only move forward.
-4. **Auth Core's answers are data.** The commit request (202) is a precondition. `VERIFIED` and `confirmed` are not read at all.
+## API
 
-## One attempt of `execute(paymentId)`
+```js
+import { installSchema, createTrustStore, createExecutionBoundary, createAuthCoreClient,
+  createGatewayClient, createPaymentGateway, createGatewayServer, createHttpProvider,
+  createAuthCoreWebhookHandler } from './index.mjs';
 
-| Step | On failure |
-|---|---|
-| 1. Claim in the journal (`bank_executions`, one row per payment, lease) | trust store unavailable: `HELD` |
-| 2. `bank-commit-request` at Auth Core | 4xx: `REFUSED` (final); network error, 5xx or timeout: `HELD` |
-| 3. Evidence and chain from Auth Core; the bank's statements and kept head; `bankExecutionDecision` | refused: `REFUSED` (final), `CANCELLED` reported to Auth Core; any error or timeout: `HELD` |
-| 4. Final check in one transaction: the credential's trust row is read `FOR SHARE`, must be `APPROVED` for this customer, and the journal moves `CLAIMED → EXECUTING` only if this attempt still holds the claim | revoked meanwhile: `REFUSED`; claim lost: `IN_PROGRESS` |
-| 5. Payment system: `execute(permit, order)`, with the payment's `bankTransactionReference` as idempotency key | error or timeout: `OUTCOME_UNKNOWN` |
-| 6. `EXECUTED` and the kept head moved forward in one transaction; `COMMITTED` reported to Auth Core | journal not updated: stays `EXECUTING`; the next attempt reconciles |
+await installSchema(ownerPool, { boundaryRole: 'bank_boundary', gatewayRole: 'bank_gateway' }); // migration
 
-A repeated `execute` returns:
+// gateway process
+const gateway = createPaymentGateway({ pool: gatewayRolePool, provider: createHttpProvider({ url }) });
+createGatewayServer({ gateway, tls: { key, cert, ca }, allowedClients: ['bank-execution-boundary'] }).listen(port);
 
-| Journal state | Answer |
-|---|---|
-| `EXECUTED` | `EXECUTED` (`repeated`), with no call to the payment system |
-| `REFUSED` | `REFUSED` |
-| `CLAIMED` with a live lease, or `EXECUTING` | `IN_PROGRESS` |
-| `HELD` | a new attempt |
-| `OUTCOME_UNKNOWN`, or an expired `EXECUTING` | `lookup(idempotencyKey)` at the payment system: `EXECUTED` is recorded; not found becomes `REVIEW` for a person. Never a second `execute`. |
+// backend process(es)
+const store = createTrustStore(boundaryRolePool, { bankTrustKeys });
+const boundary = createExecutionBoundary({ store, authCore: createAuthCoreClient({ baseUrl, accessToken }),
+  gateway: createGatewayClient({ url, tls: { key, cert, ca } }), evidenceKeys, bankTrustKeys,
+  providerCapabilities: { idempotentSubmit: true, lookup: true } });
+await store.createPayment({ paymentId, bankTransactionReference, terms });   // CREATED
+await store.attachAuthorization(paymentId, authorizationId);                 // AWAITING_AUTHORIZATION
+await boundary.execute(paymentId);   // EXECUTED | PROVIDER_FAILED | PENDING_PROVIDER | OUTCOME_UNKNOWN
+                                     // | REVIEW | REFUSED | HELD | IN_PROGRESS | NOT_AUTHORIZED
+await boundary.reconcileDue();       // job: every open or stopped payment
+await boundary.audit(paymentId);     // compares a final state with the provider; a disagreement is a finding
+await store.resolveReview(paymentId, 'succeeded' | 'failed', { operator, note });
+```
 
-The journal's final states are protected by a trigger, a revocation is final, a credential is bound to one customer, and statements are append-only.
+## Provider contract the gateway expects
+
+```text
+POST /payments  { operationId, paymentId, reference, operationType, amountMinor, currency, beneficiary }
+  -> { status: 'succeeded' | 'failed' | 'pending', providerReference }
+GET  /payments/{operationId}
+  -> 200 { status: 'succeeded' | 'failed' | 'pending', providerReference } | 404 (not found)
+```
+
+- `operationId` is the payment's `bankTransactionReference`: stable, unique, the same on every resubmission.
+- `idempotentSubmit: true` means a second `POST` with the same `operationId` never moves money again.
+- `lookup: true` means `GET` is authoritative for any `operationId` the provider may have received.
+
+Anything else is unknown to the boundary.
 
 ## What is atomic, and what is not
 
 - **Atomic in the bank's database:**
   - the claim;
-  - the final check together with the move to `EXECUTING`;
-  - a revocation, which serializes with the final check on the credential row;
+  - the approval together with the final check, serialized with a revocation on the credential row;
+  - the submission record (`APPROVED → SUBMITTED`);
   - `EXECUTED` together with the head.
-- **Not atomic across systems:**
-  - The bank's database and the payment system cannot be one transaction. The contract for this:
-    - an idempotency key per payment, honoured by the payment system;
-    - `OUTCOME_UNKNOWN` when the call fails;
-    - reconciliation by `lookup`;
-    - `REVIEW` when neither side knows.
-  - A revocation that commits after a payment passed its final check does not stop that payment. `revoke()` returns the payments in flight so the bank can stop or reverse them. They are ordered before the revocation.
-  - The report to Auth Core (`COMMITTED`, `CANCELLED`) is best effort. Auth Core's record of it is not the bank's.
-
-## Payment system adapter contract
-
-```text
-execute(order) -> { providerReference }     order = { idempotencyKey, reference, operationType,
-                                                      amountMinor, currency, beneficiary }
-lookup(idempotencyKey) -> { status: 'EXECUTED', providerReference } | { status: 'NOT_FOUND' }
-```
-
-`execute` must be idempotent by `idempotencyKey`: a second call with the same key never moves money twice. `lookup` must answer for any key `execute` may have received.
-
-## External blocker
-
-The boundary is a contract plus a reference implementation. It is integrated with:
-
-- no real bank backend;
-- no core banking or payment system;
-- no bank HSM for the trust key.
-
-Integration, the bank's own tests of every execution path it has, and operation of the registry, keys and heads are required before it protects anything.
+- **Not atomic:** the database and the provider. Exactly-once execution needs the provider's idempotency and lookup. Without them a person settles the outcome (`REVIEW`).
+- **Revocation after `APPROVED`** does not stop the payment; `revoke()` reports it.
