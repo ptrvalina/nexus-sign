@@ -172,6 +172,56 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank_executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'a'.repeat(64)]), /immutable|not a permitted/);
   });
 
+  test('an attempt still checking has no approval: its attempt id gets nothing from the gateway', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    const stop = barrier();
+    let attemptId;
+    const running = boundary({ hooks: { beforeApprove: async (c) => { attemptId = c.attemptId; await stop.wait(); } } }).execute(p.paymentId);
+    await stop.atGate;
+    assert.equal(await state(p.paymentId), 'CHECKING');
+    const before = provider.calls.length;
+    assert.equal((await rawGateway('/v1/submit', { paymentId: p.paymentId, attemptId }, certs.boundary)).status, 409, 'CHECKING is not APPROVED');
+    assert.equal(provider.calls.length, before);
+    stop.release();
+    assert.equal((await running).status, 'EXECUTED');
+    assert.equal(provider.executions(p.operationId), 1);
+  });
+
+  test('terms changed in the database after the approval (by the owner, around the trigger): nothing sent, REVIEW', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    const stop = barrier();
+    const running = boundary({ hooks: { approved: () => stop.wait() } }).execute(p.paymentId);
+    await stop.atGate;
+    const c = await bankDb.owner.connect();
+    try {
+      await c.query('BEGIN'); await c.query('ALTER TABLE bank_payments DISABLE TRIGGER bank_payment_lifecycle');
+      await c.query(`UPDATE bank_payments SET terms = jsonb_set(terms, '{amountMinor}', '"990000"') WHERE payment_id = $1`, [p.paymentId]);
+      await c.query('ALTER TABLE bank_payments ENABLE TRIGGER bank_payment_lifecycle'); await c.query('COMMIT');
+    } finally { c.release(); }
+    const before = provider.calls.length;
+    stop.release();
+    const r = await running;
+    assert.equal(r.status, 'REVIEW', JSON.stringify(r));
+    assert.equal(provider.calls.length, before, 'the gateway compared the stored order with the approved hash and sent nothing');
+  });
+
+  test('while reconciling, the approved order hash cannot be changed; a mismatch would send nothing', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    provider.modes.push('drop'); // not received: the reconciliation will resubmit (idempotent contract)
+    assert.equal((await boundary().execute(p.paymentId)).status, 'OUTCOME_UNKNOWN');
+    let tamper;
+    const r = await boundary({ hooks: { reconciling: async () => {
+      tamper = await bankDb.pools.boundary.query(`UPDATE bank_executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'b'.repeat(64)]).then(() => 'changed', (e) => e.message);
+    } } }).execute(p.paymentId);
+    assert.match(tamper, /approved order is immutable/);
+    assert.equal(r.status, 'EXECUTED');
+    assert.equal(provider.executions(p.operationId), 1);
+    assert.equal(provider.calls.at(-1).amountMinor, '125000');
+  });
+
   test('provider answers: pending then settled, failed, nonsense, lost, late', async () => {
     const device = await approvedDevice();
     // pending: PENDING_PROVIDER; the provider settles; the reconciliation job finds it.
