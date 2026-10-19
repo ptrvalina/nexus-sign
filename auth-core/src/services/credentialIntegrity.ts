@@ -52,14 +52,22 @@ export async function evidencePublicKeys(): Promise<Record<string, string>> {
   return { ...Object.fromEntries(keyring.retired), [await keyring.hsm.evidenceKeyId()]: await keyring.hsm.evidencePublicKeyPem() };
 }
 
+/** Audit writes postponed until a caller's transaction has ended. */
+export type DeferredAudits = Array<() => Promise<unknown>>;
+
 /**
  * Checks the credential's keys against its sealed enrolment and returns the
  * enrolment's evidence hash (an AUTHORIZATION record refers to it).
+ *
+ * A caller that holds row locks in `runner` passes `deferred`: the security
+ * event is then queued instead of written through a second pool connection
+ * while the locks are held (phase 11, parallel refused commits).
  */
-export async function assertCredentialIntegrity(credential: CredentialKeys, runner: Pick<PoolClient, 'query'> = pool): Promise<string> {
+export async function assertCredentialIntegrity(credential: CredentialKeys, runner: Pick<PoolClient, 'query'> = pool, deferred?: DeferredAudits): Promise<string> {
   const failure = async (reason: string): Promise<never> => {
-    await recordAuditEvent('integrity_violation', { nexusId: credential.nexusId },
+    const audit = () => recordAuditEvent('integrity_violation', { nexusId: credential.nexusId },
       { credentialId: credential.credentialId, reason }).catch(() => undefined);
+    if (deferred) deferred.push(audit); else await audit();
     throw new CredentialIntegrityError(`Credential integrity check failed: ${reason}`);
   };
   if (!credential.enrolmentEvidenceId) return failure('the credential has no sealed enrolment record');

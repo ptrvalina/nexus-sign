@@ -4,7 +4,7 @@ import { env } from '../config/env';
 import { pool } from '../db/pool';
 import { authorizationObjectOf, mapAuthorization, type AuthorizationRow } from './authorizationRecord';
 import { canonicalizeAuthorization } from './canonicalAuthorization';
-import { assertCredentialIntegrity, CredentialIntegrityError, recordMetadataProblem, sealProblem } from './credentialIntegrity';
+import { assertCredentialIntegrity, CredentialIntegrityError, recordMetadataProblem, sealProblem, type DeferredAudits } from './credentialIntegrity';
 import { getCredentialForClient } from './credentialService';
 import { mapEvidenceRow, type EvidenceRow } from './evidenceService';
 
@@ -31,9 +31,13 @@ import { mapEvidenceRow, type EvidenceRow } from './evidenceService';
  * cover: a party controlling the running Auth Core, which holds the HSM
  * session (offline-confirmation-threat-model.md).
  *
+ * Everything is read through `tx` (the caller may hold the authorization
+ * row lock); with `deferred`, security events are queued for after the
+ * transaction.
+ *
  * Returns why the authorization must not be committed, or null.
  */
-export async function authorizationEvidenceProblem(tx: Pick<PoolClient, 'query'>, auth: AuthorizationRow): Promise<string | null> {
+export async function authorizationEvidenceProblem(tx: Pick<PoolClient, 'query'>, auth: AuthorizationRow, deferred?: DeferredAudits): Promise<string | null> {
   const records = await tx.query<EvidenceRow>(
     `SELECT * FROM evidence_records WHERE authorization_id = $1 AND record_type = 'AUTHORIZATION'`, [auth.authorization_id]);
   if (records.rows.length !== 1) return records.rows.length === 0 ? 'no sealed evidence for this authorization' : 'more than one evidence record';
@@ -75,7 +79,7 @@ export async function authorizationEvidenceProblem(tx: Pick<PoolClient, 'query'>
   // The signing key must be the one sealed at enrolment, and must have signed the bytes.
   let enrolmentHash: string;
   try {
-    enrolmentHash = await assertCredentialIntegrity(await getCredentialForClient(auth.credential_id, auth.client_id), tx);
+    enrolmentHash = await assertCredentialIntegrity(await getCredentialForClient(auth.credential_id, auth.client_id, tx), tx, deferred);
   } catch (error) {
     if (error instanceof CredentialIntegrityError) return 'credential_integrity';
     throw error;

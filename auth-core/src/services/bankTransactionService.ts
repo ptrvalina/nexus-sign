@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import type { DeferredAudits } from './credentialIntegrity';
 import { pool, withTransaction } from '../db/pool';
 import { recordAuditEvent } from './auditService';
 import { enqueueWebhook } from './webhookService';
@@ -40,6 +41,19 @@ interface Row {
 
 /** Records the bank's commit request; idempotent for the same bankTransactionReference. */
 export async function requestCommit(authorizationId: string, clientId: string, bankTransactionReference: string): Promise<BankTransactionView> {
+  // Security events of a refusal are written after the transaction has ended
+  // and released the row lock and its connection: written while holding the
+  // lock, through another pool connection, parallel requests waiting on the
+  // lock could hold the whole pool (phase 11).
+  const deferred: DeferredAudits = [];
+  try {
+    return await commitInTransaction(authorizationId, clientId, bankTransactionReference, deferred);
+  } finally {
+    for (const audit of deferred) await audit();
+  }
+}
+
+function commitInTransaction(authorizationId: string, clientId: string, bankTransactionReference: string, deferred: DeferredAudits): Promise<BankTransactionView> {
   return withTransaction(async (tx) => {
     const auth = await lock(tx, authorizationId, clientId);
     if (auth.state !== 'VERIFIED') throw new ConflictError(`Authorization is ${auth.state}; only a VERIFIED authorization can be committed`);
@@ -65,11 +79,11 @@ export async function requestCommit(authorizationId: string, clientId: string, b
     }
     // FI-004 (phase 9): the state column alone does not authorize a commit;
     // the sealed evidence must show a device signature over these terms.
-    const problem = await authorizationEvidenceProblem(tx, auth as unknown as AuthorizationRow);
+    const problem = await authorizationEvidenceProblem(tx, auth as unknown as AuthorizationRow, deferred);
     if (problem) {
       // Outside the transaction, so the record survives the refusal.
-      await recordAuditEvent('integrity_violation', { nexusId: auth.nexus_id, clientId },
-        { authorizationId, reason: `commit refused: ${problem}` }).catch(() => undefined);
+      deferred.push(() => recordAuditEvent('integrity_violation', { nexusId: auth.nexus_id, clientId },
+        { authorizationId, reason: `commit refused: ${problem}` }).catch(() => undefined));
       throw new ConflictError(`The authorization's evidence does not support a commit: ${problem}`, 'EVIDENCE_INVALID');
     }
 

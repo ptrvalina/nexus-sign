@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { withTransaction, pool } from '../db/pool';
 import { recordAuditEvent } from './auditService';
 import { NexusIdentityNotFoundError } from './nexusIdentityService';
@@ -152,8 +153,8 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
   });
 }
 
-export async function getCredentialForClient(credentialId: string, clientId: string): Promise<CredentialRecord> {
-  const result = await pool.query<CredentialRow>(
+export async function getCredentialForClient(credentialId: string, clientId: string, runner: Pick<PoolClient, 'query'> = pool): Promise<CredentialRecord> {
+  const result = await runner.query<CredentialRow>(
     `SELECT ${CREDENTIAL_COLUMNS}
      FROM credentials
      WHERE credential_id = $1 AND nexus_id IN (SELECT nexus_id FROM nexus_identities WHERE client_id = $2)`,
