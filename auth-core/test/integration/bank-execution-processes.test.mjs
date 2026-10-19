@@ -152,6 +152,8 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     const running = boundary({ hooks: { approved: async (c) => { attemptId = c.attemptId; await stop.wait(); } } }).execute(p.paymentId);
     await stop.atGate;
     const before = provider.calls.length;
+    // The boundary's own role cannot submit, even for the approved attempt.
+    await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank_executions SET state = 'SUBMITTED' WHERE payment_id = $1`, [p.paymentId]), /only the payment gateway submits/);
     // Another instance, another attempt id: refused. The order in a request is ignored.
     assert.equal((await rawGateway('/v1/submit', { paymentId: p.paymentId, attemptId: randomUUID() }, certs.boundary)).status, 409);
     // The approved attempt, sent with a changed amount by whoever holds the client certificate:
