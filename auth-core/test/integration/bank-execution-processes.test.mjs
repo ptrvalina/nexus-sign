@@ -186,6 +186,21 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     stop.release();
     assert.equal((await running).status, 'EXECUTED');
     assert.equal(provider.executions(p.operationId), 1);
+    // Nor does a reconciling attempt's id: /v1/submit is only for APPROVED (a resubmission is the boundary's decision).
+    const q = await payment(device);
+    provider.modes.push('lose');
+    assert.equal((await boundary().execute(q.paymentId)).status, 'OUTCOME_UNKNOWN');
+    const hold = barrier();
+    let reconciling;
+    const running2 = boundary({ hooks: { reconciling: async (c) => { reconciling = c.attemptId; await hold.wait(); } } }).execute(q.paymentId);
+    await hold.atGate;
+    assert.equal(await state(q.paymentId), 'RECONCILING');
+    const calls = provider.calls.length;
+    assert.equal((await rawGateway('/v1/submit', { paymentId: q.paymentId, attemptId: reconciling }, certs.boundary)).status, 409);
+    assert.equal(provider.calls.length, calls);
+    hold.release();
+    assert.equal((await running2).status, 'EXECUTED');
+    assert.equal(provider.executions(q.operationId), 1);
   });
 
   test('terms changed in the database after the approval (by the owner, around the trigger): nothing sent, REVIEW', async () => {
