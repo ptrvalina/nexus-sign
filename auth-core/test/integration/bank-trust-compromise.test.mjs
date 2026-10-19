@@ -164,6 +164,12 @@ describe('a compromised Auth Core cannot make the bank execute (SoftHSM)', { ski
       assert.ok(d.problems.some((p) => /not approved by the bank/.test(p)), JSON.stringify(d.problems));
       assert.ok(d.problems.some((p) => /unknown bank key|signature of a bank statement does not verify/.test(p)), JSON.stringify(d.problems));
     }
+    // A genuine bank approval of this credential and key, but for another customer.
+    const elsewhere = signStatement({ ...statement, nexusId: '999999999' }, bankKey.privateKey);
+    const { bankExecutionDecision } = await bankTrust();
+    const d = bankExecutionDecision({ evidence, evidenceKeys: pinnedEvidenceKeys, bankTrustKeys, registry: [...registry, elsewhere], expected: expectedOf(auth, device) });
+    assert.equal(d.allowed, false);
+    assert.ok(d.problems.some((p) => /not approved by the bank/.test(p)), JSON.stringify(d.problems));
   });
 
   test('5. revoked by the bank while Auth Core keeps it active; replaced: the old refused, the new allowed', async () => {
