@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
@@ -250,6 +251,30 @@ class VerificationCallControllerTest {
         assertEquals(CaptureState(cameraOn = false, microphoneOn = false), call.capture.value)
         call.hangUp()
         assertEquals(0, relay.cancelled)
+    }
+
+    @Test fun `media is released before the call is reported ended`() = runBlocking {
+        // Whoever observes Ended (the app closing its screen, a test, a new
+        // call) must find the camera and microphone already released.
+        for (endCall in listOf<suspend (Relay, VerificationCallController) -> Unit>(
+            { relay, _ -> relay.operator(CallMessage.Bye("decided:VERIFIED")) },
+            { _, call -> call.hangUp() },
+        )) {
+            val relay = Relay()
+            var controller: VerificationCallController? = null
+            val statesAtRelease = CopyOnWriteArrayList<CallState>()
+            val engine = object : CallMediaEngine by Engine() {
+                override fun release() { statesAtRelease += controller!!.state.value }
+            }
+            val call = VerificationCallController(relay, engine, scope, fast)
+            controller = call
+            call.start()
+            until("offer") { relay.offersSent().isNotEmpty() }
+            endCall(relay, call)
+            until("ended") { call.isEnded }
+            assertEquals("released exactly once, before Ended was published", 1, statesAtRelease.size)
+            assertFalse("state at release: ${statesAtRelease.single()}", statesAtRelease.single() is CallState.Ended)
+        }
     }
 
     @Test fun `byes are mapped to their reasons`() = runBlocking {
