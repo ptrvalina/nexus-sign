@@ -156,3 +156,15 @@ A record with a genuine HSM seal could still be inserted next to the chain rathe
 ## D-037 Device parsers check ID and nonce formats (phase 10)
 
 The protocol requires valid formats on the device; the parsers checked amount, currency and timestamps only. Added: lowercase UUIDs for `authorization_id` and `credential_id`, 9-digit `nexus_id`, 64-character lowercase hex `nonce`, on Android, iOS and in the sandbox, with vectors. Auth Core always issued these formats; the canonical encoding is unchanged, so no version change. Look-alike payee names remain valid (they are signed and shown as they are; FI-034).
+
+## D-038 Evidence row metadata must equal the sealed payload (phase 11)
+
+The HSM seal covers the sealed payload, not the columns of the row around it. The commit check and the `confirmed` flag compared the payload with the authorization row, but not the record's own `nexus_id` and `credential_id` columns with the payload: an owner-level change of those columns (the append-only trigger disabled) left the seal valid and a commit was accepted (reproduced on `2df8754`, `evidence-metadata-binding.test.mjs` 2–4). Every column that repeats a sealed value (`record_type`, `nexus_id`, `credential_id`, `authorization_id`, `chain_sequence`, `previous_evidence_hash`, `seal_key_id`, `schema_version`) must now equal it, strictly, in the commit check, in `confirmed` and in the enrolment check; the verifier checks the same for schema 3 exports (`credentialId`, `sealKeyId`, `schemaVersion` added). No schema change: a CHECK constraint cannot compare a column with JSONB written by the same insert any better than the check at the point of use, and would not stop the owner who disables triggers either. Columns that repeat values but are not used in any decision (`transaction_reference`, `signature` and other copies) are not part of the check.
+
+## D-039 The enrolment cache covers only the ECDSA verification (phase 11)
+
+`assertCredentialIntegrity` cached a verified enrolment by its evidence ID and skipped reading the row again, so a row changed after the first use was not seen (`evidence-metadata-binding.test.mjs` 8). The row is now read on every use, its payload and columns are checked every time; only the seal verification is cached, keyed by the exact evidence ID, hash, seal key ID and signature it was computed over.
+
+## D-040 No second pool connection while the authorization row is locked (phase 11)
+
+Under 20 parallel commit requests on an authorization whose evidence is refused, part of the requests ended in HTTP 500 (statement timeout waiting for the row lock): the request holding the lock read the credential and wrote the security event through the pool while the waiting requests held the remaining connections. Nothing was committed, but the answer was wrong and security events were missing for refused requests. The commit check now reads through its transaction, and the security events of a refusal are written after the transaction has ended (`evidence-metadata-binding.test.mjs` 10, 10b).

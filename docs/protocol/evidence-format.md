@@ -181,7 +181,7 @@ Both responses include `evidencePublicKeyPem` (the current HSM key) and `evidenc
 |---|---|
 | Record hash | `evidenceHash = hex(SHA-256(canonicalJson(sealedPayload)))` |
 | HSM seal | ECDSA P-256 / SHA-256 over the 32 bytes of `evidenceHash`, DER, verifies with the evidence key whose key ID is `sealKeyId`. Another key that happens to verify is not accepted |
-| Metadata | `nexusId`, `previousEvidenceHash`, `recordType`, `chainSequence` (and `authorizationId` for authorizations) outside the payload equal the sealed values |
+| Metadata | `nexusId`, `previousEvidenceHash`, `recordType`, `chainSequence` (and `authorizationId` for authorizations) outside the payload equal the sealed values; for schema 3 also `credentialId`, `sealKeyId` and `schemaVersion` (a missing field counts as a mismatch). Auth Core applies the same rule to the database columns before using a record (phase 11) |
 | Signed bytes (`AUTHORIZATION`) | `SHA-256(signed bytes) = canonicalPayloadHash`, and the bytes name the same `authorization_id`, `nexus_id`, `credential_id` and `transaction_reference` |
 | Customer signature (`AUTHORIZATION`) | ECDSA P-256 / SHA-256 over the signed bytes verifies with `credentialPublicKeyPem` (`der`, or `raw` r‖s). Offline confirmations carry an HMAC tag (below) |
 | Key provenance (`AUTHORIZATION`) | The `CREDENTIAL_ENROLLED` record whose `evidenceHash` is `enrolmentEvidenceHash` appears earlier in the chain (or is attached to a single-record export), is valid, names the same credential and sealed the same signing key |

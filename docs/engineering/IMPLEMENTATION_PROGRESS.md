@@ -14,12 +14,19 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 5 | `7c1c0a8` | FI-001 (SDKs) | Signalling rules, call state machine in both core SDKs, WebRTC modules, demo integration, CI jobs |
 | 6 | `9dee0af` | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
 | Report | `1bbd12e` | — | Milestone report (Russian) |
+| 11 | `9b8c2a5`…`4a1935f` (tests `9b8c2a5`, `6122192`, `07579e0`, `ed34add`, `e644ea0`, `4a1935f`; fixes `8969a2b`, `165f259`) | FI-004 (evidence row metadata) | Evidence row columns bound to the sealed payload at commit, in `confirmed`, in the enrolment check and in the verifier; enrolment cache limited to the ECDSA result; no second pool connection under the commit row lock |
 | 10 | `588a0a6`, `8635a04`, `b7e6cb6` | FI-004 (evidence trust), FI-005 (rotation interrupted) | Commit check covers chain position; `confirmed` from verified evidence; forged-seal suite on SoftHSM; parser format checks and vectors; rotation tool killed mid-run |
 | 9 | `75736c8`, `0582f54` | FI-004 (enforcement), FI-005 (in-HSM check) | Bank commit re-verifies sealed evidence; `confirmed` flag; v1 behind the insecure flag; enforcement suite; demo bank status; SoftHSM capability check |
 | 8 | `88d9a0d`, `d06a378`, `e068c40` | FI-004 (deferred device signature), FI-005 (KEK attributes) | Offline confirmation v2 in Auth Core and the SDKs, migration 022, verifier `--reject-offline-code`; KEK must be generated in the HSM |
 | 7 | `e8e90e7` | FI-005 (HSM wrapping), FI-004 (threat model, daily limit) | Master keys wrapped by an HSM KEK, `masterKeys.js`, offline forgery tests, native build guide, baseline script, WebRTC provenance update |
 
-## Latest full regression (run `phase10-194621`, 2026-10-18, code at `b7e6cb6`)
+## Latest full regression (run `phase11-122631`, 2026-10-19, code at `4a1935f`)
+
+Same tools as below. Typecheck and build ok; unit 101/101; vectors ok (valid 8, invalid 37); OpenAPI 44 routes; repository hygiene ok; integration 191/191, 0 skipped (new: `evidence-metadata-binding` 13 on SoftHSM); media 3/3; E2E 77/77; demo bank 7/7; sandbox OK (74 tests); Android JVM (stubs) 57/57; Android call module type check ok (17 classes). **SDK call conformance: exit code 1 in the full run** (JVM `CallConformanceTest`, `engine.released` expected 1, was 0, asserted right after the call ended); three separate runs of the same suite afterwards: exit code 0 each. Not changed in this phase (SDK call code is outside its scope); recorded as an intermittent failure, not as a pass.
+
+Mutation run (code at `165f259`; suites `offline-deferred-signature`, `offline-enforcement`, `evidence-forgery-hsm`, `evidence-metadata-binding`, `invariants` with SoftHSM): 39 mutations, 36 caught; M16 and M30 refused by another check (shown by tests that still refuse with the mutation applied); M37 and M38 survived that run and were caught after the parallel tests were strengthened (`4a1935f`, 40 requests). Phase 11 mutations M25–M39: 14 of 15 caught, M30 redundant.
+
+## Phase 10 full regression (run `phase10-194621`, 2026-10-18, code at `b7e6cb6`)
 
 Same tools as below. Every line exit code 0: typecheck and build ok; unit 101/101; vectors ok (valid 8, invalid 37); OpenAPI 44 routes; repository hygiene ok; integration 178/178 (new: `evidence-forgery-hsm` 13, `key-rotation-interrupted` 1); media 3/3; E2E 77/77; demo bank 7/7; sandbox OK (74 tests); Android JVM (stubs) 57/57; Android call module type check ok (17 classes); SDK call conformance 1/1.
 

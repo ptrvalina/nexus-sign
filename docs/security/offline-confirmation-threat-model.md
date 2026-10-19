@@ -110,3 +110,25 @@ Changes since phase 9 that matter here: the commit check also requires the recor
 | Delivery channel compromise (network, push, QR) | observe, delay, replay, drop | replay of device requests (nonces), replay of codes (single use), signatures for other authorizations | — | delay and drop: provisional confirmations end `OFFLINE_UNSIGNED` |
 
 Who executes: Auth Core never moves money. The bank's system executes, and the only point where Auth Core can stop it is `bank-commit-request`: the evidence check and the `PENDING → COMMIT_REQUESTED` transition happen in one transaction under the authorization's row lock, so there is no window between check and state change inside Auth Core. Between Auth Core's 202 and the bank's own execution the bank is responsible: execute once per `bankTransactionReference`, only after the 202, and report the result.
+
+## Phase 11: evidence row metadata and trust boundaries (2026-10-19)
+
+**What prevents substituting record metadata.** The application role cannot change evidence (`UPDATE` revoked, append-only trigger on `UPDATE`, `DELETE`, `TRUNCATE`); a copied record collides with `UNIQUE (authorization_id)`, `(nexus_id, chain_sequence)` and `(nexus_id, previous_evidence_hash)`. A table owner who disables the trigger can still change columns. Since phase 11 every column that repeats a sealed value must equal it at the commit, in `confirmed`, in the enrolment check and in the verifier (D-038, D-039); the seal itself proves the payload. Tests: `evidence-metadata-binding.test.mjs` (MB) 1–11 with genuine SoftHSM seals.
+
+**What prevents substituting the registered public key.** The key used to verify a device signature must equal the key sealed in the credential's `CREDENTIAL_ENROLLED` record, whose seal, payload and columns are checked on every use. A database writer who replaces `public_key_pem` gets `credential_integrity`; one who also changes the enrolment row breaks its seal or its column binding.
+
+**A compromised Auth Core can register an attacker key.** The enrolment record is sealed by Auth Core with the evidence key it holds; a party controlling the running process (or the HSM session) can seal an enrolment for any key and then confirmations signed by it, consistent in every respect the checks and the verifier look at. Nothing in this phase changes that.
+
+**What the bank must reconcile on its own side.** The credential IDs it accepted for each customer in step 5 of the bank guide (from its own records, not from Auth Core) against the `credentialId` and enrolment record of every confirmation it executes; the chain heads from `evidence.appended` (`--expect-head`); evidence exported and verified with keys obtained out of band, not from the export. An enrolment the bank did not initiate or accept is an incident.
+
+**Needs a separate architectural phase.** Enrolment approved outside Auth Core (the bank countersigning the device key, or verifying the device attestation itself), evidence keys and chain heads anchored outside Auth Core's control, and an independent check of attestation chains in the verifier.
+
+| Scenario | Prevented | Detected | Still possible | Test |
+|---|---|---|---|---|
+| `nexus_id`, `credential_id` or both changed in an `AUTHORIZATION` row | commit (409 `EVIDENCE_INVALID`), `confirmed: true` | `integrity_violation`; verifier `record metadata does not match the sealed payload`; gap in the owner's chain | deny service on that authorization | MB 2–4, 7 |
+| `authorization_id` moved to another authorization | commit of the target | binding check; verifier | — | MB 5; FH re-pointed |
+| `record_type`, `chain_sequence`, `seal_key_id`, `schema_version` changed | commit | verifier | — | MB 6 |
+| Enrolment row columns changed | use of the credential (new confirmations, commit) | `integrity_violation` | — | MB 8, 9 |
+| Many parallel requests on a refused record | every request refused with 409, no `COMMIT_REQUESTED`, one security event each | — | — | MB 10, 10b |
+| Revocation overlapping a commit request | a request decided after the revocation committed | — | a request that overlaps an uncommitted revocation is ordered before it | MB 11 |
+| Record moved out of the newest position of its chain | — | only with a chain head the bank kept | without kept heads: invisible in the chain | MB 2 note; `evidence-checkpoints` |
