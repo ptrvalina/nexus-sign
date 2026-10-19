@@ -178,4 +178,4 @@ What it would and would not change: a memory dump of Auth Core would no longer c
 | Pinned evidence keys, bank trust public keys | Configuration under change control, from the key ceremony record; never read from an Auth Core response. |
 | Kept heads | Written from every `evidence.appended` (`keepHead`), at approval, and after each execution; forward only. Lost heads reduce detection to what the chain shows. |
 | Execution journal | Each payment executes once. Monitor and alert on `HELD`, `OUTCOME_UNKNOWN`, `REVIEW` and `REFUSED`; a `REFUSED` with an approval or seal problem is a security incident. `REVIEW` is settled by a person against the payment system. |
-| Access | Only the backend's approval service writes statements; only the execution boundary holds the adapter's permit function. Operators read; changes go through the bank's own four-eyes procedure. |
+| Access | Only the backend's approval service writes statements; only the execution boundary holds the gateway's client certificate, and only the gateway's role may submit (phase 14). Operators read; changes go through the bank's own four-eyes procedure. |

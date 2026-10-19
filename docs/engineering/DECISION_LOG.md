@@ -193,13 +193,13 @@ The intermittent SDK call conformance failure of phase 11 had two causes, both i
 
 Fixes: the controller now releases first and publishes `Ended` last, with an internal `ending` flag, and the move to `Connecting` is a `compareAndSet`. Results: conformance 19/25 runs passed before, 50/50 after. The iOS controller is an actor and was not changed; nothing was run there.
 
-## D-044 One execution boundary on the bank's side; the adapter needs its permit (phase 13)
+## D-044 One execution boundary on the bank's side; the adapter needs its permit (phase 13; permit replaced by D-046)
 
 The phase 12 decision protected only where a bank chose to call it; a CLI is not an integration. This repository has no bank backend and no payment adapter: `demo/bank-backend` executes nothing, Auth Core only records commit states, the sandbox is a self-contained simulator. So the integration is delivered as a contract plus a reference implementation (`bank-integration/`), not as a claim that a bank is integrated.
 
 `execute(paymentId)` is the only function that may reach the payment system. The adapter is wrapped so that it executes only an order for which the boundary issued a one-time permit. Errors before the adapter hold the payment; errors in the adapter leave the outcome unknown, and the next attempt reconciles by lookup instead of executing again. Auth Core's commit request is a precondition; `confirmed` is not read.
 
-## D-045 Atomic where the bank's database can make it so; reconciliation where it cannot (phase 13)
+## D-045 Atomic where the bank's database can make it so; reconciliation where it cannot (phase 13; states refined by D-047)
 
 Claim, final check with the move to `EXECUTING`, revocation, and `EXECUTED` with the head are single PostgreSQL transactions. The credential's trust row is read `FOR SHARE` by the final check and locked `FOR UPDATE` by a revocation, so the two are ordered. The bank's database and the payment system cannot share a transaction. The contract therefore requires an idempotency key the payment system honours and `lookup` by that key; it marks `OUTCOME_UNKNOWN` and `REVIEW`, and `revoke()` reports payments already past their final check. No cross-system atomicity is claimed.
 

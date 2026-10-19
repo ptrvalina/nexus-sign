@@ -1,6 +1,6 @@
 # Bank trust boundary and execution boundary
 
-Status: 2.0.0, phase 13. Protocol: [bank credential trust v1](../protocol/bank-credential-trust-v1.md). Contract and reference implementation: [`bank-integration/`](../../bank-integration/README.md).
+Status: 2.0.0, phase 13; execution path updated in phase 14 (gateway in its own process with its own database role, [payment state machine](payment-state-machine.md)). Protocol: [bank credential trust v1](../protocol/bank-credential-trust-v1.md). Contract and reference implementation: [`bank-integration/`](../../bank-integration/README.md).
 
 ## Trust boundary
 
@@ -17,7 +17,7 @@ Status: 2.0.0, phase 13. Protocol: [bank credential trust v1](../protocol/bank-c
   │ Auth Core  (NOT trusted   │  chain, 202 │                                               │
   │ for execution: may be     │────────────▶│ EXECUTION BOUNDARY  execute(paymentId)        │
   │ compromised)              │◀────────────│  claim → commit request → decision →          │
-  │ HSM evidence key          │ commit req. │  final check → adapter (permit) → executed    │
+  │ HSM evidence key          │ commit req. │  final check → APPROVED → gateway → provider  │
   └──────────────────────────┘  and result │                      │                        │
                                            │                      ▼                        │
                                            │ payment system adapter (idempotent by key)    │
@@ -60,7 +60,7 @@ No other path in this repository moves a payment or changes a bank transaction s
 
 What is atomic, what is not, and how unknown outcomes are settled is in the [bank integration contract](../../bank-integration/README.md#what-is-atomic-and-what-is-not). In short:
 
-- **One attempt at a time per payment.** A claim with a lease and a claim ID. An attempt whose lease was taken over cannot move to `EXECUTING`.
-- **Revocation and execution** serialize on the credential's trust row. A payment checked after a revocation is refused; one past its final check is reported by `revoke()`.
+- **One attempt at a time per payment.** A claim with a lease and an attempt ID. An attempt whose lease was taken over cannot move to `APPROVED`, and the gateway submits only for the attempt that holds `APPROVED`.
+- **Revocation and execution** serialize on the credential's trust row. A payment approved after a revocation is refused; one already `APPROVED` or later is reported by `revoke()`.
 - **The kept head and `EXECUTED`** are written in one transaction; the head only moves forward.
 - **The payment system** is not part of any transaction. It is protected by an idempotency key, `OUTCOME_UNKNOWN`, reconciliation by lookup, and `REVIEW`.
