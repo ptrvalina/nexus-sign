@@ -46,8 +46,9 @@ function databaseUrl(name) {
   return url.toString();
 }
 
-/** Creates an empty database with the schema and every migration applied. */
-export async function createDatabase() {
+/** Creates an empty database with the schema and every migration applied
+ * (`{ schema: false }`: an empty database, e.g. a bank's own store). */
+export async function createDatabase({ schema = true } = {}) {
   const { Client, Pool } = require('pg');
   const name = `nexus_it_${randomBytes(6).toString('hex')}`;
   const admin = new Client({ connectionString: ADMIN_DB_URL });
@@ -62,9 +63,11 @@ export async function createDatabase() {
   await setup.connect();
   try {
     await setup.query('SET client_min_messages = warning');
-    await setup.query(readFileSync(join(ROOT, 'src/db/schema.sql'), 'utf8'));
-    for (const file of readdirSync(join(ROOT, 'migrations')).filter((f) => f.endsWith('.sql')).sort()) {
-      await setup.query(readFileSync(join(ROOT, 'migrations', file), 'utf8'));
+    if (schema) {
+      await setup.query(readFileSync(join(ROOT, 'src/db/schema.sql'), 'utf8'));
+      for (const file of readdirSync(join(ROOT, 'migrations')).filter((f) => f.endsWith('.sql')).sort()) {
+        await setup.query(readFileSync(join(ROOT, 'migrations', file), 'utf8'));
+      }
     }
   } finally {
     await setup.end();
