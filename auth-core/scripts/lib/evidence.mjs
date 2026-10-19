@@ -71,7 +71,17 @@ export function verifyEvidenceRecord(record, evidenceKeys, { standalone = false,
   const problems = [];
   if (sha256hex(canonicalJson(payload)) !== record.evidenceHash) problems.push(`${label}: evidence hash does not match the sealed payload`);
   if (!sealVerifies(record, keys)) problems.push(`${label}: HSM seal does not verify with the evidence key it names`);
-  if (payload.nexusId !== record.nexusId) problems.push(`${label}: record metadata does not match the sealed payload`);
+  if (payload.nexusId !== record.nexusId) problems.push(`${label}: record metadata does not match the sealed payload (nexusId)`);
+  // Phase 11: in schema 3 every exported column that repeats a sealed value
+  // must equal it; a missing column counts as a mismatch. (Schema 2 exports
+  // predate some of these columns and are checked as before.)
+  if (payload.schemaVersion === '3') {
+    for (const field of ['credentialId', 'sealKeyId', 'schemaVersion']) {
+      if (record[field] !== payload[field]) problems.push(`${label}: record metadata does not match the sealed payload (${field})`);
+    }
+  } else if (record.credentialId !== undefined && payload.credentialId !== record.credentialId) {
+    problems.push(`${label}: record metadata does not match the sealed payload (credentialId)`);
+  }
   if ((payload.previousEvidenceHash ?? null) !== (record.previousEvidenceHash ?? null)) {
     problems.push(`${label}: previousEvidenceHash differs between record and payload`);
   }
@@ -81,7 +91,7 @@ export function verifyEvidenceRecord(record, evidenceKeys, { standalone = false,
     if (payload.chainSequence !== record.chainSequence) problems.push(`${label}: chain position differs between record and payload`);
   }
   if (recordType === 'AUTHORIZATION') {
-    if (payload.authorizationId !== record.authorizationId) problems.push(`${label}: record metadata does not match the sealed payload`);
+    if (payload.authorizationId !== record.authorizationId) problems.push(`${label}: record metadata does not match the sealed payload (authorizationId)`);
     problems.push(...verifyDeviceSignature(payload, { rejectOfflineCode }).map((p) => `${label}: ${p}`));
     if (payload.schemaVersion === '3' && (standalone || record.credentialEnrolment !== undefined)) {
       // Exported alone, the record must bring the enrolment that proves its

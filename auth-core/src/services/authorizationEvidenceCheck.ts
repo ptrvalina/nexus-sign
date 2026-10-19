@@ -4,7 +4,7 @@ import { env } from '../config/env';
 import { pool } from '../db/pool';
 import { authorizationObjectOf, mapAuthorization, type AuthorizationRow } from './authorizationRecord';
 import { canonicalizeAuthorization } from './canonicalAuthorization';
-import { assertCredentialIntegrity, CredentialIntegrityError, sealProblem } from './credentialIntegrity';
+import { assertCredentialIntegrity, CredentialIntegrityError, recordMetadataProblem, sealProblem } from './credentialIntegrity';
 import { getCredentialForClient } from './credentialService';
 import { mapEvidenceRow, type EvidenceRow } from './evidenceService';
 
@@ -13,8 +13,10 @@ import { mapEvidenceRow, type EvidenceRow } from './evidenceService';
  * authorization, it re-checks the sealed AUTHORIZATION evidence of that
  * authorization instead of trusting the `state` column:
  *
- *  - exactly one record, HSM seal valid with a known evidence key, at its
- *    sealed position in the identity's chain and linked to its predecessor;
+ *  - exactly one record, HSM seal valid with a known evidence key, every
+ *    column that repeats a sealed value equal to it (identity, credential,
+ *    authorization, type, position, seal key, schema), at its sealed position
+ *    in the identity's chain and linked to its predecessor;
  *  - it names this authorization, its credential and the exact canonical
  *    bytes of the stored (immutable) terms;
  *  - the confirmation method matches the row, and is a device signature
@@ -54,6 +56,10 @@ export async function authorizationEvidenceProblem(tx: Pick<PoolClient, 'query'>
       `SELECT evidence_hash FROM evidence_records WHERE nexus_id = $1 AND chain_sequence = $2`, [auth.nexus_id, record.chainSequence - 1])).rows[0]?.evidence_hash ?? null
     : null;
   if (predecessor !== (record.previousEvidenceHash ?? null)) return 'the evidence does not link to its predecessor in the chain';
+  // Phase 11: the row's remaining columns (identity, credential, position, seal
+  // key, schema) must be what was sealed, not only the payload.
+  const metadata = recordMetadataProblem(record);
+  if (metadata) return metadata;
   const canonical = canonicalizeAuthorization(authorizationObjectOf(mapAuthorization(auth)));
   if (typeof p.signedPayloadBase64 !== 'string' || !Buffer.from(p.signedPayloadBase64, 'base64').equals(canonical)) {
     return 'the evidence does not carry the stored terms';
