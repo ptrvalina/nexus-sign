@@ -39,6 +39,20 @@ const { sealCredentialEnrolment } = require(${JSON.stringify(join(ROOT, 'dist/se
       await tx.query('ALTER TABLE credentials ENABLE TRIGGER credential_lifecycle');
       return { evidenceId: position.evidenceId };
     });
+  } else if (op.kind === 'seal-enrolment') {
+    // A credential row and a sealed enrolment for it, next to the customer's
+    // device and without touching it (no replacement, nothing revoked).
+    result = await withTransaction(async (tx) => {
+      const credentialId = require('node:crypto').randomUUID();
+      await tx.query("INSERT INTO credentials (credential_id, nexus_id, key_algorithm, public_key_pem, platform, security_level, attestation_status, state, revoked_at, auth_public_key_pem) VALUES ($1, $2, 'ES256', $3, 'IOS', 'SECURE_ENCLAVE', 'VERIFIED', 'REVOKED', now(), $4)",
+        [credentialId, op.nexusId, op.signingPublicKeyPem, op.authPublicKeyPem]);
+      const position = await sealCredentialEnrolment(tx, hsm, {
+        nexusId: op.nexusId, credentialId, reason: 'ENROLMENT', platform: 'IOS', securityLevel: 'SECURE_ENCLAVE',
+        signingPublicKeyPem: op.signingPublicKeyPem, authPublicKeyPem: op.authPublicKeyPem, offlinePublicKeyPem: null,
+        attestation: { status: 'VERIFIED' }, replacedCredentialIds: [], replacementAuthorization: null,
+      });
+      return { credentialId, evidenceId: position.evidenceId };
+    });
   } else {
     throw new Error('unknown operation ' + op.kind);
   }

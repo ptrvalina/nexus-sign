@@ -343,6 +343,140 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     assert.equal(lost.calls.length, 1);
   });
 
+  test('revocation after the decision but before the final check: refused by the final check', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    // The registry is read for the decision, then the bank revokes the key.
+    const racing = { ...store, loadTrust: async (n) => { const t = await store.loadTrust(n); await revoke(device); return t; } };
+    const { adapter, boundary: b } = boundary({ trust: racing });
+    await expectNotExecuted(await b.execute(p.paymentId), adapter, p.paymentId, 'REFUSED', /revoked by the bank/);
+  });
+
+  /** An Auth Core client whose evidence call waits until released. */
+  const gated = () => {
+    const real = authCoreClient();
+    let release; const gate = new Promise((r) => { release = r; });
+    let reached; const atGate = new Promise((r) => { reached = r; });
+    return { client: { ...real, evidence: async (id) => { reached(); await gate; return real.evidence(id); } }, release, atGate };
+  };
+
+  test('a live claim is not taken over: a second attempt answers IN_PROGRESS and calls nothing', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    const adapter = recordingAdapter();
+    const g = gated();
+    const first = boundary({ adapter, authCore: g.client }).boundary.execute(p.paymentId);
+    await g.atGate;
+    const second = await boundary({ adapter }).boundary.execute(p.paymentId);
+    assert.equal(second.status, 'IN_PROGRESS', JSON.stringify(second));
+    assert.equal(adapter.calls.length, 0);
+    g.release();
+    assert.equal((await first).status, 'EXECUTED');
+    assert.equal(adapter.calls.length, 1);
+  });
+
+  test('an attempt whose lease expired and was taken over does not execute', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    const adapter = recordingAdapter();
+    const g = gated();
+    const short = (authCore) => lib.createExecutionBoundary({ store, authCore, payments: lib.guardPaymentAdapter(adapter), evidenceKeys, bankTrustKeys, leaseMs: 300 });
+    const stale = short(g.client).execute(p.paymentId);
+    await g.atGate;
+    await new Promise((r) => setTimeout(r, 500)); // the first attempt's lease is over
+    const g2 = gated();
+    const fresh = short(g2.client).execute(p.paymentId); // takes the claim over
+    await g2.atGate;
+    g.release(); // the stale attempt comes back first, while the new one holds the claim
+    const staleResult = await stale;
+    assert.equal(staleResult.status, 'IN_PROGRESS', JSON.stringify(staleResult));
+    assert.equal(adapter.calls.length, 0, 'the stale attempt did not execute');
+    g2.release();
+    const freshResult = await fresh;
+    assert.ok(['EXECUTED', 'IN_PROGRESS'].includes(freshResult.status), JSON.stringify(freshResult));
+    assert.ok(adapter.calls.length <= 1);
+  });
+
+  test('records after a head the bank kept are withheld (an unapproved enrolment hidden): refused', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    const authorizationSequence = (await authCoreClient().evidence(p.authorizationId)).chainSequence;
+    // A later record the bank learnt about (evidence.appended): an enrolment Auth Core made alone.
+    const attacker = { signingKey: newKey(), authKey: newKey(), offlineKey: newKey() };
+    await asCompromisedAuthCore(server, { kind: 'seal-enrolment', nexusId: device.nexusId,
+      signingPublicKeyPem: attacker.signingKey.publicKeyPem, authPublicKeyPem: attacker.authKey.publicKeyPem });
+    const latest = (await authCoreClient().chain(device.nexusId)).records.at(-1);
+    await store.keepHead(device.nexusId, { chainSequence: latest.chainSequence, evidenceHash: latest.evidenceHash });
+    // Auth Core then hides it.
+    const { adapter, boundary: b } = boundary({ authCore: altering({ chain: (c) => ({ ...c, records: c.records.filter((r) => r.chainSequence <= authorizationSequence) }) }) });
+    await expectNotExecuted(await b.execute(p.paymentId), adapter, p.paymentId, 'REFUSED', /records missing at the end of the chain/);
+  });
+
+  test('the chain differs at the position of the head the bank kept (history rewritten): refused', async () => {
+    const device = await approvedDevice();
+    const first = await payment(device);
+    assert.equal((await boundary().boundary.execute(first.paymentId)).status, 'EXECUTED');
+    const kept = await store.head(device.nexusId);
+    // What the bank kept is not what Auth Core now shows at that position.
+    await bankDb.pool.query(`UPDATE bank_chain_heads SET evidence_hash = $2 WHERE nexus_id = $1`, [device.nexusId, 'e'.repeat(64)]);
+    const p = await payment(device);
+    const { adapter, boundary: b } = boundary();
+    await expectNotExecuted(await b.execute(p.paymentId), adapter, p.paymentId, 'REFUSED', /differs from the head/);
+    await bankDb.pool.query(`UPDATE bank_chain_heads SET evidence_hash = $2 WHERE nexus_id = $1`, [device.nexusId, kept.evidenceHash]);
+  });
+
+  test('a whole chain re-sealed with a key of Auth Core\'s own, shipped in the export: refused with the pinned keys', async () => {
+    const device = await approvedDevice();
+    const p = await payment(device);
+    const own = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const ownPem = own.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    const ownId = createHash('sha256').update(own.publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
+    const reseal = (records) => {
+      const renamed = new Map(); let previous = null;
+      for (const r of [...records].sort((a, b) => a.chainSequence - b.chainSequence)) {
+        const payload = r.sealedPayload;
+        payload.sealKeyId = ownId; r.sealKeyId = ownId;
+        payload.previousEvidenceHash = previous; r.previousEvidenceHash = previous;
+        if (payload.enrolmentEvidenceHash) payload.enrolmentEvidenceHash = renamed.get(payload.enrolmentEvidenceHash) ?? payload.enrolmentEvidenceHash;
+        const old = r.evidenceHash;
+        r.evidenceHash = createHash('sha256').update(canonicalJson(payload)).digest('hex');
+        r.hsmSignature = sign('sha256', Buffer.from(r.evidenceHash, 'hex'), { key: own.privateKey, dsaEncoding: 'der' }).toString('base64');
+        renamed.set(old, r.evidenceHash); previous = r.evidenceHash;
+      }
+      return records;
+    };
+    const real = authCoreClient();
+    const forged = async () => {
+      const chain = await real.chain(device.nexusId);
+      reseal(chain.records);
+      chain.evidencePublicKeys = { [ownId]: ownPem }; chain.evidencePublicKeyPem = ownPem;
+      const record = chain.records.find((r) => r.authorizationId === p.authorizationId);
+      const enrolment = chain.records.find((r) => r.evidenceHash === record.sealedPayload.enrolmentEvidenceHash);
+      return { chain, evidence: { ...structuredClone(record), credentialEnrolment: structuredClone(enrolment), evidencePublicKeys: { [ownId]: ownPem }, evidencePublicKeyPem: ownPem } };
+    };
+    const { adapter, boundary: b } = boundary({ authCore: { ...real, evidence: async () => (await forged()).evidence, chain: async () => (await forged()).chain } });
+    await expectNotExecuted(await b.execute(p.paymentId), adapter, p.paymentId, 'REFUSED', /HSM seal does not verify/);
+  });
+
+  test('the registry accepts only statements signed with a bank trust key; one written around it stops every decision for that customer', async () => {
+    const device = await approvedDevice();
+    const forger = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const forged = signStatement(approvalStatement({ nexusId: device.nexusId, credentialId: randomUUID(), signingKeySha256: 'a'.repeat(64), reference: 'x' }), forger.privateKey);
+    await assert.rejects(store.approve(forged), /unknown bank key/);
+    await bankDb.pool.query(`INSERT INTO bank_trust_statements (credential_id, nexus_id, type, entry) VALUES ($1, $2, $3, $4)`,
+      [forged.statement.credentialId, device.nexusId, forged.statement.type, JSON.stringify(forged)]);
+    const p = await payment(device);
+    const { adapter, boundary: b } = boundary();
+    await expectNotExecuted(await b.execute(p.paymentId), adapter, p.paymentId, 'REFUSED', /unknown bank key/);
+  });
+
+  test('a kept head never moves backward', async () => {
+    const nexusId = '777777777';
+    await store.keepHead(nexusId, { chainSequence: 5, evidenceHash: 'a'.repeat(64) });
+    await store.keepHead(nexusId, { chainSequence: 3, evidenceHash: 'b'.repeat(64) });
+    assert.deepEqual(await store.head(nexusId), { chainSequence: 5, evidenceHash: 'a'.repeat(64) });
+  });
+
   test('two payments of one customer at once: the kept head only moves forward', async () => {
     const device = await approvedDevice();
     const a = await payment(device); const c = await payment(device);
