@@ -211,6 +211,7 @@ ${message ? `<p class="msg">${escape(message)}</p>` : ''}
 <table><tr><th>Создан</th><th>Референс</th><th>Сумма</th><th>Получатель</th><th>Статус</th></tr>
 ${rows.map((r) => `<tr><td>${r.createdAt.toLocaleTimeString('ru-RU')}</td><td><code>${escape(r.reference)}</code></td><td>${(r.amountMinor / 100).toFixed(2)} ${escape(r.currency)}</td><td>${escape(r.beneficiary.name)}<br><small>${escape(r.beneficiary.iban)}</small></td><td class="${r.status.css}">${escape(r.status.label)}${r.confirmationMethod ? `<br><small>${escape(r.confirmationMethod)}</small>` : ''}</td></tr>`).join('') || '<tr><td colspan="5">Платежей пока нет.</td></tr>'}
 </table>
+<p><small>Статус — это ответ Auth Core, а не основание для исполнения. Демо-банк ничего не исполняет; настоящий банк исполняет платёж только через свою границу исполнения (<code>bank-integration/</code>) с собственной проверкой доверия.</small></p>
 ${customer.nexusId ? `<p><a href="/ops/evidence">Цепочка доказательств клиента (JSON)</a></p>` : ''}
 <p><small>Страница обновляется каждые 5 секунд.</small></p></body></html>`;
 }
