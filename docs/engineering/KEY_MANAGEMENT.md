@@ -168,3 +168,14 @@ What it would and would not change: a memory dump of Auth Core would no longer c
 | Chain heads | The bank, from every `evidence.appended` | — | `--expect-head`, `--heads`. Truncation after the last kept head cannot be detected. |
 
 `scripts/bank-trust-statement.mjs` signs with a private key file and exists for development and tests only. A production bank backend signs inside its HSM.
+
+## Phase 13: operating the bank's trust registry (2026-10-19)
+
+| Item | Requirement |
+|---|---|
+| Bank trust key | Generated and used in the bank's HSM. The backend asks the HSM to sign each statement. No export, no copy in Auth Core's infrastructure. Dual control for rotation. |
+| Trust registry database | Separate from Auth Core's, with its own credentials and no network path from Auth Core. Statements are append-only (trigger). Revocations are final; a credential is bound to one customer (trigger). Backed up together with the execution journal and restored as one. |
+| Pinned evidence keys, bank trust public keys | Configuration under change control, from the key ceremony record; never read from an Auth Core response. |
+| Kept heads | Written from every `evidence.appended` (`keepHead`), at approval, and after each execution; forward only. Lost heads reduce detection to what the chain shows. |
+| Execution journal | Each payment executes once. Monitor and alert on `HELD`, `OUTCOME_UNKNOWN`, `REVIEW` and `REFUSED`; a `REFUSED` with an approval or seal problem is a security incident. `REVIEW` is settled by a person against the payment system. |
+| Access | Only the backend's approval service writes statements; only the execution boundary holds the adapter's permit function. Operators read; changes go through the bank's own four-eyes procedure. |

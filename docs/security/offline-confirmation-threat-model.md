@@ -177,3 +177,28 @@ Residual risks:
 - the customer's own compromised device (FI-007).
 
 Each needs a separate architectural decision. Auth Core itself does not enforce bank approvals: under the stated model such a check would run inside the compromised component. It is therefore not part of this protocol.
+
+## Phase 13: where the bank's decision is enforced (2026-10-19)
+
+The phase 12 decision protects only where every path to execution goes through it. Phase 13 adds the execution boundary (`bank-integration/`, [trust boundary](../architecture/bank-trust-boundary.md)): the only code that may call the payment adapter, through a one-time permit. `bank-execution-boundary.test.mjs` (EB, numbered in file order; Auth Core on SoftHSM, the bank's store in PostgreSQL) checks in every negative case that the adapter was not called.
+
+| Attack or failure | Result | Test |
+|---|---|---|
+| VERIFIED, `confirmed: true`, 202 for a key the bank never approved | refused, adapter not called, `CANCELLED` reported | EB 2 |
+| key substituted, revoked, approved for another customer | refused | EB 3–5 |
+| amount, beneficiary, currency, reference or operation type changed | refused | EB 6 |
+| evidence or a whole chain re-sealed with a key shipped in the export | refused (pinned keys) | EB 7, 22 |
+| damaged evidence, broken chain, changed or withheld kept head, a statement written around the registry | refused | EB 8, 9, 20, 21, 23 |
+| registry, Auth Core unavailable or too slow | held, executed once it is back | EB 10 |
+| 20 parallel requests through two instances; a live claim; an expired lease taken over | one execution | EB 11, 18, 19 |
+| replayed evidence of another authorization; one authorization for two payments | refused; refused by the store | EB 12 |
+| adapter called without, with a reused, or with another order's permit | `BoundaryBypassError`, adapter not reached | EB 13 |
+| revocation while the payment is checked, between the decision and the final check, after the final check | refused, refused, reported as in flight | EB 14, 17, 15 |
+| timeout after the payment system executed; payment lost | reconciled by lookup, one execution; `REVIEW` | EB 16 |
+
+Still not addressed:
+
+- **Denial of service.** Auth Core can refuse or delay; the boundary then holds or refuses, never executes.
+- **A compromised bank backend or bank app.** It can call the adapter directly, change the registry or report a false fingerprint. The permit guards one process only.
+- **Device attestation.** Checked by Auth Core only.
+- **Integration.** The boundary is not integrated into a real bank backend or payment system.
