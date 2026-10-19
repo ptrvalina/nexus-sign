@@ -132,6 +132,24 @@ describe('evidence record metadata must match the sealed payload (SoftHSM)', { s
     }
   });
 
+  test('8. enrolment record of the signing credential with a changed credential_id column', async () => {
+    const c = await confirmed();
+    const enrolment = (await q(`SELECT enrolment_evidence_id FROM credentials WHERE credential_id = $1`, [c.device.credentialId])).rows[0].enrolment_evidence_id;
+    const other = await bank.enrolDevice((await bank.createIdentity()).nexusId);
+    await tamper(enrolment, 'credential_id = $2', [other.credentialId]);
+    // The device's key is no longer accepted: its enrolment record is inconsistent.
+    const next = await bank.createAuthorization(c.device);
+    const s = await deviceSignature(server, c.device, next.authorizationId).catch((e) => ({ error: e }));
+    if (!s.error) {
+      const r = await submitSignature(server, c.device, next.authorizationId, s.signature);
+      assert.notEqual(r.json?.status, 'VERIFIED', `confirmation with an inconsistent enrolment record: ${r.text}`);
+    }
+    const view = (await bank.call('GET', `/v1/authorizations/${c.id}`)).json;
+    assert.equal(view.confirmed, false, 'the earlier authorization is no longer reported confirmed');
+    const r = await commit(c.id);
+    assert.equal(r.status, 409, r.text);
+  });
+
   test('7. the original seal still verifies over the untouched payload in every case above', async () => {
     const c = await confirmed();
     const other = await bank.enrolDevice((await bank.createIdentity()).nexusId);
