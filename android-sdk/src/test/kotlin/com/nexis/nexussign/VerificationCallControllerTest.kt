@@ -277,6 +277,31 @@ class VerificationCallControllerTest {
         }
     }
 
+    @Test fun `media connecting while the answer is applied is not overwritten by Connecting`() = runBlocking {
+        // A media engine may report CONNECTED from inside applyAnswer; the
+        // controller handles that on another thread. The answer handler must
+        // not move the state back from Connected to Connecting. Repeated,
+        // because the two run concurrently.
+        repeat(1000) { round ->
+            val relay = Relay()
+            val engine = object : CallMediaEngine by Engine() {
+                lateinit var ev: MediaEvents
+                override suspend fun prepare(iceServers: List<IceServer>, video: Boolean, events: MediaEvents) { ev = events }
+                override suspend fun createOffer(iceRestart: Boolean) = "v=0 offer"
+                override suspend fun applyAnswer(sdp: String) { ev.onConnectionState(MediaConnectionState.CONNECTED) }
+                override fun release() = Unit
+            }
+            val call = VerificationCallController(relay, engine, scope, fast)
+            call.start()
+            until("offer") { relay.offersSent().isNotEmpty() }
+            relay.operator(CallMessage.Answer("v=0 answer"))
+            until("answer handled") { call.state.value != CallState.WaitingForOperator }
+            delay(30)
+            assertEquals("round $round", CallState.Connected, call.state.value)
+            call.hangUp()
+        }
+    }
+
     @Test fun `byes are mapped to their reasons`() = runBlocking {
         for ((reason, expected) in listOf(
             "decided:FAILED" to CallEndReason.Decided(verified = false),
