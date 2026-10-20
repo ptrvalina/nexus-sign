@@ -14,6 +14,7 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 5 | `7c1c0a8` | FI-001 (SDKs) | Signalling rules, call state machine in both core SDKs, WebRTC modules, demo integration, CI jobs |
 | 6 | `9dee0af` | FI-004, FI-005, FI-008, FI-019, FI-023, FI-030, FI-032 | Master key ring and rotation tool, offline caps, PostgreSQL nonce store, sealed chain heads to the bank, metrics token |
 | Report | `1bbd12e` | — | Milestone report (Russian) |
+| 15 | `dc3b29b`…`ee4139f` (tests `dc3b29b`, `b7057b7`, `ee4139f`; feature `bb859cc`; docs `6dbb2a6`, report) | FI-004 (bank database authorization) | Schema `bank`; no application role writes a table; changes only through `SECURITY DEFINER` functions per role; transition trigger with the function and the login role writes the log; `bank.approve` binds the evidence and computes the order hash; the gateway re-checks the approval and records outcomes; reinstall revokes first; privilege matrix |
 | 14 | `3997613`…`36d10a8` (tests `3997613`, `87a4997`, `150bab8`, `6d884f1`; feature `6f8d4cf`; docs `94ca940`, `36d10a8`) | FI-004 (execution across processes, failures, unknown outcomes) | Payment state machine in the bank's database; gateway in its own process with its own role and mutual TLS; provider contract and reconciliation; pilot execution pack |
 | 13 | `a7a550a`…`d0df1d5` (tests `a7a550a`, `8573885`; feature `e729031`; demo note `fc77ebb`; docs `d0df1d5`) | FI-004 (enforcement at the point of execution) | Bank-side execution boundary (`bank-integration/`): the only path to the payment adapter, journal, final check, reconciliation; contract for a real bank backend |
 | 12 | `8ce4c04`…`8f0d36e` (tests `8ce4c04`, `1d08ae6`, `059573e`, `148059a`, `8f0d36e`; fixes `793d911`, `be3bee7`; features `dcfa557`, `fcd575a`) | FI-004 (compromised Auth Core), FI-001 (call controller) | Bank credential trust v1: the bank's own execution decision from bank-signed approvals of device-computed key fingerprints; SDK `signingKeyFingerprint()`; two Android call controller races |
@@ -23,7 +24,11 @@ Branch `remediation/2.0.0` of the local repository (not GitHub; see IMPLEMENTATI
 | 8 | `88d9a0d`, `d06a378`, `e068c40` | FI-004 (deferred device signature), FI-005 (KEK attributes) | Offline confirmation v2 in Auth Core and the SDKs, migration 022, verifier `--reject-offline-code`; KEK must be generated in the HSM |
 | 7 | `e8e90e7` | FI-005 (HSM wrapping), FI-004 (threat model, daily limit) | Master keys wrapped by an HSM KEK, `masterKeys.js`, offline forgery tests, native build guide, baseline script, WebRTC provenance update |
 
-## Latest full regression (run `phase14-220951`, 2026-10-19/20, code at `6d884f1`)
+## Latest full regression (run `phase15-091313`, 2026-10-20, code at `ee4139f`)
+
+Same tools as below. Every line exit code 0: typecheck and build ok; unit 104/104; vectors ok; OpenAPI 44 routes; repository hygiene ok; integration 261/261, 0 skipped (new: `bank-db-authorization` 14; `bank-execution-processes` 20 and `bank-execution-boundary` 25 on the schema `bank`); media 3/3; E2E 77/77; demo bank 7/7; sandbox OK (74 tests); Android JVM (stubs) 60/60; Android call module type check ok (17 classes); SDK call conformance 1/1. Mutations (code `b7057b7` and `ee4139f`, in five parts because of the time limit of a background run): 113, 111 caught, 2 refused by another check (M16, M30, as before); see the phase 15 report.
+
+## Phase 14 full regression (run `phase14-220951`, 2026-10-19/20, code at `6d884f1`)
 
 Same tools as below. Every line exit code 0: typecheck and build ok; unit 104/104; vectors ok; OpenAPI 44 routes; repository hygiene ok; integration 247/247, 0 skipped (new: `bank-execution-processes` 20, gateway as a separate process; `bank-execution-boundary` 25 on the new contract); media 3/3; E2E 77/77; demo bank 7/7; sandbox OK (74 tests); Android JVM (stubs) 60/60; Android call module type check ok (17 classes); SDK call conformance 1/1. Mutations (code `6d884f1`, two runs because the first reached the session's time limit): see the phase 14 report.
 
