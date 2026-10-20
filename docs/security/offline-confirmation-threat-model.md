@@ -233,3 +233,34 @@ Not covered:
 - a compromised provider;
 - exactly-once execution with a real provider (its contract: BLOCKED);
 - denial of service.
+
+## Phase 15: the bank's database roles (2026-10-20)
+
+Phase 14 left the boundary's database role with `INSERT` and `UPDATE` on the journal, the log and the registry; reproduced on `3cbea86` ([bank database authorization](bank-database-authorization.md), section 1). Since phase 15 no application role writes a table; every change is a `SECURITY DEFINER` function of the owner, and the gateway checks the approval again. Tests: `bank-db-authorization.test.mjs` (DA), with EP and EB.
+
+| Attempt | Result | Test |
+|---|---|---|
+| Boundary role: `UPDATE … SET state = 'APPROVED'`, change `credential_id` or `order_hash`, insert an execution, delete it | permission denied; state unchanged; gateway refuses; provider not called | DA 1 |
+| Boundary role: write the registry, a trust statement, the terms | permission denied | DA 1 |
+| Any role: insert, change or delete log rows; owner: change, delete or truncate them | permission denied; append-only | DA 2, EP «forbidden transitions» |
+| The log after a real execution | one row per transition, with the function and the login role that made it | DA 2, EP «state machine» |
+| Owner's own SQL: `CHECKING → APPROVED` without `bank.approve`; riding on a function's announcement; changing an approved order with a hand-set announcement | not a permitted transition; immutable | DA 3 |
+| Gateway role calling its functions directly, without the gateway's check: not approved, other attempt, changed reference, twice, outcome for another attempt or after a final state | refused | DA 4 |
+| `bank.approve` with an expired lease, a revoked credential, another customer's, an unknown one, an old attempt, a second time, an unbounded lease, evidence for other terms, another authorization, another customer, none | refused, state `CHECKING` | DA 5 |
+| A forged confirmation approved through the boundary (right shape, wrong device key); a statement stored without the bank's signature | approved by the database (it cannot verify ECDSA); `REVIEW` at the gateway; nothing sent | DA 6 |
+| Terms or reference changed after the approval (owner, trigger disabled) | `REVIEW` at the gateway; nothing sent | DA 7, EP «terms changed» |
+| Revocation during an approval, approval during a revocation | serialized on the trust row; refused, or reported in flight and sent (cut-off at `APPROVED`) | DA 8 |
+| Approval rolled back; connection lost inside the transaction | nothing left; the sanctioned path works afterwards | DA 9 |
+| Boundary recording `EXECUTED` or submitting; gateway approving, reading tables, changing the registry; registry or operator approving | permission denied | DA 10, EB «around the boundary» |
+| A review resolved under another name | the database records the login | DA 11, EP «no answer» |
+| A role inheriting the boundary role; `SET ROLE` to the owner or the gateway | the boundary's functions only; refused | DA 12 |
+| Objects put in the functions' way: in `bank`, in `public`, temporary tables, a function named like a built-in | permission denied; definer functions have `search_path = pg_catalog, pg_temp`; none executable by `PUBLIC` | DA 13 |
+| Extra grants from an earlier version, a `PUBLIC` grant, phase 14 tables in `public`, objects created later; a superuser or a member of the owner given as a service role | removed on reinstall; not granted; refused | DA 14 |
+
+Not covered:
+
+- the schema owner and the PostgreSQL superuser: they can change or disable any of this (R-26; operational controls in [bank database authorization](bank-database-authorization.md), section 7);
+- a compromised boundary *and* a genuine customer confirmation: it can cause that confirmed payment, with its terms, as before;
+- a compromised gateway: it holds the provider's credentials;
+- a shared database login for several operators or components: the log then cannot attribute;
+- PostgreSQL versions other than 16.13.

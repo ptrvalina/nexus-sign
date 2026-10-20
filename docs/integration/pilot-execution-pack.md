@@ -1,6 +1,6 @@
 # Pilot execution pack: what the pilot bank integrates, operates and tests
 
-Status: 2.0.0, phase 14. For the pilot bank's architects, payment operations and security. The reference implementation is in `bank-integration/`. It is **not integrated** with any bank. Nothing below is proven for a real bank backend or a real payment provider until the tests in section 10 have run in the bank's infrastructure.
+Status: 2.0.0, phase 15 (database authorization: [bank database authorization](../security/bank-database-authorization.md)). For the pilot bank's architects, payment operations and security. The reference implementation is in `bank-integration/`. It is **not integrated** with any bank. Nothing below is proven for a real bank backend or a real payment provider until the tests in section 10 have run in the bank's infrastructure.
 
 ## 1. Contract of the execution boundary
 
@@ -20,17 +20,20 @@ bank backend            bank DB (registry, journal)     Auth Core            gat
  │  evidence, chain ────────────────────────────────────▶ export
  │  statements, kept head ◀──
  │  bankExecutionDecision (pinned keys, approvals, revocations, terms, head)
- │  approveExecution ───────▶ APPROVED  ◀── revocation cut-off (trust row FOR SHARE)
- │  submit(paymentId, attempt) ── mutual TLS ─────────────────────────────▶ bank_submit: SUBMITTED
- │                                                                         │ stored order, hash check
+ │  bank.approve(evidence) ─▶ APPROVED  ◀── revocation cut-off (trust row FOR SHARE)
+ │  submit(paymentId, attempt) ── mutual TLS ─────────────────────────────▶ bank.submit_basis: order, evidence, registry
+ │                                                                         │ bank's decision again (pinned keys)
+ │                                                                         │ bank.submit: SUBMITTED
  │                                                                         │ POST /payments ────────▶ succeeded | failed | pending
+ │                                                                         │ bank.report: EXECUTED | PROVIDER_FAILED | PENDING_PROVIDER | OUTCOME_UNKNOWN
  │  answer ◀────────────────────────────────────────────────────────────── │                          (or nothing)
- │  record ─────────────────▶ EXECUTED | PROVIDER_FAILED | PENDING_PROVIDER | OUTCOME_UNKNOWN
+ │  keep_head ──────────────▶ head forward (after EXECUTED)
  │  bank-commit-result ─────────────────────────────────▶ COMMITTED | FAILED (informational)
  │ reconcileDue (job)
  │  claim ──────────────────▶ RECONCILING
- │  lookup ── mutual TLS ───────────────────────────────────────────────────▶ GET /payments/{id} ──────▶ status | 404
- │  record ─────────────────▶ final | PENDING_PROVIDER | REVIEW (or SUBMITTED again, only with idempotent submission)
+ │  reconcile ── mutual TLS ────────────────────────────────────────────────▶ GET /payments/{id} ──────▶ status | 404
+ │                                                                           bank.report: final | PENDING_PROVIDER | OUTCOME_UNKNOWN
+ │  mark_review ────────────▶ REVIEW (or resubmit: SUBMITTED again, only with idempotent submission)
 ```
 
 ## 3. Threat model (summary)
@@ -41,14 +44,16 @@ The full table is in the [offline confirmation threat model](../security/offline
 |---|---|---|
 | Fully compromised Auth Core | enrol or substitute device keys and seal them; report `VERIFIED`, `confirmed`, 202, `COMMITTED`; forge webhooks; withhold, rewrite or re-seal evidence; refuse service | make the boundary approve a key the bank did not approve, other terms, unpinned evidence or a changed head; reach the gateway (no client certificate) or the bank's database (no credentials) |
 | Second backend instance, or a module bypassing `execute()` | call the gateway with the boundary's certificate | send anything not `APPROVED` for that attempt; change the order sent; send an approval twice |
-| Holder of the gateway's database role | call `bank_submit` | read or write tables, approve, change orders |
-| Holder of the boundary's database role | approve executions (it is the trusted decision point) | set `SUBMITTED`; leave final states; change terms or an approved order; move heads back; delete history |
+| Holder of the gateway's database role | call its six functions: submit what is approved, record answers | read or write tables, approve, change orders or the registry, submit for another attempt or twice |
+| Holder of the boundary's database role | call `bank.approve` with genuine evidence: it is the trusted decision point | write any table; approve without the database's checks (attempt, lease, registry, revocation, customer, terms); choose the credential or the order hash; get a payment sent on forged evidence (the gateway checks again); record an outcome; forge, change or delete log rows; change the registry; move heads back |
+| Holder of the registry's database role | store statements | make an unsigned statement count (the boundary and the gateway verify); touch payments |
+| Holder of an operator's login | resolve a `REVIEW` under that login | anything else; resolve under another name |
 | Network faults, crashes | lose answers, kill processes | cause a second send without the provider's idempotency |
 
 **Not covered:**
 
 - a compromised bank backend: the boundary's role and certificate, the trust key, the registry;
-- the schema owner's credentials;
+- the schema owner's and the PostgreSQL superuser's credentials: they can change or disable every protection in the database (R-26; operational controls in [bank database authorization](../security/bank-database-authorization.md), section 7);
 - a compromised payment provider;
 - denial of service by Auth Core;
 - a compromised customer device or bank app;
@@ -57,14 +62,17 @@ The full table is in the [offline confirmation threat model](../security/offline
 ## 4. Bank database requirements
 
 - A database separate from Auth Core's, with no network path from Auth Core.
-- Three roles:
-  - **owner**: migrations only, never used by a service;
+- Roles, all `NOSUPERUSER`, not `BYPASSRLS`, with `CONNECT` only, none a member of the owner:
+  - **owner**: migrations only, never used by a service, not a superuser;
   - **boundary**: the backend;
-  - **gateway**: the gateway process.
-
-  `installSchema` grants exactly what the components need. Verify with the bank's DBA that nothing more is granted (`\dp`).
+  - **gateway**: the gateway process;
+  - **registry**: the credential registry service;
+  - **operator**: one login per person who resolves reviews (never a shared login).
+- The administrator runs `DATABASE_HARDENING` once (no `TEMPORARY`, nothing in `public`).
+- `installSchema` revokes and grants exactly what the components need. After every migration compare `privilegeMatrix()` with `intendedPrivileges()`, and check with the bank's DBA (`\dp bank.*`, `\df+ bank.*`).
+- Connection pools keep each component's own login: the log records `session_user`.
 - PostgreSQL: the reference was run on 16.13 only; other versions are untested.
-- Triggers and functions installed by migration and reviewed. Disabling a trigger needs the owner role; monitor for `ALTER TABLE … DISABLE TRIGGER`.
+- Triggers and functions installed by migration and reviewed. Disabling a trigger or replacing a function needs the owner role. Log and alert on `ALTER TABLE … DISABLE TRIGGER`, `CREATE OR REPLACE FUNCTION`, `GRANT`, `ALTER ROLE` and any owner or superuser session outside a migration window, in a log store the database team cannot change.
 - Backups taken of the registry, the journal and the transition log together; restore drills that check the forward-only heads afterwards.
 - Time from the database server (`now()`) drives leases. The lease is longer than the slowest normal attempt, and shorter than the time the bank accepts for a stuck payment before reconciliation.
 
@@ -105,7 +113,7 @@ The provider contract must state, and the bank must test:
 2. **For each `REVIEW`:**
    - an operator obtains the provider's statement for the operation ID;
    - decides `succeeded` or `failed`;
-   - records it with `resolveReview(paymentId, outcome, { operator, note })`, with a second person approving under the bank's four-eyes rule.
+   - records it with `resolveReview(paymentId, outcome, note)` under their own database login (the database records the login as `resolved_by`), with a second person approving under the bank's four-eyes rule.
 
    Do not resend a `REVIEW` payment: if it must be paid, the bank creates a new payment and authorization.
 3. **For each finding:**
@@ -140,7 +148,13 @@ Each test is passed only with a record of the run (who, when, environment, resul
    - with another service's certificate fails;
    - with the boundary's certificate but without `APPROVED` fails;
    - for another attempt fails.
-3. The database grants (`\dp`) match `installSchema`. The boundary role cannot set `SUBMITTED`; the gateway role cannot read tables.
+3. The database grants match `installSchema` (`privilegeMatrix()` equals `intendedPrivileges()`, and `\dp`). As in `bank-db-authorization.test.mjs`, in the bank's database:
+   - no role writes a table or uses a sequence;
+   - the boundary role cannot approve by `UPDATE`, submit, or record an outcome;
+   - the gateway role cannot read tables or change the registry;
+   - the log cannot be written, changed or deleted by any role;
+   - a forged confirmation approved through the boundary is not sent;
+   - a reinstall removes extra grants.
 4. With the real provider (test environment):
    - succeeded;
    - failed;

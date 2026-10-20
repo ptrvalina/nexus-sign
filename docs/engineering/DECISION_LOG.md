@@ -226,3 +226,24 @@ The bank declares what its provider guarantees (`providerCapabilities: { idempot
 - **with both:** a `not_found` is resent with the same operation ID.
 
 A payment is never resent only because no answer came. The gate for exactly-once execution with a real provider stays BLOCKED until a provider contract is provided and tested.
+
+## D-049 No application role writes the bank's tables; every change is a function of the owner (phase 15)
+
+On `3cbea86` the boundary's role moved a payment to `APPROVED` with one `UPDATE`, and the gateway sent it. The same role also inserted log rows and an approved trust row without any statement (reproduced; [bank database authorization](../security/bank-database-authorization.md)). The schema moves into its own schema `bank`. No application role has a table write, a sequence right, or `CREATE` anywhere. Each change is a `SECURITY DEFINER` function of the owner, with `search_path = pg_catalog, pg_temp` and qualified names. Each role (boundary, gateway, registry, operator) executes only its own. `installSchema` revokes everything first, so a reinstall or an upgrade leaves no earlier grant. It also refuses superusers and members of the owner. `privilegeMatrix()` reads what each role can actually do from the catalog. Row-level security was not chosen: with no table rights at all there is nothing to filter, and it would add a second policy to keep consistent.
+
+## D-050 The approval is made from the database's own data; the gateway checks it again (phase 15)
+
+`bank.approve` takes the attempt and the evidence, nothing that decides the outcome. From the evidence it takes:
+
+- the credential;
+- the evidence's binding to this payment's authorization, customer, reference and signed terms.
+
+From the database it takes the credential's registry row, under `FOR SHARE` (serialized with a revocation), and the order hash, computed from the payment. PostgreSQL cannot verify ECDSA, so a caller of `bank.approve` could pass forged evidence. The gateway therefore runs the bank's decision again on the stored evidence before `bank.submit`. It uses the pinned evidence keys, the bank trust keys, and the statements as they stood at the approval. A holder of the boundary's role alone cannot get a payment sent without a genuine confirmation. The cut-off for revocation stays at `APPROVED`.
+
+## D-051 The log is written by the transition trigger, with the function and the login role (phase 15)
+
+Each function announces itself (`bank.via`) immediately before its one row change. The trigger accepts only (from, to, function) triples from `bank.allowed_transitions`, uses the announcement up, and writes the log row in the same statement: from, to, attempt, function, `session_user`. No role can insert, change, delete or truncate log rows; the owner cannot change, delete or truncate them either. `bank.via` is a setting any session can set. It is not an authority: it matters only to whoever can update the tables, and only the owner can.
+
+## D-052 Outcomes are recorded by the gateway; people resolve reviews under their own login (phase 15)
+
+Only the gateway's role can record a provider's answer (`bank.report`), for the attempt it submitted. The boundary can only move a payment towards reconciliation or review (`mark_unknown`, `mark_review`), never to a final state. `bank.resolve_review` records `session_user` as the resolver instead of a name passed by the caller. Consequence: the kept chain head moves forward after `EXECUTED` in a separate call, no longer in the same transaction (R-27).

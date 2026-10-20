@@ -1,6 +1,6 @@
 # Bank trust boundary and execution boundary
 
-Status: 2.0.0, phase 13; execution path updated in phase 14 (gateway in its own process with its own database role, [payment state machine](payment-state-machine.md)). Protocol: [bank credential trust v1](../protocol/bank-credential-trust-v1.md). Contract and reference implementation: [`bank-integration/`](../../bank-integration/README.md).
+Status: 2.0.0, phase 13; execution path updated in phase 14 (gateway in its own process with its own database role, [payment state machine](payment-state-machine.md)) and phase 15 (no role writes a table; the gateway checks the approval again: [bank database authorization](../security/bank-database-authorization.md)). Protocol: [bank credential trust v1](../protocol/bank-credential-trust-v1.md). Contract and reference implementation: [`bank-integration/`](../../bank-integration/README.md).
 
 ## Trust boundary
 
@@ -61,6 +61,7 @@ No other path in this repository moves a payment or changes a bank transaction s
 What is atomic, what is not, and how unknown outcomes are settled is in the [bank integration contract](../../bank-integration/README.md#what-is-atomic-and-what-is-not). In short:
 
 - **One attempt at a time per payment.** A claim with a lease and an attempt ID. An attempt whose lease was taken over cannot move to `APPROVED`, and the gateway submits only for the attempt that holds `APPROVED`.
+- **The approval is the database's.** `bank.approve` takes the credential from the evidence, binds the evidence to the payment and computes the order hash; the gateway checks the stored evidence again before it submits.
 - **Revocation and execution** serialize on the credential's trust row. A payment approved after a revocation is refused; one already `APPROVED` or later is reported by `revoke()`.
-- **The kept head and `EXECUTED`** are written in one transaction; the head only moves forward.
+- **The kept head** moves forward after `EXECUTED` (since phase 15 a separate call by the boundary; R-27); it only moves forward.
 - **The payment system** is not part of any transaction. It is protected by an idempotency key, `OUTCOME_UNKNOWN`, reconciliation by lookup, and `REVIEW`.
