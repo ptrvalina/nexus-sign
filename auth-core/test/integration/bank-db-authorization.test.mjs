@@ -181,6 +181,11 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     assert.equal(r.ok, false); assert.match(r.reason, /another customer/);
     r = await store.approveExecution(p.paymentId, p.attemptId, maker.confirm(maker.device(p.nexusId), { authorizationId: p.authorizationId, terms: p.terms }), 30_000);
     assert.equal(r.ok, false); assert.match(r.reason, /not in the bank's registry/);
+    // A trust row written without a statement (only the owner can): not an approval.
+    const bare = maker.device(p.nexusId);
+    await db.owner.query(`INSERT INTO bank.credential_trust (credential_id, nexus_id, state) VALUES ($1, $2, 'APPROVED')`, [bare.credentialId, p.nexusId]);
+    r = await store.approveExecution(p.paymentId, p.attemptId, maker.confirm(bare, { authorizationId: p.authorizationId, terms: p.terms }), 30_000);
+    assert.equal(r.ok, false); assert.match(r.reason, /no stored approval statement/);
     // Evidence for other terms, another authorization or another customer; no evidence.
     for (const [evidence, why] of [
       [maker.confirm(p.device, { authorizationId: p.authorizationId, terms: p.terms, signedOverride: { amount_minor: '990000' } }), /signed terms/],
