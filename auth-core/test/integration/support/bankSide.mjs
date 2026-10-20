@@ -1,5 +1,6 @@
 // The bank's side for the execution boundary tests: its own database with
-// separate roles for the boundary and the payment gateway, a payment
+// a schema owner and separate roles for the boundary, the payment gateway,
+// the registry service and operators, a payment
 // provider double that can misbehave, test certificates for mutual TLS, and
 // a payment gateway in its own process.
 //
@@ -18,32 +19,51 @@ import { ROOT, createDatabase } from './harness.mjs';
 
 const ADMIN_DB_URL = process.env.INTEGRATION_DATABASE_URL;
 
-/** The bank's database: owner pool, and pools for the boundary's and the gateway's roles. */
+/**
+ * The bank's database as a bank would set it up: a schema owner that is not a
+ * superuser, one login role per component (boundary, gateway, registry,
+ * operator), a role that inherits the boundary's (for inheritance tests), the
+ * administrator's hardening (DATABASE_HARDENING), then installSchema as the owner.
+ */
 export async function bankDatabase(lib) {
   const db = await createDatabase({ schema: false });
   const suffix = randomBytes(4).toString('hex');
-  const roles = { boundary: `bank_boundary_${suffix}`, gateway: `bank_gateway_${suffix}` };
-  const passwords = { boundary: randomBytes(12).toString('hex'), gateway: randomBytes(12).toString('hex') };
-  const admin = new pg.Client({ connectionString: ADMIN_DB_URL });
+  const kinds = ['owner', 'boundary', 'gateway', 'registry', 'operator', 'member'];
+  const names = Object.fromEntries(kinds.map((k) => [k, `bank_${k}_${suffix}`]));
+  const passwords = Object.fromEntries(kinds.map((k) => [k, randomBytes(12).toString('hex')]));
+  const admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   try {
-    for (const k of ['boundary', 'gateway']) {
-      await admin.query(`CREATE ROLE ${roles[k]} LOGIN PASSWORD '${passwords[k]}'`);
-      await admin.query(`GRANT CONNECT ON DATABASE ${db.name} TO ${roles[k]}`);
+    await admin.query('SET client_min_messages = warning');
+    for (const k of kinds) {
+      await admin.query(`CREATE ROLE ${names[k]} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${passwords[k]}'`);
+      await admin.query(`GRANT CONNECT ON DATABASE ${db.name} TO ${names[k]}`);
     }
+    await admin.query(`GRANT CREATE ON DATABASE ${db.name} TO ${names.owner}`);
+    await admin.query(`GRANT ${names.boundary} TO ${names.member}`);
+    await admin.query(lib.DATABASE_HARDENING(db.name));
   } finally { await admin.end(); }
-  await db.pool.query(`GRANT USAGE ON SCHEMA public TO ${roles.boundary}, ${roles.gateway}`);
-  await lib.installSchema(db.pool, { boundaryRole: roles.boundary, gatewayRole: roles.gateway });
-  const urlFor = (k) => { const u = new URL(db.url); u.username = roles[k]; u.password = passwords[k]; return u.toString(); };
-  const pools = { boundary: new pg.Pool({ connectionString: urlFor('boundary'), max: 6 }), gateway: new pg.Pool({ connectionString: urlFor('gateway'), max: 6 }) };
+  const urlFor = (k) => { const u = new URL(db.url); u.username = names[k]; u.password = passwords[k]; return u.toString(); };
+  const owner = new pg.Pool({ connectionString: urlFor('owner'), max: 4 });
+  const roles = { boundary: names.boundary, gateway: names.gateway, registry: names.registry, operator: names.operator };
+  await lib.installSchema(owner, roles);
+  const pools = Object.fromEntries(Object.keys(roles).map((k) => [k, new pg.Pool({ connectionString: urlFor(k), max: 6 })]));
   return {
-    owner: db.pool, pools, urls: { boundary: urlFor('boundary'), gateway: urlFor('gateway') }, roles,
+    owner, ownerRole: names.owner, pools, roles, memberRole: names.member,
+    urls: Object.fromEntries(['boundary', 'gateway', 'registry', 'operator', 'member'].map((k) => [k, urlFor(k)])),
+    /** A statement as the PostgreSQL administrator (superuser): for set-ups no application role could make. */
+    async adminQuery(sql, args) {
+      const c = new pg.Client({ connectionString: db.url });
+      await c.connect();
+      try { return await c.query(sql, args); } finally { await c.end(); }
+    },
     async drop() {
-      await pools.boundary.end(); await pools.gateway.end();
+      await Promise.all(Object.values(pools).map((p) => p.end()));
+      await owner.end();
       await db.drop();
       const c = new pg.Client({ connectionString: ADMIN_DB_URL });
       await c.connect();
-      try { for (const k of ['boundary', 'gateway']) await c.query(`DROP ROLE IF EXISTS ${roles[k]}`); } finally { await c.end(); }
+      try { for (const k of [...kinds].reverse()) await c.query(`DROP ROLE IF EXISTS ${names[k]}`); } finally { await c.end(); }
     },
   };
 }
@@ -132,10 +152,12 @@ export function certificates() {
 }
 
 /** Starts the payment gateway in its own process (support/gatewayProcess.mjs). */
-export async function startGatewayProcess({ databaseUrl, providerUrl, certs, allowedClients = ['bank-execution-boundary'] }) {
+export async function startGatewayProcess({ databaseUrl, providerUrl, certs, evidenceKeys, bankTrustKeys, allowedClients = ['bank-execution-boundary'] }) {
+  const keysFile = join(certs.dir, `gateway-keys-${randomBytes(4).toString('hex')}.json`);
+  writeFileSync(keysFile, JSON.stringify({ evidenceKeys, bankTrustKeys }));
   const env = {
     ...process.env, GATEWAY_DATABASE_URL: databaseUrl, GATEWAY_PROVIDER_URL: providerUrl, GATEWAY_ALLOWED_CLIENTS: allowedClients.join(','),
-    GATEWAY_TLS_DIR: certs.dir,
+    GATEWAY_TLS_DIR: certs.dir, GATEWAY_KEYS_FILE: keysFile,
   };
   const child = spawn(process.execPath, [join(ROOT, 'test/integration/support/gatewayProcess.mjs')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';

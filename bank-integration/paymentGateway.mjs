@@ -1,13 +1,17 @@
 // The payment gateway: the only component that talks to the payment
 // provider. It runs in its own process with its own database role, which can
-// do nothing but call bank_submit / bank_resubmit / bank_operation_for_lookup
-// (schema.mjs). Its authority to send a payment comes from the bank's
-// database, not from the caller: a payment is sent only if the execution
-// boundary moved it to APPROVED for that attempt, and the order sent is the
-// one stored with the payment and bound by hash at approval. Callers are
+// only call bank.submit_basis, bank.submit, bank.resubmit, bank.gateway_refuse,
+// bank.report and bank.operation_for_lookup (schema.mjs). Its authority to
+// send a payment comes from the bank's database, not from the caller: a
+// payment is sent only if it is APPROVED for that attempt, the order still has
+// the hash bound at approval, and the evidence stored with the approval passes
+// the bank's decision again here (pinned evidence keys, the bank's signed
+// statements, the payment's terms). A holder of the boundary's role alone
+// therefore cannot get a payment sent without a valid customer confirmation.
+// The gateway records the provider's answers itself. Callers are
 // authenticated with mutual TLS (allow-listed client certificate names).
 import { createServer } from 'node:https';
-import { orderFromSubmission, orderHash } from './trustStore.mjs';
+import { bankExecutionDecision } from '../auth-core/scripts/lib/bankTrust.mjs';
 
 export class GatewayRefusedError extends Error {}
 export class GatewayUnreachableError extends Error {}
@@ -15,48 +19,112 @@ export class GatewayUnreachableError extends Error {}
 const OUTCOMES = new Set(['succeeded', 'failed', 'pending']);
 
 /**
- * @param pool      pg Pool with the gateway's role
- * @param provider  { submit(order) -> { status, providerReference }, lookup(operationId) -> { status } }
- *                  status: succeeded | failed | pending | not_found (lookup); anything else is unknown
+ * @param pool           pg Pool with the gateway's role
+ * @param provider       { submit(order) -> { status, providerReference }, lookup(operationId) -> { status } }
+ *                       status: succeeded | failed | pending | not_found (lookup); anything else is unknown
+ * @param evidenceKeys   evidence public keys the bank pinned (PEM list), required
+ * @param bankTrustKeys  the bank's statement-signing public keys (PEM list), required
  */
-export function createPaymentGateway({ pool, provider }) {
-  async function send(fn, paymentId, attemptId) {
-    let row;
+export function createPaymentGateway({ pool, provider, evidenceKeys, bankTrustKeys }) {
+  if (!Array.isArray(evidenceKeys) || evidenceKeys.length === 0 || !Array.isArray(bankTrustKeys) || bankTrustKeys.length === 0) {
+    throw new Error('payment gateway: evidenceKeys and bankTrustKeys are required');
+  }
+  const pinned = Object.freeze([...evidenceKeys]);
+  const trustKeys = Object.freeze([...bankTrustKeys]);
+
+  const report = async (paymentId, attemptId, outcome, providerReference = null, reason = null) => {
     try {
-      row = (await pool.query(`SELECT * FROM ${fn}($1, $2)`, [paymentId, attemptId])).rows[0];
+      return (await pool.query(`SELECT bank.report($1, $2, $3, $4, $5) AS ok`, [paymentId, attemptId, outcome, providerReference, reason])).rows[0].ok;
+    } catch {
+      return false; // left SUBMITTED: reconciliation asks the provider
+    }
+  };
+
+  /** Checks the approval in one transaction with the move to SUBMITTED; returns the order, or a refusal recorded as REVIEW. */
+  async function take(fn, paymentId, attemptId) {
+    const client = await pool.connect().catch((error) => { throw new GatewayRefusedError(`not sent: ${error.message}`); });
+    try {
+      await client.query('BEGIN');
+      let basis;
+      try {
+        basis = (await client.query(`SELECT * FROM bank.submit_basis($1, $2)`, [paymentId, attemptId])).rows[0];
+      } catch (error) {
+        throw new GatewayRefusedError(`not sent: ${error.message}`);
+      }
+      if ((fn === 'bank.submit') !== (basis.state === 'APPROVED')) throw new GatewayRefusedError(`not sent: the payment is ${basis.state}`);
+      let refusal = null;
+      if (!basis.order_matches) refusal = 'the stored order does not match the approved order hash; nothing was sent';
+      else {
+        const decision = bankExecutionDecision({ evidence: basis.evidence, evidenceKeys: pinned, bankTrustKeys: trustKeys, registry: basis.registry, expected: basis.expected });
+        if (!decision.allowed) refusal = `the gateway's check of the approval failed; nothing was sent: ${decision.problems.join('; ')}`;
+      }
+      if (refusal) {
+        await client.query(`SELECT bank.gateway_refuse($1, $2, $3)`, [paymentId, attemptId, refusal]);
+        await client.query('COMMIT');
+        return { refused: refusal };
+      }
+      let row;
+      try {
+        row = (await client.query(`SELECT * FROM ${fn}($1, $2)`, [paymentId, attemptId])).rows[0];
+      } catch (error) {
+        throw new GatewayRefusedError(`not sent: ${error.message}`);
+      }
+      await client.query('COMMIT');
+      return { order: row.payment_order };
     } catch (error) {
-      throw new GatewayRefusedError(`not sent: ${error.message}`);
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
     }
-    if (!row) throw new GatewayRefusedError('not sent: no such payment');
-    const order = orderFromSubmission(paymentId, row.operation_id, row.payment_order);
-    if (orderHash(order) !== row.order_hash) {
-      // Recorded as SUBMITTED, but the stored order is not the approved one: not sent.
-      return { outcome: 'review', reason: 'the stored order does not match the approved order hash; nothing was sent' };
-    }
+  }
+
+  async function send(fn, paymentId, attemptId) {
+    const taken = await take(fn, paymentId, attemptId);
+    if (taken.refused) return { outcome: 'review', reason: taken.refused, recorded: true };
     let answer;
     try {
-      answer = await provider.submit(order);
+      answer = await provider.submit(taken.order);
     } catch (error) {
-      return { outcome: 'unknown', reason: `provider: ${error.message}` };
+      const reason = `provider: ${error.message}`;
+      return { outcome: 'unknown', reason, recorded: await report(paymentId, attemptId, 'unknown', null, reason) };
     }
     const status = String(answer?.status ?? '').toLowerCase();
-    return OUTCOMES.has(status)
-      ? { outcome: status, providerReference: answer.providerReference ?? null }
-      : { outcome: 'unknown', reason: `provider answered ${JSON.stringify(answer?.status ?? null)}` };
+    if (!OUTCOMES.has(status)) {
+      const reason = `provider answered ${JSON.stringify(answer?.status ?? null)}`;
+      return { outcome: 'unknown', reason, recorded: await report(paymentId, attemptId, 'unknown', null, reason) };
+    }
+    const providerReference = answer.providerReference ?? null;
+    return { outcome: status, providerReference, recorded: await report(paymentId, attemptId, status, providerReference) };
   }
+
+  async function lookup(paymentId) {
+    const operationId = (await pool.query(`SELECT bank.operation_for_lookup($1) AS id`, [paymentId])).rows[0]?.id;
+    if (!operationId) return { status: 'not_submitted' };
+    try {
+      const answer = await provider.lookup(operationId);
+      const status = String(answer?.status ?? '').toLowerCase();
+      return ['succeeded', 'failed', 'pending', 'not_found'].includes(status) ? { status, providerReference: answer.providerReference ?? null } : { status: 'unknown' };
+    } catch (error) {
+      return { status: 'unknown', reason: error.message };
+    }
+  }
+
   return {
-    submit: (paymentId, attemptId) => send('bank_submit', paymentId, attemptId),
-    resubmit: (paymentId, attemptId) => send('bank_resubmit', paymentId, attemptId),
-    async lookup(paymentId) {
-      const operationId = (await pool.query(`SELECT bank_operation_for_lookup($1) AS id`, [paymentId])).rows[0]?.id;
-      if (!operationId) return { status: 'not_submitted' };
-      try {
-        const answer = await provider.lookup(operationId);
-        const status = String(answer?.status ?? '').toLowerCase();
-        return ['succeeded', 'failed', 'pending', 'not_found'].includes(status) ? { status, providerReference: answer.providerReference ?? null } : { status: 'unknown' };
-      } catch (error) {
-        return { status: 'unknown', reason: error.message };
-      }
+    submit: (paymentId, attemptId) => send('bank.submit', paymentId, attemptId),
+    resubmit: (paymentId, attemptId) => send('bank.resubmit', paymentId, attemptId),
+    /** Read-only lookup (audits). */
+    lookup,
+    /**
+     * Lookup for a reconciling attempt: a definite answer is recorded for that
+     * attempt; `not_found` is returned for the boundary to decide (resubmit or review).
+     */
+    async reconcile(paymentId, attemptId) {
+      const found = await lookup(paymentId);
+      if (OUTCOMES.has(found.status)) return { ...found, recorded: await report(paymentId, attemptId, found.status, found.providerReference) };
+      if (found.status === 'not_found') return found;
+      const reason = found.reason ? `lookup failed: ${found.reason}` : `lookup answered ${JSON.stringify(found.status)}`;
+      return { status: 'unknown', reason, recorded: await report(paymentId, attemptId, 'unknown', null, reason) };
     },
   };
 }
@@ -73,11 +141,11 @@ export function createGatewayServer({ gateway, tls, allowedClients }) {
     if (!req.client.authorized || !peer?.subject?.CN || !allowed.has(peer.subject.CN)) return send(res, 403, { error: 'client not allowed' });
     try {
       const url = new URL(req.url, 'https://gateway');
-      if (req.method === 'POST' && (url.pathname === '/v1/submit' || url.pathname === '/v1/resubmit')) {
+      const action = { '/v1/submit': gateway.submit, '/v1/resubmit': gateway.resubmit, '/v1/reconcile': gateway.reconcile }[url.pathname];
+      if (req.method === 'POST' && action) {
         let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 4096) return send(res, 413, { error: 'too large' }); }
         const { paymentId, attemptId } = JSON.parse(raw || '{}');
-        const result = await (url.pathname === '/v1/submit' ? gateway.submit : gateway.resubmit)(String(paymentId), String(attemptId));
-        return send(res, 200, result);
+        return send(res, 200, await action(String(paymentId), String(attemptId)));
       }
       const lookup = /^\/v1\/payments\/([0-9a-f-]{36})\/lookup$/.exec(url.pathname);
       if (req.method === 'GET' && lookup) return send(res, 200, await gateway.lookup(lookup[1]));
@@ -118,6 +186,7 @@ export function createGatewayClient({ url, tls, timeoutMs = 10_000 }) {
   return {
     submit: (paymentId, attemptId) => call('POST', '/v1/submit', { paymentId, attemptId }),
     resubmit: (paymentId, attemptId) => call('POST', '/v1/resubmit', { paymentId, attemptId }),
+    reconcile: (paymentId, attemptId) => call('POST', '/v1/reconcile', { paymentId, attemptId }),
     lookup: (paymentId) => call('GET', `/v1/payments/${paymentId}/lookup`),
   };
 }

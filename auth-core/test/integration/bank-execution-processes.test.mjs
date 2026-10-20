@@ -9,6 +9,9 @@
 // payment again only because no answer came. Whether a real provider is
 // idempotent and offers a lookup is a property of its contract, not of these
 // tests. SoftHSM is not the bank's vendor HSM.
+//
+// Phase 15: the database is in the schema `bank`; no role writes a table; the
+// gateway checks the approval again and records the provider's answers.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -32,7 +35,7 @@ function barrier() {
 }
 
 describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)', { skip: skipWithoutServices || skipWithoutSoftHsm }, () => {
-  let server; let bank; let client; let lib; let bankDb; let store; let certs; let provider; let providerHttp; let gatewayProc;
+  let server; let bank; let client; let lib; let bankDb; let store; let registry; let operator; let certs; let provider; let providerHttp; let gatewayProc;
   let evidenceKeys;
   const bankKey = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const bankTrustKeys = [bankKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()];
@@ -49,17 +52,20 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     bank = await bankSession(server, client);
     lib = await integration();
     bankDb = await bankDatabase(lib);
-    store = lib.createTrustStore(bankDb.pools.boundary, { bankTrustKeys });
-    certs = certificates();
-    provider = providerDouble({ idempotent: true });
-    providerHttp = await providerServer(provider);
-    gatewayProc = await startGatewayProcess({ databaseUrl: bankDb.urls.gateway, providerUrl: providerHttp.url, certs });
+    store = lib.createTrustStore(bankDb.pools.boundary);
+    registry = lib.createRegistry(bankDb.pools.registry, { bankTrustKeys });
+    operator = lib.createOperatorTools(bankDb.pools.operator);
     const probe = await bank.enrolDevice((await bank.createIdentity()).nexusId);
     const auth = await bank.createAuthorization(probe);
     const s = await deviceSignature(server, probe, auth.authorizationId);
     await submitSignature(server, probe, auth.authorizationId, s.signature);
     evidenceKeys = Object.values((await bank.call('GET', `/v1/authorizations/${auth.authorizationId}/evidence`)).json.evidencePublicKeys);
+    certs = certificates();
+    provider = providerDouble({ idempotent: true });
+    providerHttp = await providerServer(provider);
+    gatewayProc = await startGateway(providerHttp.url);
   });
+  const startGateway = (providerUrl) => startGatewayProcess({ databaseUrl: bankDb.urls.gateway, providerUrl, certs, evidenceKeys, bankTrustKeys });
   after(async () => { await gatewayProc?.stop().catch(() => undefined); await providerHttp?.close(); await server?.stop(); await bankDb?.drop(); });
 
   const authCoreClient = () => lib.createAuthCoreClient({ baseUrl: server.baseUrl, accessToken: async () => bank.token, timeoutMs: 5_000 });
@@ -68,9 +74,9 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
   const boundary = ({ hooks = {}, leaseMs = 30_000, capabilities = { lookup: true, idempotentSubmit: true }, gateway = gatewayClient(), authCore = authCoreClient(), trust = store } = {}) =>
     lib.createExecutionBoundary({ store: trust, authCore, gateway, evidenceKeys, bankTrustKeys, providerCapabilities: capabilities, leaseMs, hooks });
 
-  const approve = (device) => store.approve(signStatement(approvalStatement({ nexusId: device.nexusId, credentialId: device.credentialId,
+  const approve = (device) => registry.approve(signStatement(approvalStatement({ nexusId: device.nexusId, credentialId: device.credentialId,
     signingKeySha256: signingKeyFingerprint(device.signingKey.publicKeyPem), reference: 'app' }), bankKey.privateKey));
-  const revoke = (device) => store.revoke(signStatement(revocationStatement({ nexusId: device.nexusId, credentialId: device.credentialId, reason: 'lost' }), bankKey.privateKey));
+  const revoke = (device) => registry.revoke(signStatement(revocationStatement({ nexusId: device.nexusId, credentialId: device.credentialId, reason: 'lost' }), bankKey.privateKey));
   const approvedDevice = async () => { const d = await bank.enrolDevice((await bank.createIdentity()).nexusId); await approve(d); return d; };
 
   /** CREATED in the bank, then the authorization at Auth Core (AWAITING_AUTHORIZATION), then the device confirms. */
@@ -109,14 +115,15 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     assert.equal(provider.totalExecutions() - before, 1);
     const t = await store.transitions(p.paymentId);
     assert.deepEqual(t.map((x) => x.to), ['CHECKING', 'APPROVED', 'SUBMITTED', 'EXECUTED']);
-    const actors = (await bankDb.owner.query(`SELECT to_state, actor FROM bank_execution_transitions WHERE payment_id = $1 ORDER BY id`, [p.paymentId])).rows;
+    const actors = (await bankDb.owner.query(`SELECT to_state, actor FROM bank.execution_transitions WHERE payment_id = $1 ORDER BY id`, [p.paymentId])).rows;
     assert.equal(actors.find((a) => a.to_state === 'SUBMITTED').actor, bankDb.roles.gateway, 'only the gateway\'s role submitted');
     assert.equal(actors.find((a) => a.to_state === 'APPROVED').actor, bankDb.roles.boundary);
+    assert.equal(actors.find((a) => a.to_state === 'EXECUTED').actor, bankDb.roles.gateway, 'the outcome is recorded by the gateway');
     // Auth Core's COMMITTED is what the bank reported after the provider confirmed, not proof of a transfer.
     assert.equal((await bank.call('GET', `/v1/authorizations/${p.authorizationId}/bank-transaction`)).json.bankTransactionState, 'COMMITTED');
     // A payment without its authorization cannot be executed.
     const lone = randomUUID();
-    await store.createPayment({ paymentId: lone, bankTransactionReference: `CORE-${lone.slice(0, 8)}`, terms: {} });
+    await store.createPayment({ paymentId: lone, bankTransactionReference: `CORE-${lone.slice(0, 8)}`, terms: (await store.payment(p.paymentId)).terms });
     assert.equal((await boundary().execute(lone)).status, 'NOT_AUTHORIZED');
   });
 
@@ -125,10 +132,14 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     const p = await payment(device);
     assert.equal((await boundary().execute(p.paymentId)).status, 'EXECUTED');
     for (const to of ['CHECKING', 'APPROVED', 'SUBMITTED', 'OUTCOME_UNKNOWN', 'REVIEW', 'REFUSED']) {
-      await assert.rejects(bankDb.owner.query(`UPDATE bank_executions SET state = $2 WHERE payment_id = $1`, [p.paymentId, to]), /not a permitted transition/, `EXECUTED -> ${to}`);
+      await assert.rejects(bankDb.owner.query(`UPDATE bank.executions SET state = $2 WHERE payment_id = $1`, [p.paymentId, to]), /not a permitted transition/, `EXECUTED -> ${to}`);
+      for (const role of ['boundary', 'gateway', 'registry', 'operator']) {
+        await assert.rejects(bankDb.pools[role].query(`UPDATE bank.executions SET state = $2 WHERE payment_id = $1`, [p.paymentId, to]), /permission denied/, `${role}: EXECUTED -> ${to}`);
+      }
     }
-    await assert.rejects(bankDb.owner.query(`DELETE FROM bank_executions WHERE payment_id = $1`, [p.paymentId]), /append-only/);
-    await assert.rejects(bankDb.owner.query(`UPDATE bank_payments SET terms = '{}' WHERE payment_id = $1`, [p.paymentId]), /immutable/);
+    await assert.rejects(bankDb.owner.query(`DELETE FROM bank.executions WHERE payment_id = $1`, [p.paymentId]), /append-only/);
+    await assert.rejects(bankDb.owner.query(`TRUNCATE bank.execution_transitions`), /append-only/);
+    await assert.rejects(bankDb.owner.query(`UPDATE bank.payments SET terms = '{}' WHERE payment_id = $1`, [p.paymentId]), /immutable/);
   });
 
   test('the gateway refuses callers without the boundary\'s client certificate', async () => {
@@ -153,7 +164,8 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     await stop.atGate;
     const before = provider.calls.length;
     // The boundary's own role cannot submit, even for the approved attempt.
-    await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank_executions SET state = 'SUBMITTED' WHERE payment_id = $1`, [p.paymentId]), /only the payment gateway submits/);
+    await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank.executions SET state = 'SUBMITTED' WHERE payment_id = $1`, [p.paymentId]), /permission denied/);
+    await assert.rejects(bankDb.pools.boundary.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, attemptId]), /permission denied/);
     // Another instance, another attempt id: refused. The order in a request is ignored.
     assert.equal((await rawGateway('/v1/submit', { paymentId: p.paymentId, attemptId: randomUUID() }, certs.boundary)).status, 409);
     // The approved attempt, sent with a changed amount by whoever holds the client certificate:
@@ -169,7 +181,8 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     assert.notEqual(r.status, 'EXECUTED', 'the boundary\'s own submission was refused: the approval was used');
     assert.equal(provider.executions(p.operationId), 1, 'one transfer');
     // The approved order cannot be changed in the database either.
-    await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank_executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'a'.repeat(64)]), /immutable|not a permitted/);
+    await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank.executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'a'.repeat(64)]), /permission denied/);
+    await assert.rejects(bankDb.owner.query(`UPDATE bank.executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'a'.repeat(64)]), /not a permitted|immutable/);
   });
 
   test('an attempt still checking has no approval: its attempt id gets nothing from the gateway', async () => {
@@ -211,9 +224,9 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     await stop.atGate;
     const c = await bankDb.owner.connect();
     try {
-      await c.query('BEGIN'); await c.query('ALTER TABLE bank_payments DISABLE TRIGGER bank_payment_lifecycle');
-      await c.query(`UPDATE bank_payments SET terms = jsonb_set(terms, '{amountMinor}', '"990000"') WHERE payment_id = $1`, [p.paymentId]);
-      await c.query('ALTER TABLE bank_payments ENABLE TRIGGER bank_payment_lifecycle'); await c.query('COMMIT');
+      await c.query('BEGIN'); await c.query('ALTER TABLE bank.payments DISABLE TRIGGER payments_lifecycle');
+      await c.query(`UPDATE bank.payments SET terms = jsonb_set(terms, '{amountMinor}', '"990000"') WHERE payment_id = $1`, [p.paymentId]);
+      await c.query('ALTER TABLE bank.payments ENABLE TRIGGER payments_lifecycle'); await c.query('COMMIT');
     } finally { c.release(); }
     const before = provider.calls.length;
     stop.release();
@@ -227,11 +240,14 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     const p = await payment(device);
     provider.modes.push('drop'); // not received: the reconciliation will resubmit (idempotent contract)
     assert.equal((await boundary().execute(p.paymentId)).status, 'OUTCOME_UNKNOWN');
-    let tamper;
+    let tamper; let ownerTamper;
     const r = await boundary({ hooks: { reconciling: async () => {
-      tamper = await bankDb.pools.boundary.query(`UPDATE bank_executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'b'.repeat(64)]).then(() => 'changed', (e) => e.message);
+      tamper = await bankDb.pools.boundary.query(`UPDATE bank.executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'b'.repeat(64)]).then(() => 'changed', (e) => e.message);
+      // Not the owner either, outside the functions.
+      ownerTamper = await bankDb.owner.query(`UPDATE bank.executions SET order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'b'.repeat(64)]).then(() => 'changed', (e) => e.message);
     } } }).execute(p.paymentId);
-    assert.match(tamper, /approved order is immutable/);
+    assert.match(tamper, /permission denied/);
+    assert.match(ownerTamper, /not a permitted transition|approved order is immutable/);
     assert.equal(r.status, 'EXECUTED');
     assert.equal(provider.executions(p.operationId), 1);
     assert.equal(provider.calls.at(-1).amountMinor, '125000');
@@ -288,7 +304,7 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     assert.equal(r.status, 'OUTCOME_UNKNOWN', JSON.stringify(r));
     assert.equal(await state(p.paymentId), 'OUTCOME_UNKNOWN');
     assert.equal((await boundary().execute(p.paymentId)).status, 'OUTCOME_UNKNOWN', 'gateway down: still unknown, nothing sent');
-    gatewayProc = await startGatewayProcess({ databaseUrl: bankDb.urls.gateway, providerUrl: providerHttp.url, certs });
+    gatewayProc = await startGateway(providerHttp.url);
     assert.equal((await boundary().execute(p.paymentId)).status, 'EXECUTED');
     assert.equal(provider.executions(p.operationId), 1);
   });
@@ -305,9 +321,10 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     assert.equal(review.status, 'REVIEW', JSON.stringify(review));
     assert.equal(provider.calls.length, calls, 'not sent again');
     assert.equal((await boundary({ capabilities: noResubmit }).execute(p.paymentId)).status, 'REVIEW', 'stays for a person');
-    await assert.rejects(store.resolveReview(p.paymentId, 'succeeded', { operator: 'ops-1' }), /operator and a note/);
-    assert.equal(await store.resolveReview(p.paymentId, 'failed', { operator: 'ops-1', note: 'provider statement 2026-10-19: no such operation' }), true);
+    await assert.rejects(operator.resolveReview(p.paymentId, 'succeeded'), /needs a note/);
+    assert.equal(await operator.resolveReview(p.paymentId, 'failed', 'provider statement 2026-10-19: no such operation'), true);
     assert.equal(await state(p.paymentId), 'PROVIDER_FAILED');
+    assert.equal((await store.execution(p.paymentId)).resolvedBy, bankDb.roles.operator, 'the operator\'s database login, not a name the caller gives');
     // The contract declares an idempotent submission: resubmitted with the same operation id, once.
     p = await payment(device);
     provider.modes.push('drop');
@@ -336,7 +353,7 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
   test('a provider that is not idempotent: the boundary never resubmits when the contract does not allow it', async () => {
     const strict = providerDouble({ idempotent: false });
     const strictHttp = await providerServer(strict);
-    const strictGateway = await startGatewayProcess({ databaseUrl: bankDb.urls.gateway, providerUrl: strictHttp.url, certs });
+    const strictGateway = await startGateway(strictHttp.url);
     try {
       const device = await approvedDevice();
       const p = await payment(device);
@@ -386,8 +403,9 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
       const crashed = await boundary({ leaseMs: 300, hooks: { [step]: () => { throw new lib.SimulatedCrash(step); } } }).execute(p.paymentId).catch((e) => e);
       assert.ok(crashed instanceof lib.SimulatedCrash, step);
       const left = await state(p.paymentId);
-      assert.equal(left, { checking: 'CHECKING', beforeApprove: 'CHECKING', approved: 'APPROVED', submitted: 'SUBMITTED' }[step], `${step}: state after the crash`);
-      assert.equal((await boundary().execute(p.paymentId)).status, 'IN_PROGRESS', `${step}: lease still running`);
+      // After the submission the gateway has recorded the provider's answer itself: a crash of the boundary loses nothing.
+      assert.equal(left, { checking: 'CHECKING', beforeApprove: 'CHECKING', approved: 'APPROVED', submitted: 'EXECUTED' }[step], `${step}: state after the crash`);
+      if (step !== 'submitted') assert.equal((await boundary().execute(p.paymentId)).status, 'IN_PROGRESS', `${step}: lease still running`);
       await sleep(400);
       const r = await boundary().execute(p.paymentId);
       assert.equal(r.status, 'EXECUTED', `${step}: ${JSON.stringify(r)}`);
@@ -472,7 +490,9 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     stop.release();
     assert.equal((await first).status, 'EXECUTED');
     assert.deepEqual(await store.head(device.nexusId), newer);
-    await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank_chain_heads SET chain_sequence = 1 WHERE nexus_id = $1`, [device.nexusId]), /only moves forward/);
+    await assert.rejects(bankDb.pools.boundary.query(`UPDATE bank.chain_heads SET chain_sequence = 1 WHERE nexus_id = $1`, [device.nexusId]), /permission denied/);
+    await assert.rejects(bankDb.owner.query(`UPDATE bank.chain_heads SET chain_sequence = 1 WHERE nexus_id = $1`, [device.nexusId]), /only moves forward/);
+    assert.equal(await store.keepHead(device.nexusId, { chainSequence: 1, evidenceHash: newer.evidenceHash }), false, 'the function does not move it back either');
   });
 
   test('a compromised Auth Core: its answers, keys and events give it nothing', async () => {
@@ -480,7 +500,7 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     // An approval cannot be brought back by replaying it after the revocation.
     const entry = signStatement(approvalStatement({ nexusId: device.nexusId, credentialId: device.credentialId, signingKeySha256: signingKeyFingerprint(device.signingKey.publicKeyPem), reference: 'replay' }), bankKey.privateKey);
     await revoke(device);
-    await assert.rejects(store.approve(entry), /revoked/);
+    await assert.rejects(registry.approve(entry), /revoked/);
     // Answers carrying keys, a registry or heads are not read as the bank's.
     const fresh = await approvedDevice();
     const p = await payment(fresh);

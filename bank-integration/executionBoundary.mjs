@@ -4,13 +4,14 @@
 // handler, retry and reconciliation jobs, administrative tools) calls
 // `execute(paymentId)`. The provider is reachable only through the payment
 // gateway, which sends nothing the boundary has not APPROVED in the bank's
-// database (paymentGateway.mjs, schema.mjs).
+// database, checks the approval again, and records the provider's answers
+// itself (paymentGateway.mjs, schema.mjs). The boundary's database role can
+// change nothing directly; it calls its functions in the schema `bank`.
 //
 // The state machine, every transition and the behaviour on failure and
 // restart: docs/architecture/payment-state-machine.md.
 import { bankExecutionDecision } from '../auth-core/scripts/lib/bankTrust.mjs';
 import { GatewayRefusedError } from './paymentGateway.mjs';
-import { orderHash, orderOf } from './trustStore.mjs';
 
 /** Thrown by a test hook to stop an attempt as a crash would: no clean-up runs. */
 export class SimulatedCrash extends Error {}
@@ -40,52 +41,51 @@ export function createExecutionBoundary({ store, authCore, gateway, evidenceKeys
   const crash = (error) => { if (error instanceof SimulatedCrash) throw error; };
   const inform = (authorizationId, state, error) => authCore.commitResult(authorizationId, state, error).catch(() => undefined);
 
-  /** Records the provider's answer for this attempt. */
-  async function settle(payment, attemptId, answer, chain) {
-    const { paymentId } = payment;
-    let done;
+  const STATUS = { succeeded: 'EXECUTED', failed: 'PROVIDER_FAILED', pending: 'PENDING_PROVIDER', unknown: 'OUTCOME_UNKNOWN', review: 'REVIEW' };
+
+  /** The gateway's answer, which the gateway already recorded for this attempt. */
+  async function settle(payment, answer, chain) {
+    if (answer.recorded === false) return { status: 'IN_PROGRESS', reason: 'the outcome was not recorded for this attempt (taken over, or the bank\'s database was unavailable)' };
     if (answer.outcome === 'succeeded') {
-      done = await store.recordExecuted(paymentId, attemptId, answer.providerReference ?? null, payment.terms.nexusId, tail(chain));
-      if (done) await inform(payment.authorizationId, 'COMMITTED');
-    } else {
-      done = await store.record(paymentId, attemptId, answer.outcome, { providerReference: answer.providerReference, reason: answer.reason });
-      if (done && answer.outcome === 'failed') await inform(payment.authorizationId, 'FAILED', 'the payment provider reported a failure');
+      await store.keepHead(payment.terms.nexusId, tail(chain)).catch(() => undefined);
+      await inform(payment.authorizationId, 'COMMITTED');
+    } else if (answer.outcome === 'failed') {
+      await inform(payment.authorizationId, 'FAILED', 'the payment provider reported a failure');
     }
-    if (!done) return { status: 'IN_PROGRESS', reason: 'another attempt took the payment over' };
-    const status = { succeeded: 'EXECUTED', failed: 'PROVIDER_FAILED', pending: 'PENDING_PROVIDER', unknown: 'OUTCOME_UNKNOWN', review: 'REVIEW' }[answer.outcome];
+    const status = STATUS[answer.outcome] ?? 'OUTCOME_UNKNOWN';
     return { status, providerReference: answer.providerReference ?? null, ...(answer.reason ? { reason: answer.reason } : {}) };
+  }
+  /** The boundary's own decisions after a submission: unknown or review. */
+  async function mark(kind, paymentId, attemptId, reason) {
+    const done = await (kind === 'review' ? store.markReview : store.markUnknown)(paymentId, attemptId, reason).catch(() => false);
+    if (!done) return { status: 'IN_PROGRESS', reason: 'another attempt took the payment over' };
+    return { status: kind === 'review' ? 'REVIEW' : 'OUTCOME_UNKNOWN', providerReference: null, reason };
   }
 
   /** The payment was sent, or may have been: ask the provider, never send it again blindly. */
   async function reconcile(claim) {
     const { payment, attemptId } = claim;
-    await hook('reconciling', { paymentId: payment.paymentId, attemptId });
-    if (!caps.lookup) {
-      return settle(payment, attemptId, { outcome: 'review', reason: 'the provider contract has no lookup: settled by a person' });
-    }
+    const { paymentId } = payment;
+    await hook('reconciling', { paymentId, attemptId });
+    if (!caps.lookup) return mark('review', paymentId, attemptId, 'the provider contract has no lookup: settled by a person');
     let found;
     try {
-      found = await gateway.lookup(payment.paymentId);
+      found = await gateway.reconcile(paymentId, attemptId);
     } catch (error) {
       crash(error);
-      return settle(payment, attemptId, { outcome: 'unknown', reason: `lookup failed: ${error.message}` });
+      return mark('unknown', paymentId, attemptId, `lookup failed: ${error.message}`);
     }
-    switch (found?.status) {
-      case 'succeeded': case 'failed': case 'pending':
-        return settle(payment, attemptId, { outcome: found.status, providerReference: found.providerReference });
-      case 'not_found':
-        if (!caps.idempotentSubmit) {
-          return settle(payment, attemptId, { outcome: 'review', reason: 'not found at the provider, and its contract does not make a resubmission safe' });
-        }
-        try {
-          return settle(payment, attemptId, await gateway.resubmit(payment.paymentId, attemptId));
-        } catch (error) {
-          crash(error);
-          return settle(payment, attemptId, { outcome: 'unknown', reason: `resubmission failed: ${error.message}` });
-        }
-      default:
-        return settle(payment, attemptId, { outcome: 'unknown', reason: `lookup answered ${JSON.stringify(found?.status ?? null)}` });
+    if (found?.status === 'not_found') {
+      if (!caps.idempotentSubmit) return mark('review', paymentId, attemptId, 'not found at the provider, and its contract does not make a resubmission safe');
+      try {
+        return settle(payment, await gateway.resubmit(paymentId, attemptId));
+      } catch (error) {
+        crash(error);
+        if (error instanceof GatewayRefusedError) return { status: 'IN_PROGRESS', reason: error.message };
+        return mark('unknown', paymentId, attemptId, `resubmission failed: ${error.message}`);
+      }
     }
+    return settle(payment, { outcome: found?.status ?? 'unknown', providerReference: found?.providerReference, reason: found?.reason, recorded: found?.recorded });
   }
 
   async function execute(paymentId) {
@@ -116,7 +116,7 @@ export function createExecutionBoundary({ store, authCore, gateway, evidenceKeys
     };
 
     // CHECKING: nothing irreversible happens here; any failure holds the payment.
-    let evidence; let chain; let decision; let order;
+    let evidence; let chain; let decision;
     try {
       await hook('checking', context);
       const commit = await authCore.commitRequest(payment.authorizationId, payment.bankTransactionReference);
@@ -132,7 +132,6 @@ export function createExecutionBoundary({ store, authCore, gateway, evidenceKeys
         evidence, chain, evidenceKeys: pinned, bankTrustKeys: trustKeys, registry: trust.entries,
         expected: { ...terms, authorizationId: payment.authorizationId }, expectedHead: trust.head ?? undefined,
       });
-      order = orderOf(payment);
     } catch (error) {
       crash(error);
       await store.hold(paymentId, attemptId, error.message, ['CHECKING']).catch(() => undefined);
@@ -144,7 +143,7 @@ export function createExecutionBoundary({ store, authCore, gateway, evidenceKeys
     let approval;
     try {
       await hook('beforeApprove', context);
-      approval = await store.approveExecution(paymentId, attemptId, evidence.sealedPayload.credentialId, terms.nexusId, orderHash(order), leaseMs);
+      approval = await store.approveExecution(paymentId, attemptId, evidence, leaseMs);
     } catch (error) {
       crash(error);
       await store.hold(paymentId, attemptId, error.message, ['CHECKING']).catch(() => undefined);
@@ -152,7 +151,8 @@ export function createExecutionBoundary({ store, authCore, gateway, evidenceKeys
     }
     if (!approval.ok) return approval.lost ? { status: 'IN_PROGRESS', reason: approval.reason } : refuse([approval.reason]);
 
-    // APPROVED -> SUBMITTED happens in the gateway, in the bank's database, before it calls the provider.
+    // APPROVED -> SUBMITTED happens in the gateway, in the bank's database, after
+    // its own check of the approval and before it calls the provider.
     let answer;
     try {
       await hook('approved', context);
@@ -160,15 +160,15 @@ export function createExecutionBoundary({ store, authCore, gateway, evidenceKeys
     } catch (error) {
       crash(error);
       // Not submitted if the approval can still be withdrawn: whichever of this
-      // update and the gateway's bank_submit commits first wins.
+      // call and the gateway's bank.submit commits first wins.
       if (await store.hold(paymentId, attemptId, `not submitted: ${error.message}`, ['APPROVED']).catch(() => false)) {
         return { status: 'HELD', reason: error.message };
       }
       if (error instanceof GatewayRefusedError) return { status: 'IN_PROGRESS', reason: error.message };
-      return settle(payment, attemptId, { outcome: 'unknown', reason: `gateway: ${error.message}` }, chain);
+      return mark('unknown', paymentId, attemptId, `gateway: ${error.message}`);
     }
     await hook('submitted', context);
-    return settle(payment, attemptId, answer, chain);
+    return settle(payment, answer, chain);
   }
 
   /** Checks a settled payment against the provider; a disagreement is recorded, never applied automatically. */

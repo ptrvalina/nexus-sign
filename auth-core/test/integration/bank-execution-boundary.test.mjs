@@ -10,6 +10,9 @@
 // played by its own compiled code (support/compromise.mjs) and by an Auth
 // Core client that alters what Auth Core returns.
 //
+// Phase 15: the bank's database is in the schema `bank`; each component has
+// its own role and only its functions (bank-db-authorization.test.mjs).
+//
 // Each negative case checks the answer, that the adapter was not called,
 // and that the bank recorded nothing as executed. SoftHSM is not the bank's
 // vendor HSM; the provider double is a test double, not a payment system.
@@ -28,7 +31,7 @@ import { approvalStatement, revocationStatement, signStatement, signingKeyFinger
 const integration = () => import('../../../bank-integration/index.mjs');
 
 describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutServices || skipWithoutSoftHsm }, () => {
-  let server; let bank; let client; let bankDb; let store; let lib;
+  let server; let bank; let client; let bankDb; let store; let registry; let lib;
   let evidenceKeys;
   const bankKey = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const bankTrustKeys = [bankKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()];
@@ -43,8 +46,9 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     client = await server.registerBank('bank-boundary');
     bank = await bankSession(server, client);
     lib = await integration();
-    bankDb = await bankDatabase(lib); // the bank's own database, with the boundary's and the gateway's roles
-    store = lib.createTrustStore(bankDb.pools.boundary, { bankTrustKeys });
+    bankDb = await bankDatabase(lib); // the bank's own database, with a role per component
+    store = lib.createTrustStore(bankDb.pools.boundary);
+    registry = lib.createRegistry(bankDb.pools.registry, { bankTrustKeys });
     // Key ceremony: the evidence public key, recorded once by the bank.
     const probe = await bank.enrolDevice((await bank.createIdentity()).nexusId);
     const auth = await bank.createAuthorization(probe);
@@ -57,14 +61,14 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
   const authCoreClient = () => lib.createAuthCoreClient({ baseUrl: server.baseUrl, accessToken: async () => bank.token, timeoutMs: 5_000 });
   /** `adapter` is the provider double; the gateway runs in this process with the gateway's role. */
   const boundary = ({ authCore = authCoreClient(), trust = store, adapter = providerDouble(), capabilities = { lookup: true, idempotentSubmit: false }, leaseMs = 30_000 } = {}) => {
-    const gateway = lib.createPaymentGateway({ pool: bankDb.pools.gateway, provider: adapter });
+    const gateway = lib.createPaymentGateway({ pool: bankDb.pools.gateway, provider: adapter, evidenceKeys, bankTrustKeys });
     return { adapter, gateway, boundary: lib.createExecutionBoundary({ store: trust, authCore, gateway, evidenceKeys, bankTrustKeys, providerCapabilities: capabilities, leaseMs }) };
   };
 
   const approve = (device, nexusId = device.nexusId, fingerprint = signingKeyFingerprint(device.signingKey.publicKeyPem)) =>
-    store.approve(signStatement(approvalStatement({ nexusId, credentialId: device.credentialId, signingKeySha256: fingerprint, reference: 'app' }), bankKey.privateKey));
+    registry.approve(signStatement(approvalStatement({ nexusId, credentialId: device.credentialId, signingKeySha256: fingerprint, reference: 'app' }), bankKey.privateKey));
   const revoke = (device, reason = 'lost') =>
-    store.revoke(signStatement(revocationStatement({ nexusId: device.nexusId, credentialId: device.credentialId, reason }), bankKey.privateKey));
+    registry.revoke(signStatement(revocationStatement({ nexusId: device.nexusId, credentialId: device.credentialId, reason }), bankKey.privateKey));
 
   const TERMS = { operationType: 'TRANSFER', amountMinor: '125000', currency: 'PLN', beneficiary: { name: 'Anna Nowak', iban: 'PL61109010140000071219812874' } };
 
@@ -251,7 +255,7 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     try {
       const adapter = providerDouble();
       const one = boundary({ adapter }).boundary;
-      const two = boundary({ adapter, trust: lib.createTrustStore(otherPool, { bankTrustKeys }) }).boundary;
+      const two = boundary({ adapter, trust: lib.createTrustStore(otherPool) }).boundary;
       const results = await Promise.all(Array.from({ length: 20 }, (_, i) => (i % 2 ? one : two).execute(p.paymentId)));
       assert.equal(adapter.calls.length, 1, JSON.stringify(results.map((r) => r.status)));
       assert.equal(results.filter((r) => r.status === 'EXECUTED' && !r.repeated).length, 1);
@@ -267,7 +271,8 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     const { adapter, boundary: b } = boundary({ authCore: { ...real, evidence: () => real.evidence(old.authorizationId) } });
     await expectNotExecuted(await b.execute(p.paymentId), adapter, p.paymentId, 'REFUSED', /authorization_id|not what the bank asked for/);
     // One authorization pays one payment only.
-    await assert.rejects(store.createPayment({ paymentId: randomUUID(), authorizationId: old.authorizationId, bankTransactionReference: `CORE-${randomUUID().slice(0, 8)}`, terms: {} }), /already|unique|duplicate/i);
+    const oldTerms = (await store.payment(old.paymentId)).terms;
+    await assert.rejects(store.createPayment({ paymentId: randomUUID(), authorizationId: old.authorizationId, bankTransactionReference: `CORE-${randomUUID().slice(0, 8)}`, terms: oldTerms }), /already|unique|duplicate/i);
   });
 
   test('the payment adapter cannot be called around the boundary', async () => {
@@ -276,13 +281,14 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     const device = await approvedDevice();
     const p = await payment(device);
     const adapter = providerDouble();
-    const gateway = lib.createPaymentGateway({ pool: bankDb.pools.gateway, provider: adapter });
+    const gateway = lib.createPaymentGateway({ pool: bankDb.pools.gateway, provider: adapter, evidenceKeys, bankTrustKeys });
     await assert.rejects(gateway.submit(p.paymentId, randomUUID()), lib.GatewayRefusedError, 'nothing approved');
     await assert.rejects(gateway.submit(randomUUID(), randomUUID()), lib.GatewayRefusedError, 'no such payment');
     // The boundary's own role cannot submit, and the gateway's role cannot touch the tables.
-    await assert.rejects(bankDb.pools.boundary.query(`INSERT INTO bank_executions (payment_id, state, attempt_id) VALUES ($1, 'SUBMITTED', $2)`, [p.paymentId, randomUUID()]), /starts in CHECKING/);
-    await assert.rejects(bankDb.pools.gateway.query(`SELECT * FROM bank_payments`), /permission denied/);
-    await assert.rejects(bankDb.pools.gateway.query(`UPDATE bank_executions SET state = 'APPROVED'`), /permission denied/);
+    await assert.rejects(bankDb.pools.boundary.query(`INSERT INTO bank.executions (payment_id, state, attempt_id) VALUES ($1, 'SUBMITTED', $2)`, [p.paymentId, randomUUID()]), /permission denied/);
+    await assert.rejects(bankDb.pools.boundary.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, randomUUID()]), /permission denied/);
+    await assert.rejects(bankDb.pools.gateway.query(`SELECT * FROM bank.payments`), /permission denied/);
+    await assert.rejects(bankDb.pools.gateway.query(`UPDATE bank.executions SET state = 'APPROVED'`), /permission denied/);
     assert.equal(adapter.calls.length, 0);
   });
 
@@ -405,9 +411,9 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     const setHash = async (hash) => {
       const c = await bankDb.owner.connect();
       try {
-        await c.query('BEGIN'); await c.query('ALTER TABLE bank_chain_heads DISABLE TRIGGER bank_chain_head_forward_only');
-        await c.query(`UPDATE bank_chain_heads SET evidence_hash = $2 WHERE nexus_id = $1`, [device.nexusId, hash]);
-        await c.query('ALTER TABLE bank_chain_heads ENABLE TRIGGER bank_chain_head_forward_only'); await c.query('COMMIT');
+        await c.query('BEGIN'); await c.query('ALTER TABLE bank.chain_heads DISABLE TRIGGER chain_head_forward_only');
+        await c.query(`UPDATE bank.chain_heads SET evidence_hash = $2 WHERE nexus_id = $1`, [device.nexusId, hash]);
+        await c.query('ALTER TABLE bank.chain_heads ENABLE TRIGGER chain_head_forward_only'); await c.query('COMMIT');
       } finally { c.release(); }
     };
     await setHash('e'.repeat(64));
@@ -454,8 +460,8 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     const device = await approvedDevice();
     const forger = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const forged = signStatement(approvalStatement({ nexusId: device.nexusId, credentialId: randomUUID(), signingKeySha256: 'a'.repeat(64), reference: 'x' }), forger.privateKey);
-    await assert.rejects(store.approve(forged), /unknown bank key/);
-    await bankDb.owner.query(`INSERT INTO bank_trust_statements (credential_id, nexus_id, type, entry) VALUES ($1, $2, $3, $4)`,
+    await assert.rejects(registry.approve(forged), /unknown bank key/);
+    await bankDb.owner.query(`INSERT INTO bank.trust_statements (credential_id, nexus_id, type, entry, recorded_by) VALUES ($1, $2, $3, $4, 'owner')`,
       [forged.statement.credentialId, device.nexusId, forged.statement.type, JSON.stringify(forged)]);
     const p = await payment(device);
     const { adapter, boundary: b } = boundary();

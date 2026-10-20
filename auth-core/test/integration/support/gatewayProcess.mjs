@@ -8,7 +8,11 @@ import { createGatewayServer, createHttpProvider, createPaymentGateway } from '.
 
 const dir = process.env.GATEWAY_TLS_DIR;
 const pool = new pg.Pool({ connectionString: process.env.GATEWAY_DATABASE_URL, max: 4 });
-const gateway = createPaymentGateway({ pool, provider: createHttpProvider({ url: process.env.GATEWAY_PROVIDER_URL, timeoutMs: 5_000 }) });
+const keys = JSON.parse(readFileSync(process.env.GATEWAY_KEYS_FILE, 'utf8'));
+const gateway = createPaymentGateway({
+  pool, provider: createHttpProvider({ url: process.env.GATEWAY_PROVIDER_URL, timeoutMs: 5_000 }),
+  evidenceKeys: keys.evidenceKeys, bankTrustKeys: keys.bankTrustKeys,
+});
 const server = createGatewayServer({
   gateway,
   tls: { key: readFileSync(join(dir, 'gateway.key')), cert: readFileSync(join(dir, 'gateway.crt')), ca: readFileSync(join(dir, 'bank-ca.crt')) },
