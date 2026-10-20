@@ -105,6 +105,61 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     await assert.rejects(db.owner.query(`UPDATE bank.executions SET state = 'REVIEW' WHERE payment_id = $1`, [p.paymentId]), /not a permitted transition/);
   });
 
+  test('the owner\'s own SQL: no approval without bank.approve; an announcement covers one row; an approved order stays as approved', async () => {
+    const p = await claimed();
+    await assert.rejects(db.owner.query(`UPDATE bank.executions SET state = 'APPROVED' WHERE payment_id = $1`, [p.paymentId]), /not a permitted transition/);
+    // After a function's change, the same transaction cannot ride on its announcement.
+    const c = await db.owner.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(`SELECT * FROM bank.claim($1, 30000)`, [p.paymentId]).catch(() => undefined);
+      const q = await claimed();
+      await c.query(`SELECT bank.via('claim')`);
+      await c.query(`UPDATE bank.executions SET state = 'CHECKING', attempt_id = $2 WHERE payment_id = $1`, [q.paymentId, randomUUID()]);
+      await assert.rejects(c.query(`UPDATE bank.executions SET state = 'CHECKING', attempt_id = $2 WHERE payment_id = $1`, [q.paymentId, randomUUID()]), /not a permitted transition/);
+      await c.query('ROLLBACK');
+    } finally { c.release(); }
+    // bank.via is a label, not an authority: whoever can UPDATE the table (only the owner) can announce a function,
+    // and the trigger still keeps the approved order, credential and evidence.
+    assert.equal((await store.approveExecution(p.paymentId, p.attemptId, p.evidence, 30_000)).ok, true);
+    const d = await db.owner.connect();
+    try {
+      await d.query('BEGIN');
+      await d.query(`SELECT set_config('bank.via', 'hold', true)`);
+      await assert.rejects(d.query(`UPDATE bank.executions SET state = 'HELD', order_hash = $2 WHERE payment_id = $1`, [p.paymentId, 'b'.repeat(64)]), /approved order is immutable/);
+      await d.query('ROLLBACK');
+    } finally { d.release(); }
+    assert.equal(await state(p.paymentId), 'APPROVED');
+  });
+
+  test('the gateway role\'s functions check for themselves, without the gateway\'s own check before them', async () => {
+    const p = await claimed();
+    const gw = db.pools.gateway;
+    // Still CHECKING; an attempt that holds nothing; a lookup before any submission.
+    await assert.rejects(gw.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, p.attemptId]), /nothing is approved for this attempt/);
+    assert.equal((await gw.query(`SELECT bank.report($1, $2, 'succeeded', 'PAY-x', null) AS ok`, [p.paymentId, p.attemptId])).rows[0].ok, false);
+    assert.equal((await gw.query(`SELECT bank.operation_for_lookup($1) AS id`, [p.paymentId])).rows[0].id, null);
+    assert.equal((await store.approveExecution(p.paymentId, p.attemptId, p.evidence, 30_000)).ok, true);
+    await assert.rejects(gw.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, randomUUID()]), /nothing is approved for this attempt/);
+    await assert.rejects(gw.query(`SELECT * FROM bank.resubmit($1, $2)`, [p.paymentId, p.attemptId]), /no reconciliation by this attempt/);
+    // The reference (the provider's operation id) changed after the approval by the owner: the order is not the approved one.
+    const c = await db.owner.connect();
+    try {
+      await c.query('BEGIN'); await c.query('ALTER TABLE bank.payments DISABLE TRIGGER payments_lifecycle');
+      await c.query(`UPDATE bank.payments SET bank_transaction_reference = bank_transaction_reference || '-X' WHERE payment_id = $1`, [p.paymentId]);
+      await assert.rejects(c.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, p.attemptId]), /not the approved order/);
+      await c.query('ROLLBACK');
+    } finally { c.release(); }
+    // The right attempt: once.
+    const sent = (await gw.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, p.attemptId])).rows[0];
+    assert.equal(sent.payment_order.amountMinor, '125000');
+    await assert.rejects(gw.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, p.attemptId]), /nothing is approved for this attempt/);
+    assert.equal((await gw.query(`SELECT bank.report($1, $2, 'succeeded', 'PAY-x', null) AS ok`, [p.paymentId, randomUUID()])).rows[0].ok, false, 'another attempt');
+    assert.equal((await gw.query(`SELECT bank.report($1, $2, 'succeeded', 'PAY-x', null) AS ok`, [p.paymentId, p.attemptId])).rows[0].ok, true);
+    assert.equal((await gw.query(`SELECT bank.report($1, $2, 'failed', null, null) AS ok`, [p.paymentId, p.attemptId])).rows[0].ok, false, 'a final state stays');
+    assert.equal(await state(p.paymentId), 'EXECUTED');
+  });
+
   test('bank.approve checks the attempt, the lease, the registry, the revocation and the customer; it binds the order itself', async () => {
     const { provider, gateway } = gatewayWith();
     // Lease expired.
@@ -198,6 +253,19 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     assert.equal((await gateway.submit(p.paymentId, p.attemptId)).outcome, 'review');
     assert.equal(provider.calls.length, 0);
     assert.equal(await state(p.paymentId), 'REVIEW');
+    // The reference (the provider's operation id) changed: not part of what the customer signed, but of the approved order.
+    const q = await claimed();
+    assert.equal((await store.approveExecution(q.paymentId, q.attemptId, q.evidence, 30_000)).ok, true);
+    const d = await db.owner.connect();
+    try {
+      await d.query('BEGIN'); await d.query('ALTER TABLE bank.payments DISABLE TRIGGER payments_lifecycle');
+      await d.query(`UPDATE bank.payments SET bank_transaction_reference = bank_transaction_reference || '-X' WHERE payment_id = $1`, [q.paymentId]);
+      await d.query('ALTER TABLE bank.payments ENABLE TRIGGER payments_lifecycle'); await d.query('COMMIT');
+    } finally { d.release(); }
+    const answer = await gateway.submit(q.paymentId, q.attemptId);
+    assert.equal(answer.outcome, 'review');
+    assert.match(answer.reason, /approved order hash/);
+    assert.equal(provider.calls.length, 0);
   });
 
   test('revocation and approval are serialized on the credential\'s trust row', async () => {
@@ -332,7 +400,9 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     await db.owner.query(`GRANT UPDATE, INSERT ON bank.executions TO ${db.roles.boundary}`);
     await db.owner.query(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA bank TO ${db.roles.boundary}`);
     await db.owner.query(`GRANT EXECUTE ON FUNCTION bank.submit(uuid, uuid) TO ${db.roles.boundary}`);
+    await db.owner.query(`GRANT EXECUTE ON FUNCTION bank.report(uuid, uuid, text, text, text) TO PUBLIC`);
     await lib.installSchema(db.owner, db.roles);
+    assert.equal((await db.owner.query(`SELECT has_function_privilege('public', 'bank.report(uuid,uuid,text,text,text)', 'EXECUTE') AS x`)).rows[0].x, false);
     assert.deepEqual(await lib.privilegeMatrix(db.owner, db.roles), lib.intendedPrivileges(db.roles));
     // The phase 14 tables in public, with their grants, if a bank upgrades in place: no grant survives.
     await db.adminQuery(`CREATE TABLE public.bank_executions (payment_id uuid); ALTER TABLE public.bank_executions OWNER TO ${db.ownerRole};
@@ -351,5 +421,13 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
       assert.equal((await db.owner.query(`SELECT has_function_privilege($1, 'bank.later_fn()', 'EXECUTE') AS x`, [role])).rows[0].x, false, role);
     }
     await db.owner.query(`DROP TABLE bank.later; DROP FUNCTION bank.later_fn()`);
+    // The installer refuses a role that is a superuser or a member of the owner.
+    const insider = `${db.roles.boundary}_insider`;
+    await db.adminQuery(`CREATE ROLE ${insider} NOLOGIN; GRANT ${db.ownerRole} TO ${insider}`);
+    try {
+      await assert.rejects(lib.installSchema(db.owner, { ...db.roles, boundary: insider }), /member of the schema owner/);
+      await assert.rejects(lib.installSchema(db.owner, { ...db.roles, operator: 'postgres' }), /superuser/);
+    } finally { await db.adminQuery(`DROP ROLE ${insider}`); }
+    assert.deepEqual(await lib.privilegeMatrix(db.owner, db.roles), lib.intendedPrivileges(db.roles), 'a refused install changes nothing');
   });
 });
