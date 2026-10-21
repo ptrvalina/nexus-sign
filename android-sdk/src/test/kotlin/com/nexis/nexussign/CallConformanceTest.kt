@@ -16,15 +16,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.KeyFactory
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
-import java.time.Duration
 import java.util.Base64
 
 /**
@@ -36,7 +33,8 @@ import java.util.Base64
  *
  * Skipped unless NEXUS_CALL_CONFORMANCE points to the session file the
  * driver writes. Requests are signed as the SDK signs them (device protocol
- * v1), with java.net.http instead of OkHttp.
+ * v1), with HttpURLConnection instead of OkHttp (java.net.http is not on
+ * the Android unit test classpath).
  */
 class CallConformanceTest {
     private val file = System.getenv("NEXUS_CALL_CONFORMANCE")
@@ -48,7 +46,6 @@ class CallConformanceTest {
         privateKeyPkcs8: ByteArray,
     ) : CallSignalling {
         private val key = KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(privateKeyPkcs8))
-        private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
         private val random = SecureRandom()
 
         private suspend fun request(method: String, path: String, body: String?): Pair<Int, String> = withContext(Dispatchers.IO) {
@@ -58,13 +55,27 @@ class CallConformanceTest {
             val signature = Signature.getInstance("SHA256withECDSA").run {
                 initSign(key); update(DeviceProtocol.requestSigningInput(method, path, timestamp, nonce, credentialId, bytes)); sign()
             }
-            val builder = HttpRequest.newBuilder(URI.create(baseUrl + path)).timeout(Duration.ofSeconds(25))
-                .header("X-NEXUS-Credential", credentialId).header("X-NEXUS-Timestamp", timestamp)
-                .header("X-NEXUS-Nonce", nonce).header("X-NEXUS-Signature", Base64.getEncoder().encodeToString(signature))
-            if (body != null) builder.header("Content-Type", "application/json").method(method, HttpRequest.BodyPublishers.ofByteArray(bytes))
-            else builder.method(method, HttpRequest.BodyPublishers.noBody())
-            val response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString())
-            response.statusCode() to response.body()
+            val connection = URL(baseUrl + path).openConnection() as HttpURLConnection
+            try {
+                connection.connectTimeout = 5_000
+                connection.readTimeout = 25_000
+                connection.requestMethod = method
+                connection.setRequestProperty("X-NEXUS-Credential", credentialId)
+                connection.setRequestProperty("X-NEXUS-Timestamp", timestamp)
+                connection.setRequestProperty("X-NEXUS-Nonce", nonce)
+                connection.setRequestProperty("X-NEXUS-Signature", Base64.getEncoder().encodeToString(signature))
+                if (body != null) {
+                    connection.doOutput = true
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.setFixedLengthStreamingMode(bytes.size)
+                    connection.outputStream.use { it.write(bytes) }
+                }
+                val status = connection.responseCode
+                val stream = if (status >= 400) connection.errorStream else connection.inputStream
+                status to (stream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: "")
+            } finally {
+                connection.disconnect()
+            }
         }
 
         private suspend fun json(method: String, path: String, body: String?): JsonObject {

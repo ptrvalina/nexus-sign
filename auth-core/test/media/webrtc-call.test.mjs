@@ -200,7 +200,9 @@ describe('real WebRTC call: phone ↔ operator console', { skip }, () => {
       assert.ok(result.srtpCipher, `SRTP cipher negotiated: ${result.srtpCipher}`);
       assert.ok(result.received.audio > 0, `audio received by the phone: ${JSON.stringify(result.received)}`);
       if (channel === 'VIDEO') assert.ok(result.received.video > 0, 'video received by the phone');
-      assert.equal(result.localCandidateType, 'host', 'peer to peer on loopback, not relayed through Auth Core');
+      // A direct path: a host candidate, or a peer-reflexive one learned from the
+      // connectivity checks (seen after the ICE restart on CI runners). Never a relay.
+      assert.ok(['host', 'prflx'].includes(result.localCandidateType), `peer to peer on loopback, not relayed: ${result.localCandidateType}`);
       await console_.waitForFunction(() => document.getElementById('call-state').textContent === 'connected');
       if (channel === 'VIDEO') {
         await console_.waitForFunction(() => document.getElementById('call-remote').videoWidth > 0, null, { timeout: 15_000 });

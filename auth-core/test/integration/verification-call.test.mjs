@@ -246,7 +246,15 @@ describe('verification calls', { skip: skipWithoutServices }, () => {
       assert.deepEqual([signals[0].from, signals[0].type, signals[0].payload.reason], ['server', 'bye', 'session_expired']);
     }
     assert.equal((await deviceCall('GET', `${sessionId}/signals?after=0`)).json.signals.length, 1, 'announced once');
-    assert.equal((await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' } })).status, 410);
+    // The contract (see the test above): 410 while the session is past its time,
+    // 409 once the expiry sweep has closed it. The sweep runs in the background
+    // and may do so between these steps, so the status is read around the request.
+    const status = async () => (await server.db.query(`SELECT status FROM verification_sessions WHERE session_id = $1`, [sessionId])).rows[0].status;
+    const before = await status();
+    const late = await deviceCall('POST', `${sessionId}/signals`, { type: 'offer', payload: { sdp: 'v=0' } });
+    const after = await status();
+    const expected = new Set([before, after].map((s) => (s === 'EXPIRED' ? 409 : 410)));
+    assert.ok(expected.has(late.status), `${late.status} for a session that was ${before} then ${after}`);
   });
 
   test('a revoked device credential ends the call for the operator', async () => {
