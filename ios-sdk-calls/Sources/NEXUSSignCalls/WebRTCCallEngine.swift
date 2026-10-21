@@ -126,9 +126,7 @@ public final class WebRTCCallEngine: NSObject, CallMediaEngine, @unchecked Senda
         }
     }
 
-    /// `@nonobjc`: an NSObject subclass cannot expose a method with the
-    /// Objective-C selector `release`, which belongs to reference counting.
-    @nonobjc public func release() {
+    public func releaseMedia() {
         lock.lock()
         guard !released else { lock.unlock(); return }
         released = true

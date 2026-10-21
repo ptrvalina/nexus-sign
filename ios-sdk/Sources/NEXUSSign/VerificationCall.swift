@@ -102,7 +102,9 @@ public protocol CallMediaEngine: AnyObject {
     func setMicrophoneEnabled(_ enabled: Bool)
     func setCameraEnabled(_ enabled: Bool)
     /// Stops capture and closes the connection. Called exactly once.
-    func release()
+    /// (Not `release()`: an engine built on NSObject, as libwebrtc's delegates
+    /// require, would then match NSObject's `release` as well.)
+    func releaseMedia()
 }
 
 public enum CallEndReason: Equatable, Sendable {
@@ -410,7 +412,7 @@ public actor VerificationCallController {
         pollTask?.cancel()
         if !released {
             released = true
-            engine.release()
+            engine.releaseMedia()
         }
         capture = CaptureState(cameraOn: false, microphoneOn: false)
         notify()

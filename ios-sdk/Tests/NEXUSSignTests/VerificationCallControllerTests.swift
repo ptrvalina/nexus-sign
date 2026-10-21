@@ -89,7 +89,7 @@ final class VerificationCallControllerTests: XCTestCase {
         func addRemoteCandidate(_ candidate: IceCandidateInit) async throws { add("remote:\(candidate.candidate)") }
         func setMicrophoneEnabled(_ enabled: Bool) { add("mic:\(enabled)") }
         func setCameraEnabled(_ enabled: Bool) { add("camera:\(enabled)") }
-        func release() { releases += 1; add("release") }
+        func releaseMedia() { releases += 1; add("release") }
     }
 
     private var fast: VerificationCallController.Options {
