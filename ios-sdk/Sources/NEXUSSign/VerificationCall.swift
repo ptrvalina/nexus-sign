@@ -129,6 +129,10 @@ public enum CallState: Equatable, Sendable {
 public struct CaptureState: Equatable, Sendable {
     public let cameraOn: Bool
     public let microphoneOn: Bool
+    /// Public so that a media module (NEXUSSignCalls) can create one.
+    public init(cameraOn: Bool, microphoneOn: Bool) {
+        self.cameraOn = cameraOn; self.microphoneOn = microphoneOn
+    }
 }
 
 /// The device side of one call; same rules as the Android SDK:

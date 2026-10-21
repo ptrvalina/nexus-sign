@@ -49,7 +49,9 @@ describe('SDK call state machine against Auth Core', { skip }, () => {
     const op = (method, path, body) => operator.call(method, `/admin/api/verification-calls/${sessionId}${path}`, body === undefined ? {} : { body });
     assert.equal((await op('POST', '/claim', {})).status, 200);
     let cursor = 0; const received = [];
-    const deadline = Date.now() + 45_000;
+    // The command starts Gradle, which needs a while even with compiled tests;
+    // the session itself lasts five minutes.
+    const deadline = Date.now() + 180_000;
     while (!received.some((s) => s.type === 'candidate') && Date.now() < deadline) {
       const r = await op('GET', `/signals?after=${cursor}&waitMs=2000`);
       cursor = r.json.next; received.push(...r.json.signals);

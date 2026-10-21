@@ -182,6 +182,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4, also validates the wrapper checksum
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run build
+      - name: Compile the SDK's unit tests first (a cold Gradle build takes longer than the driver waits for signals)
+        working-directory: android-sdk
+        run: sh ./gradlew --no-daemon compileDebugUnitTestKotlin
       - name: SDK call controller (JVM) with this Auth Core; scripted media, real signalling
         env:
           NEXUS_CALL_CONFORMANCE_CMD: cd ../android-sdk && sh ./gradlew --no-daemon testDebugUnitTest --tests com.nexis.nexussign.CallConformanceTest
