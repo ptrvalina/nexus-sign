@@ -46,7 +46,9 @@ public final class VerificationCallModel: ObservableObject {
     public func start() {
         Task {
             await controller.observe { [weak self] state, capture in
-                Task { @MainActor in self?.state = state; self?.capture = capture }
+                // The capture list copies the weak reference into the task
+                // (a captured `var` may not be used from concurrent code).
+                Task { @MainActor [weak self] in self?.state = state; self?.capture = capture }
             }
             await controller.start()
         }
