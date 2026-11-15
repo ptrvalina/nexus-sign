@@ -20,7 +20,7 @@
 //   - arithmetic on `numeric` in Jacobian coordinates, u1*G + u2*Q by Shamir's
 //     trick, one modular inversion at the end.
 // Tested against Node's OpenSSL on generated keys, messages and corrupted
-// signatures in bank-integration/test/p256.test.mjs.
+// signatures in auth-core/test/integration/bank-p256.test.mjs.
 //
 // Every function is internal: installSchema grants none of them to any role.
 
