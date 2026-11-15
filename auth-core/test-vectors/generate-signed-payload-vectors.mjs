@@ -112,13 +112,13 @@ addValid('payee name of 140 characters (the maximum) is shown after the account'
   beneficiary: { name: `ACME ${'N'.repeat(130)} GmbH`, iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' },
 });
 // Phase 10 additions (appended, so the indexes of the vectors above stay).
-// Look-alike letters are not a protocol error: the bytes are signed and shown
-// as they are (Cyrillic А U+0410 and о U+043E here), so the signature binds
-// them; whether a bank flags confusable payee names is .
-addValid('payee name with Cyrillic look-alike letters is signed and shown as is', {
+// A payee name written entirely in Cyrillic is signed and shown as it is.
+// Mixing Latin with Cyrillic or Greek letters in one value is refused (see the
+// invalid vectors), because that is how look-alike payee names are built.
+addValid('payee name in Cyrillic script is signed and shown as is', {
   ...base,
   authorization_id: '00000000-0000-4000-8000-000000000008',
-  beneficiary: { name: '\u0410nna N\u043ewak', iban: 'PL61109010140000071219812874' },
+  beneficiary: { name: '\u0410\u043d\u043d\u0430 \u041d\u043e\u0432\u0430\u043a', iban: 'PL61109010140000071219812874' },
 });
 addValid('smallest non-zero amount', { ...base, authorization_id: '00000000-0000-4000-8000-000000000009', amount_minor: '1', currency: 'EUR' });
 
@@ -164,6 +164,17 @@ addInvalid('empty beneficiary value', JSON.stringify(normalize({ ...base, benefi
 addInvalid('beneficiary value of spaces only', JSON.stringify(normalize({ ...base, beneficiary: { name: '   ', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
 addInvalid('leading space in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: ' Jan Kowalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
 addInvalid('trailing no-break space in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski\u00a0', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+// Display text rules (protocol v1, 2.0.0-rc.3): look-alike and layout tricks.
+addInvalid('payee name mixing Latin and Cyrillic letters', JSON.stringify(normalize({ ...base, beneficiary: { name: '\u0410nna N\u043ewak', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('payee name mixing Latin and Greek letters', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan K\u03bfwalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('beneficiary value not in NFC', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jose\u0301 Kowalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('no-break space inside beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan\u00a0Kowalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('repeated spaces inside beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan  Kowalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('full-width digit in iban', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'PL6110901014000007121981287\uff14' } })), 'invalid_value');
+addInvalid('iban with wrong check digits', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'PL62109010140000071219812874' } })), 'invalid_value');
+addInvalid('iban with spaces', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'PL61 1090 1014 0000 0712 1981 2874' } })), 'invalid_value');
+addInvalid('malformed bic', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'PL61109010140000071219812874', bic: 'COBA-DE-FF' } })), 'invalid_value');
+addInvalid('padded transaction reference', JSON.stringify(normalize({ ...base, transaction_reference: ' BANK-2026-000001' })), 'invalid_value');
 addInvalid('17 beneficiary fields', JSON.stringify(normalize({ ...base, beneficiary: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`f${String(i).padStart(2, '0')}`, 'x'])) })), 'invalid_value');
 addInvalid('amount of 31 digits', JSON.stringify(normalize({ ...base, amount_minor: '1'.repeat(31) })), 'invalid_value');
 addInvalid('currency with a digit', JSON.stringify(normalize({ ...base, currency: 'PL1' })), 'invalid_value');

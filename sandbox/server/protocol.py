@@ -136,20 +136,62 @@ def validate_beneficiary(beneficiary):
             return f'beneficiary.{key} must be a string'
         if len(value.encode('utf-16-le', 'surrogatepass')) // 2 > BENEFICIARY_MAX_VALUE_LENGTH:
             return f'beneficiary.{key} is longer than {BENEFICIARY_MAX_VALUE_LENGTH} characters'
-        if value == '' or unicodedata.category(value[0]) == 'Zs' or unicodedata.category(value[-1]) == 'Zs':
-            return f'beneficiary.{key} is empty or has leading or trailing space'
-        if not is_display_safe(value):
-            return f'beneficiary.{key} contains a control, format or separator character'
+        if value == '':
+            return f'beneficiary.{key} is empty'
+        problem = display_text_problem(value)
+        if problem:
+            return f'beneficiary.{key}: {problem}'
+        if key == 'iban' and not is_valid_iban(value):
+            return 'beneficiary.iban is not a valid IBAN in electronic format'
+        if key == 'bic' and not _BIC.match(value):
+            return 'beneficiary.bic is not a valid BIC'
     return None
 
 
-_DISPLAY_UNSAFE = {'Cc', 'Cf', 'Zl', 'Zp'}
+_DISPLAY_UNSAFE = {'Cc', 'Cf', 'Zl', 'Zp', 'Cs'}
+_IBAN = re.compile(r'[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\Z')
+_BIC = re.compile(r'[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\Z')
+# Fixed code point ranges, identical in Auth Core and both SDKs, so that the
+# decision does not depend on the runtime's Unicode version.
+_CONFUSABLE_SCRIPTS = {
+    'Latin': re.compile('[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]'),
+    'Cyrillic': re.compile('[\u0400-\u052F]'),
+    'Greek': re.compile('[\u0370-\u03FF\u1F00-\u1FFF]'),
+}
 
 
 def is_display_safe(text):
     """Same rule as Auth Core and the SDKs: no control, format (bidi,
-    zero-width) or line/paragraph separator characters in displayed text."""
+    zero-width), line/paragraph separator or lone surrogate characters."""
     return not any(unicodedata.category(ch) in _DISPLAY_UNSAFE for ch in text)
+
+
+def display_text_problem(text):
+    """The display text rules of authorization protocol v1 for values the
+    customer reads (beneficiary values, transaction_reference); returns the
+    broken rule or None. Mirrors displayTextViolation in Auth Core."""
+    if not is_display_safe(text):
+        return 'control, format or separator character'
+    if unicodedata.normalize('NFC', text) != text:
+        return 'not in Unicode Normalization Form C'
+    if any(unicodedata.category(ch) == 'Zs' and ch != ' ' for ch in text):
+        return 'only the ASCII space is allowed'
+    if text[:1] == ' ' or text[-1:] == ' ':
+        return 'leading or trailing space'
+    if '  ' in text:
+        return 'repeated spaces'
+    if any(unicodedata.category(ch) == 'Nd' and ch not in '0123456789' for ch in text):
+        return 'only ASCII digits are allowed'
+    if sum(1 for pattern in _CONFUSABLE_SCRIPTS.values() if pattern.search(text)) > 1:
+        return 'Latin, Cyrillic and Greek letters mixed in one value'
+    return None
+
+
+def is_valid_iban(value):
+    if not _IBAN.match(value):
+        return False
+    rearranged = value[4:] + value[:4]
+    return int(''.join(str(int(ch, 36)) for ch in rearranged)) % 97 == 1
 
 
 # --- Strict parser (what a verifying device does) ---
@@ -233,6 +275,9 @@ def parse_signed_payload(data):
     for key in FIELDS - {'beneficiary'}:
         if not is_display_safe(obj[key]):
             raise Rejected('invalid_value', f'{key} contains a control, format or separator character')
+    problem = display_text_problem(obj['transaction_reference'])
+    if problem:
+        raise Rejected('invalid_value', f'transaction_reference: {problem}')
     return {k: (dict(v) if isinstance(v, dict) else str(v)) for k, v in obj.items()}
 
 

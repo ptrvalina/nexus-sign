@@ -186,17 +186,22 @@ enum SignedPayload {
             throw Rejected(reason: "invalid_value", detail: "more than \(beneficiaryMaxFields) beneficiary fields")
         }
         for (key, value) in beneficiary {
-            if !isDisplaySafe(value) {
-                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) contains a control, format or separator character")
-            }
             // UTF-16 code units, as Auth Core and the Android SDK count.
             if value.isEmpty || value.utf16.count > beneficiaryMaxValueLength {
                 throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) must be 1 to \(beneficiaryMaxValueLength) characters")
             }
-            if let first = value.unicodeScalars.first, let last = value.unicodeScalars.last,
-               first.properties.generalCategory == .spaceSeparator || last.properties.generalCategory == .spaceSeparator {
-                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) has leading or trailing space")
+            if let violation = displayTextViolation(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key): \(violation)")
             }
+            if key == "iban", !isValidIBAN(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.iban is not a valid IBAN")
+            }
+            if key == "bic", !isValidBIC(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.bic is not a valid BIC")
+            }
+        }
+        if let violation = displayTextViolation(try str("transaction_reference")) {
+            throw Rejected(reason: "invalid_value", detail: "transaction_reference: \(violation)")
         }
 
         return NexusSignedTransaction(
@@ -279,6 +284,82 @@ enum SignedPayload {
     /// signed value. Auth Core applies the same rule.
     static func isDisplaySafe(_ value: String) -> Bool {
         !value.unicodeScalars.contains { displayUnsafeCategories.contains($0.properties.generalCategory) }
+    }
+
+    /// Latin, Cyrillic and Greek letters as fixed code point ranges, identical
+    /// in Auth Core, the Android SDK and the sandbox, so the decision does not
+    /// depend on the Unicode version of the device's runtime.
+    private static let confusableScripts: [[ClosedRange<UInt32>]] = [
+        [0x41...0x5A, 0x61...0x7A, 0xC0...0xD6, 0xD8...0xF6, 0xF8...0x24F, 0x1E00...0x1EFF],
+        [0x400...0x52F],
+        [0x370...0x3FF, 0x1F00...0x1FFF],
+    ]
+
+    /// The display text rules of authorization protocol v1 for values the
+    /// customer reads (beneficiary values, transaction_reference): NFC, only
+    /// the ASCII space and never doubled or at either end, only ASCII digits,
+    /// and no mix of Latin, Cyrillic and Greek letters in one value. Returns
+    /// the broken rule, or nil. Auth Core refuses to create an authorization
+    /// that breaks them; the device checks again because it trusts only the
+    /// signed bytes.
+    static func displayTextViolation(_ value: String) -> String? {
+        let scalars = value.unicodeScalars
+        if !isDisplaySafe(value) { return "control, format or separator character" }
+        // String equality in Swift is canonical equivalence, so compare scalars.
+        if !value.precomposedStringWithCanonicalMapping.unicodeScalars.elementsEqual(scalars) {
+            return "not in Unicode Normalization Form C"
+        }
+        if scalars.contains(where: { $0.properties.generalCategory == .spaceSeparator && $0.value != 0x20 }) {
+            return "only the ASCII space is allowed"
+        }
+        if scalars.first?.value == 0x20 || scalars.last?.value == 0x20 { return "leading or trailing space" }
+        var previousWasSpace = false
+        for scalar in scalars {
+            let isSpace = scalar.value == 0x20
+            if isSpace && previousWasSpace { return "repeated spaces" }
+            previousWasSpace = isSpace
+        }
+        if scalars.contains(where: { $0.properties.generalCategory == .decimalNumber && !(0x30...0x39).contains($0.value) }) {
+            return "only ASCII digits are allowed"
+        }
+        let scriptsUsed = confusableScripts.filter { ranges in
+            scalars.contains { scalar in ranges.contains { $0.contains(scalar.value) } }
+        }
+        if scriptsUsed.count > 1 { return "Latin, Cyrillic and Greek letters mixed in one value" }
+        return nil
+    }
+
+    /// ISO 13616 IBAN in electronic format with valid check digits (mod 97).
+    static func isValidIBAN(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard (15...34).contains(bytes.count) else { return false }
+        for (index, byte) in bytes.enumerated() {
+            let isLetter = (65...90).contains(byte)
+            let isDigit = (48...57).contains(byte)
+            switch index {
+            case 0, 1: guard isLetter else { return false }
+            case 2, 3: guard isDigit else { return false }
+            default: guard isLetter || isDigit else { return false }
+            }
+        }
+        var remainder = 0
+        for byte in Array(bytes[4...]) + Array(bytes[..<4]) {
+            remainder = byte >= 65 ? (remainder * 100 + Int(byte) - 55) % 97 : (remainder * 10 + Int(byte) - 48) % 97
+        }
+        return remainder == 1
+    }
+
+    /// ISO 9362 BIC: 4 letters (institution), 2 letters (country), 2 letters
+    /// or digits (location), optionally 3 letters or digits (branch).
+    static func isValidBIC(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 8 || bytes.count == 11 else { return false }
+        for (index, byte) in bytes.enumerated() {
+            let isLetter = (65...90).contains(byte)
+            let isDigit = (48...57).contains(byte)
+            guard index < 6 ? isLetter : (isLetter || isDigit) else { return false }
+        }
+        return true
     }
 
     /// ISO 20022 Max140Text, in UTF-16 code units; Auth Core applies the same limit.

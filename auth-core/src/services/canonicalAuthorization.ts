@@ -33,21 +33,73 @@ export const BENEFICIARY_MAX_FIELDS = 16;
  * longer value could push the account identifier out of the visible part of
  * the confirmation prompt. Until 2.0.0-rc.2 the limit was 512. */
 export const BENEFICIARY_MAX_VALUE_LENGTH = 140;
-/** A value must not be blank or padded with space separators (Zs): padding
- * changes what the prompt shows without changing how the value reads. */
-const PADDED = /^\p{Zs}|\p{Zs}$/u;
-
 /**
- * Characters that change how text is laid out without being visible: control
- * characters (including line breaks), format characters (bidi overrides,
- * zero-width characters) and line or paragraph separators. A payee name with
- * a bidi override or a line break can push the real IBAN out of the
- * confirmation prompt, so no displayed field may contain them. Lone UTF-16
- * surrogates (\p{Cs}) are refused too: they have no UTF-8 encoding, so the
- * signed bytes would not match the text and the SDKs reject them.
- * The SDKs apply the same rule to the signed bytes.
+ * Display text rules. They protect the fields a customer reads before signing
+ * (beneficiary values and transaction_reference) against text that looks like
+ * something else. The same rules are applied by both SDKs to the signed bytes
+ * and are specified in docs/protocol/authorization-protocol-v1.md, "Display
+ * text rules".
+ *
+ * - No control, format, line or paragraph separator characters, and no lone
+ *   UTF-16 surrogates (\p{Cs}): bidi overrides, zero-width characters and
+ *   line breaks can push the real account out of the confirmation prompt, and
+ *   a lone surrogate has no UTF-8 encoding, so the signed bytes would not
+ *   match the text.
+ * - Unicode Normalization Form C. "José" in NFC and NFD looks identical and
+ *   hashes differently; only one of them may be signed.
+ * - The only space is U+0020, never doubled and never leading or trailing.
+ *   A no-break or ideographic space, or a run of spaces, changes the layout
+ *   without changing how the value reads.
+ * - Decimal digits are ASCII 0-9. Full-width or other-script digits render
+ *   like ASCII digits in many fonts.
+ * - One value does not mix Latin, Cyrillic and Greek letters: "PаyPal" with a
+ *   Cyrillic "а" is the classic payee confusable (a subset of the UTS #39
+ *   mixed-script check, limited to the scripts that share glyphs). The three
+ *   letter sets are fixed code point ranges rather than the Unicode Script
+ *   property, so that Auth Core, both SDKs and the sandbox decide the same
+ *   way whatever Unicode version their runtime ships.
+ * - A beneficiary "iban" is an ISO 13616 IBAN in electronic format (no
+ *   spaces) with valid check digits, and a "bic" is an ISO 9362 BIC.
  */
 export const DISPLAY_UNSAFE_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
+const NON_ASCII_SPACE = /[\p{Zs}--\x20]/v;
+const SPACE_RUN = / {2}/;
+const PADDED = /^\p{Zs}|\p{Zs}$/u;
+const NON_ASCII_DIGIT = /[\p{Nd}--[0-9]]/v;
+const CONFUSABLE_SCRIPTS = [
+  /[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]/, // Basic Latin letters, Latin-1 letters, Latin Extended-A/B, Latin Extended Additional
+  /[\u0400-\u052F]/, // Cyrillic, Cyrillic Supplement
+  /[\u0370-\u03FF\u1F00-\u1FFF]/, // Greek and Coptic, Greek Extended
+];
+const IBAN = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/;
+const BIC = /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
+
+export function isValidIban(value: string): boolean {
+  if (!IBAN.test(value)) return false;
+  const rearranged = value.slice(4) + value.slice(0, 4);
+  let remainder = 0;
+  for (const ch of rearranged) {
+    const digits = ch >= 'A' ? String(ch.charCodeAt(0) - 55) : ch;
+    for (const d of digits) remainder = (remainder * 10 + (d.charCodeAt(0) - 48)) % 97;
+  }
+  return remainder === 1;
+}
+
+function mixesConfusableScripts(value: string): boolean {
+  return CONFUSABLE_SCRIPTS.filter((script) => script.test(value)).length > 1;
+}
+
+/** Returns why a displayed value breaks the display text rules, or null. */
+export function displayTextViolation(value: string): string | null {
+  if (DISPLAY_UNSAFE_CHARACTER.test(value)) return 'control, format or separator characters are not allowed';
+  if (value !== value.normalize('NFC')) return 'text must be in Unicode Normalization Form C';
+  if (NON_ASCII_SPACE.test(value)) return 'only the ASCII space U+0020 is allowed';
+  if (PADDED.test(value)) return 'leading or trailing space';
+  if (SPACE_RUN.test(value)) return 'repeated spaces are not allowed';
+  if (NON_ASCII_DIGIT.test(value)) return 'only ASCII digits 0-9 are allowed';
+  if (mixesConfusableScripts(value)) return 'Latin, Cyrillic and Greek letters must not be mixed in one value';
+  return null;
+}
 
 export function assertValidBeneficiary(beneficiary: unknown): asserts beneficiary is AuthorizationBeneficiary {
   if (!beneficiary || typeof beneficiary !== 'object' || Array.isArray(beneficiary)) throw new ValidationError('Invalid beneficiary: must be an object');
@@ -58,17 +110,20 @@ export function assertValidBeneficiary(beneficiary: unknown): asserts beneficiar
     if (typeof value !== 'string' || value.length === 0 || value.length > BENEFICIARY_MAX_VALUE_LENGTH) {
       throw new ValidationError(`Invalid beneficiary value for "${key}": 1 to ${BENEFICIARY_MAX_VALUE_LENGTH} characters`);
     }
-    if (PADDED.test(value)) throw new ValidationError(`Invalid beneficiary value for "${key}": leading or trailing space`);
-    if (DISPLAY_UNSAFE_CHARACTER.test(value)) throw new ValidationError(`Invalid beneficiary value for "${key}": control, format or separator characters are not allowed`);
+    const violation = displayTextViolation(value);
+    if (violation) throw new ValidationError(`Invalid beneficiary value for "${key}": ${violation}`);
+    if (key === 'iban' && !isValidIban(value)) throw new ValidationError('Invalid beneficiary value for "iban": not a valid IBAN in electronic format');
+    if (key === 'bic' && !BIC.test(value)) throw new ValidationError('Invalid beneficiary value for "bic": not a valid BIC');
   }
 }
 
-/** Applies the display rule to every top-level string field. */
+/** Applies the display text rules to transaction_reference and the
+ * character rule to every other top-level string field. */
 export function assertDisplaySafeFields(value: AuthorizationObject): void {
   for (const [key, field] of Object.entries(value)) {
-    if (typeof field === 'string' && DISPLAY_UNSAFE_CHARACTER.test(field)) {
-      throw new ValidationError(`Invalid ${key}: control, format or separator characters are not allowed`);
-    }
+    if (typeof field !== 'string') continue;
+    const violation = key === 'transaction_reference' ? displayTextViolation(field) : DISPLAY_UNSAFE_CHARACTER.test(field) ? 'control, format or separator characters are not allowed' : null;
+    if (violation) throw new ValidationError(`Invalid ${key}: ${violation}`);
   }
 }
 

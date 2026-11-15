@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ## [Unreleased]
 
+### Security
+
+- Gateway mTLS no longer refuses `POST /v1/mobile/authorizations/{id}/deferred-signature`. With `REQUIRE_MTLS_HEADER` on, the phone could not upload its offline signature, so every offline confirmation ended as `OFFLINE_UNSIGNED` and raised a false security event at the bank. A test now derives the device routes from `openapi.yaml`.
+- Display text rules for the beneficiary and `transaction_reference` (authorization protocol v1, [display text rules](docs/protocol/authorization-protocol-v1.md#display-text-rules)): NFC only; U+0020 as the only space, never doubled or at either end; ASCII digits only; no mix of Latin, Cyrillic and Greek letters in one value; `iban` with valid check digits and `bic` in ISO 9362 format. Enforced by Auth Core when an authorization is created and by both SDKs and the sandbox on the signed bytes. Ten new invalid vectors; the valid vector that signed a Latin/Cyrillic look-alike name now uses a name written only in Cyrillic. **Integration impact:** a bank that sent such values gets 400 `VALIDATION_ERROR` and must send IBANs without spaces.
+
 ### Added
 
 - `demo/`: demo host apps for iPhone (`demo/ios`, Xcode project; CI job `ios-demo` builds it) and Android (`demo/android`; CI job `android-demo` builds the `nexus-sign-demo-apk` artifact), and a demo bank backend (`demo/bank-backend/demo-bank.mjs`) with an operator page and a device port that forwards only the device endpoints of Auth Core, for trying enrolment and payment signing on a real phone ([demo/README.md](demo/README.md)).
