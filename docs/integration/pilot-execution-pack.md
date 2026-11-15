@@ -73,7 +73,7 @@ The full table is in the [offline confirmation threat model](../security/offline
 - Connection pools keep each component's own login: the log records `session_user`.
 - PostgreSQL: the reference was run on 16.13 only; other versions are untested.
 - Triggers and functions installed by migration and reviewed. Disabling a trigger or replacing a function needs the owner role. Log and alert on `ALTER TABLE … DISABLE TRIGGER`, `CREATE OR REPLACE FUNCTION`, `GRANT`, `ALTER ROLE` and any owner or superuser session outside a migration window, in a log store the database team cannot change.
-- Backups taken of the registry, the journal and the transition log together; restore drills that check the forward-only heads afterwards.
+- Backups taken of the registry, the journal and the transition log together; restore drills that run `bank.after_restore()` and check the forward-only heads afterwards.
 - Time from the database server (`now()`) drives leases. The lease is longer than the slowest normal attempt, and shorter than the time the bank accepts for a stuck payment before reconciliation.
 
 ## 5. HSM and trust keys
@@ -174,7 +174,7 @@ Each test is passed only with a record of the run (who, when, environment, resul
    - a re-sealed export;
    - a changed head;
    - forged webhooks.
-9. Restore from backup; the heads and the journal remain consistent; nothing is executed again.
+9. Restore from backup, then `SELECT bank.after_restore()` as the schema owner before any service starts; the heads and the journal remain consistent; every payment that is not final is checked with the provider before it can be sent, and nothing is executed again. The reference implementation covers this with a provider that answers lookups; with a provider that cannot, restored payments go to `REVIEW`.
 10. Load: the bank's peak payment rate with the expected number of instances; latency of the lock on the trust row.
 
 ## 11. What cannot be checked without the real backend and provider

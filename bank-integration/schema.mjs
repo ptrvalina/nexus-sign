@@ -18,7 +18,7 @@
 //   gateway   the payment gateway's process: submits what is approved for an
 //             attempt, records the provider's answers; reads nothing
 //   registry  the bank's credential registry service: stores signed approvals
-//             and revocations (it verifies the bank's signatures before)
+//             and revocations; the database verifies the bank's signature
 //   operator  people settling REVIEW payments; reads the journal
 //
 // Execution states (bank.executions.state), see docs/architecture/payment-state-machine.md:
@@ -34,6 +34,8 @@
 //   REFUSED           the bank refused it (final)
 //   REVIEW            a person settles it with the provider
 import { APPROVAL, REVOCATION } from '../auth-core/scripts/lib/bankTrust.mjs';
+import { createPublicKey } from 'node:crypto';
+import { P256_SQL } from './p256Sql.mjs';
 
 export const EXECUTION_STATES = ['CHECKING', 'HELD', 'APPROVED', 'SUBMITTED', 'PENDING_PROVIDER', 'OUTCOME_UNKNOWN', 'RECONCILING', 'EXECUTED', 'PROVIDER_FAILED', 'REFUSED', 'REVIEW'];
 export const FINAL_STATES = ['EXECUTED', 'PROVIDER_FAILED', 'REFUSED'];
@@ -57,7 +59,10 @@ export const TRANSITIONS = Object.freeze([
   ['REVIEW', 'EXECUTED', 'resolve_review'], ['REVIEW', 'PROVIDER_FAILED', 'resolve_review'],
 ]);
 
-const TABLES = ['payments', 'executions', 'execution_transitions', 'trust_statements', 'credential_trust', 'chain_heads', 'reconciliation_findings', 'allowed_transitions'];
+const TABLES = ['payments', 'executions', 'execution_transitions', 'trust_statements', 'verified_statements', 'credential_trust', 'chain_heads', 'reconciliation_findings', 'allowed_transitions', 'trust_keys', 'settings', 'restore_marks'];
+
+/** Default for bank.settings.execution_window_seconds: how long after the signed expires_at a payment may still be approved or submitted. */
+export const DEFAULT_EXECUTION_WINDOW_SECONDS = 3600;
 
 /** Function signatures as PostgreSQL prints them (regprocedure). */
 export const FUNCTIONS = Object.freeze({
@@ -69,7 +74,7 @@ export const FUNCTIONS = Object.freeze({
   ],
   gateway: [
     'bank.submit_basis(uuid,uuid)', 'bank.submit(uuid,uuid)', 'bank.resubmit(uuid,uuid)', 'bank.gateway_refuse(uuid,uuid,text)',
-    'bank.report(uuid,uuid,text,text,text)', 'bank.operation_for_lookup(uuid)',
+    'bank.report(uuid,uuid,text,text,text)', 'bank.operation_for_lookup(uuid)', 'bank.restore_check(uuid)', 'bank.clear_restore_mark(uuid,uuid)',
   ],
   registry: ['bank.approve_credential(jsonb,integer,text)', 'bank.revoke_credential(jsonb)'],
   operator: ['bank.resolve_review(uuid,text,text,text)'],
@@ -96,7 +101,23 @@ const LEASE = `IF p_lease_ms IS NULL OR p_lease_ms < ${LEASE_LIMITS_MS.min} OR p
 // Every function: owner's rights, nothing found through the caller's search_path.
 const DEFINER = `SECURITY DEFINER SET search_path = pg_catalog, pg_temp`;
 
-export const SCHEMA = `
+export const SCHEMA = P256_SQL + `
+-- The bank's statement-signing public keys (DER SubjectPublicKeyInfo, P-256),
+-- installed by the schema owner from the key ceremony. key_id is the lowercase
+-- hex SHA-256 of the SPKI, as in bankTrust.bankKeyId. No role reads or writes it.
+CREATE TABLE IF NOT EXISTS bank.trust_keys (
+  key_id CHAR(64) PRIMARY KEY CHECK (key_id ~ '^[0-9a-f]{64}$'),
+  spki BYTEA NOT NULL,
+  installed_by TEXT NOT NULL DEFAULT session_user,
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (key_id = encode(sha256(spki), 'hex'))
+);
+-- One row of bank policy, set by the schema owner.
+CREATE TABLE IF NOT EXISTS bank.settings (
+  singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+  execution_window_seconds INTEGER NOT NULL CHECK (execution_window_seconds BETWEEN 0 AND 604800)
+);
+INSERT INTO bank.settings (execution_window_seconds) VALUES (${DEFAULT_EXECUTION_WINDOW_SECONDS}) ON CONFLICT (singleton) DO NOTHING;
 CREATE TABLE IF NOT EXISTS bank.trust_statements (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   credential_id UUID NOT NULL,
@@ -107,6 +128,13 @@ CREATE TABLE IF NOT EXISTS bank.trust_statements (
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS trust_statements_nexus ON bank.trust_statements (nexus_id);
+-- Statements whose bank signature the database itself verified (bank.statement_verified).
+-- Only these count; rows stored by earlier versions without verification do not.
+CREATE TABLE IF NOT EXISTS bank.verified_statements (
+  statement_id BIGINT PRIMARY KEY REFERENCES bank.trust_statements (id),
+  key_id CHAR(64) NOT NULL REFERENCES bank.trust_keys (key_id),
+  verified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS bank.credential_trust (
   credential_id UUID PRIMARY KEY,
   nexus_id VARCHAR(9) NOT NULL,
@@ -143,6 +171,14 @@ CREATE TABLE IF NOT EXISTS bank.executions (
   problems JSONB,
   resolved_by TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Payments that may have been sent after the backup a database was restored
+-- from (bank.after_restore): the gateway asks the provider before it sends.
+CREATE TABLE IF NOT EXISTS bank.restore_marks (
+  payment_id UUID PRIMARY KEY REFERENCES bank.payments (payment_id),
+  marked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cleared_at TIMESTAMPTZ,
+  cleared_by TEXT
 );
 CREATE TABLE IF NOT EXISTS bank.execution_transitions (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -186,9 +222,10 @@ CREATE OR REPLACE FUNCTION bank.order_hash(p_document JSONB) RETURNS TEXT LANGUA
   SELECT encode(sha256(convert_to(p_document::text, 'UTF8')), 'hex')
 $$;
 
--- What the confirmation evidence must say about this payment. The signatures
--- are verified by the boundary and again by the gateway (PostgreSQL has no
--- ECDSA); this binds the evidence to the payment, the customer and the terms.
+-- What the confirmation evidence must say about this payment: binds it to the
+-- payment, the customer and the terms. The device signature is verified by
+-- bank.device_signature_problem (ECDSA in p256Sql.mjs); the HSM seal and the
+-- chain by the boundary and again by the gateway.
 CREATE OR REPLACE FUNCTION bank.evidence_problem(p_payment UUID, p_evidence JSONB) RETURNS TEXT
 LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -220,6 +257,79 @@ BEGIN
      OR (pay.terms ? 'operationType' AND signed->>'operation_type' IS DISTINCT FROM pay.terms->>'operationType') THEN
     RETURN 'the signed terms are not the terms of this payment';
   END IF;
+  IF coalesce(signed->>'expires_at', '') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$' THEN
+    RETURN 'the signed bytes carry no valid expires_at';
+  END IF;
+  RETURN NULL;
+END $$;
+
+-- Whether a payment may still be executed: the signed expires_at plus the
+-- bank's execution window (bank.settings) has not passed. The expiry is taken
+-- from the bytes the customer's device signed, not from anything Auth Core says.
+CREATE OR REPLACE FUNCTION bank.window_problem(p_evidence JSONB) RETURNS TEXT
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
+DECLARE expires TIMESTAMPTZ; window_s INTEGER;
+BEGIN
+  expires := (convert_from(decode(p_evidence->'sealedPayload'->>'signedPayloadBase64', 'base64'), 'UTF8')::jsonb->>'expires_at')::timestamptz;
+  SELECT st.execution_window_seconds INTO window_s FROM bank.settings st;
+  IF expires IS NULL OR window_s IS NULL THEN RETURN 'the execution window cannot be determined'; END IF;
+  IF now() > expires + window_s * interval '1 second' THEN
+    RETURN format('the customer''s confirmation expired at %s; the bank executes up to %s s later', expires, window_s);
+  END IF;
+  RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
+  RETURN 'the execution window cannot be determined';
+END $$;
+
+-- The customer's part, verified here and not only in a service process:
+-- the device signature over the signed bytes verifies (ECDSA P-256), with the
+-- public key in the evidence, and that key is the one the bank approved for
+-- this credential and customer in a statement whose bank signature this
+-- database verified. Code-only offline confirmations carry no device
+-- signature and are refused.
+CREATE OR REPLACE FUNCTION bank.device_signature_problem(p_evidence JSONB, p_nexus TEXT) RETURNS TEXT
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
+DECLARE sealed JSONB := p_evidence->'sealedPayload'; spki BYTEA; fingerprint TEXT; signature BYTEA; message BYTEA;
+BEGIN
+  IF sealed->>'confirmationMethod' IS NOT NULL AND sealed->>'confirmationMethod' NOT IN ('DEVICE_SIGNATURE', 'OFFLINE_SIGNED') THEN
+    RETURN format('confirmation method %s carries no device signature', sealed->>'confirmationMethod');
+  END IF;
+  IF sealed->>'signatureFormat' IS NULL OR sealed->>'signatureFormat' NOT IN ('der', 'raw') THEN RETURN 'the evidence carries no ECDSA device signature'; END IF;
+  spki := bank.spki_from_pem(sealed->>'credentialPublicKeyPem');
+  IF spki IS NULL OR bank.ec_public_point(spki) IS NULL THEN RETURN 'the device key is not a P-256 public key'; END IF;
+  fingerprint := encode(sha256(spki), 'hex');
+  IF NOT EXISTS (
+    SELECT 1 FROM bank.trust_statements s JOIN bank.verified_statements v ON v.statement_id = s.id
+     WHERE s.credential_id = (sealed->>'credentialId')::uuid AND s.nexus_id = p_nexus AND s.type = '${APPROVAL}'
+       AND s.entry->'statement'->>'signingKeySha256' = fingerprint) THEN
+    RETURN format('the bank has not approved device key %s for credential %s', fingerprint, sealed->>'credentialId');
+  END IF;
+  BEGIN
+    signature := decode(sealed->>'signature', 'base64');
+    message := decode(sealed->>'signedPayloadBase64', 'base64');
+  EXCEPTION WHEN OTHERS THEN
+    RETURN 'the device signature is not readable';
+  END;
+  IF NOT bank.p256_verify(spki, message, signature, sealed->>'signatureFormat') THEN
+    RETURN 'the device signature does not verify';
+  END IF;
+  RETURN NULL;
+END $$;
+
+-- Verifies a bank statement entry {statement, signature} against the bank's
+-- installed trust keys; returns the key id, or NULL when it does not verify.
+CREATE OR REPLACE FUNCTION bank.statement_key(p_entry JSONB) RETURNS CHAR(64)
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
+DECLARE k bank.trust_keys%ROWTYPE; canonical TEXT;
+BEGIN
+  IF jsonb_typeof(p_entry->'signature') IS DISTINCT FROM 'string' THEN RETURN NULL; END IF;
+  SELECT * INTO k FROM bank.trust_keys t WHERE t.key_id = p_entry->'statement'->>'bankKeyId';
+  IF NOT FOUND THEN RETURN NULL; END IF;
+  canonical := bank.canonical_flat_json(p_entry->'statement');
+  IF canonical IS NULL THEN RETURN NULL; END IF;
+  IF bank.p256_verify(k.spki, convert_to(canonical, 'UTF8'), decode(p_entry->>'signature', 'base64'), 'der') THEN RETURN k.key_id; END IF;
+  RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
   RETURN NULL;
 END $$;
 
@@ -326,7 +436,20 @@ DROP TRIGGER IF EXISTS payments_no_delete ON bank.payments;
 CREATE TRIGGER payments_no_delete BEFORE DELETE ON bank.payments FOR EACH ROW EXECUTE FUNCTION bank.append_only();
 DROP TRIGGER IF EXISTS executions_no_delete ON bank.executions;
 CREATE TRIGGER executions_no_delete BEFORE DELETE ON bank.executions FOR EACH ROW EXECUTE FUNCTION bank.append_only();
-${['payments', 'executions', 'execution_transitions', 'trust_statements', 'credential_trust', 'chain_heads', 'reconciliation_findings'].map((t) => `DROP TRIGGER IF EXISTS ${t}_no_truncate ON bank.${t};
+DROP TRIGGER IF EXISTS verified_statements_append_only ON bank.verified_statements;
+CREATE TRIGGER verified_statements_append_only BEFORE UPDATE OR DELETE ON bank.verified_statements FOR EACH ROW EXECUTE FUNCTION bank.append_only();
+DROP TRIGGER IF EXISTS restore_marks_no_delete ON bank.restore_marks;
+CREATE TRIGGER restore_marks_no_delete BEFORE DELETE ON bank.restore_marks FOR EACH ROW EXECUTE FUNCTION bank.append_only();
+CREATE OR REPLACE FUNCTION bank.restore_mark_clear_once() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  IF NEW.payment_id IS DISTINCT FROM OLD.payment_id OR NEW.marked_at IS DISTINCT FROM OLD.marked_at OR OLD.cleared_at IS NOT NULL THEN
+    RAISE EXCEPTION 'restore mark of % is cleared once and otherwise immutable', OLD.payment_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS restore_mark_clear_once ON bank.restore_marks;
+CREATE TRIGGER restore_mark_clear_once BEFORE UPDATE ON bank.restore_marks FOR EACH ROW EXECUTE FUNCTION bank.restore_mark_clear_once();
+${['payments', 'executions', 'execution_transitions', 'trust_statements', 'verified_statements', 'credential_trust', 'chain_heads', 'reconciliation_findings', 'trust_keys', 'settings', 'restore_marks'].map((t) => `DROP TRIGGER IF EXISTS ${t}_no_truncate ON bank.${t};
 CREATE TRIGGER ${t}_no_truncate BEFORE TRUNCATE ON bank.${t} FOR EACH STATEMENT EXECUTE FUNCTION bank.append_only();`).join('\n')}
 
 -- Kept chain heads: forward only (internal; reached through keep_head and approve_credential).
@@ -430,9 +553,10 @@ BEGIN
   IF NOT FOUND THEN RETURN QUERY SELECT false, false, format('credential %s is not in the bank''s registry', cred); RETURN; END IF;
   IF tr.nexus_id IS DISTINCT FROM pay.terms->>'nexusId' THEN RETURN QUERY SELECT false, false, format('credential %s is approved for another customer', cred); RETURN; END IF;
   IF tr.state <> 'APPROVED' THEN RETURN QUERY SELECT false, false, format('credential %s was revoked by the bank', cred); RETURN; END IF;
-  IF NOT EXISTS (SELECT 1 FROM bank.trust_statements s WHERE s.credential_id = cred AND s.nexus_id = tr.nexus_id AND s.type = '${APPROVAL}') THEN
-    RETURN QUERY SELECT false, false, format('credential %s has no stored approval statement', cred); RETURN;
-  END IF;
+  problem := bank.device_signature_problem(p_evidence, tr.nexus_id);
+  IF problem IS NOT NULL THEN RETURN QUERY SELECT false, false, problem; RETURN; END IF;
+  problem := bank.window_problem(p_evidence);
+  IF problem IS NOT NULL THEN RETURN QUERY SELECT false, false, problem; RETURN; END IF;
   PERFORM bank.via('approve');
   UPDATE bank.executions e SET state = 'APPROVED', credential_id = cred, approval_evidence = p_evidence,
          approval_registry_id = (SELECT max(s.id) FROM bank.trust_statements s WHERE s.nexus_id = tr.nexus_id),
@@ -539,6 +663,12 @@ BEGIN
   IF bank.order_hash(doc) IS DISTINCT FROM ex.order_hash THEN
     RAISE EXCEPTION 'payment % : the order is not the approved order', p_payment USING ERRCODE = 'insufficient_privilege';
   END IF;
+  IF bank.window_problem(ex.approval_evidence) IS NOT NULL THEN
+    RAISE EXCEPTION 'payment % : %', p_payment, bank.window_problem(ex.approval_evidence) USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF EXISTS (SELECT 1 FROM bank.restore_marks m WHERE m.payment_id = p_payment AND m.cleared_at IS NULL) THEN
+    RAISE EXCEPTION 'payment % : restored from a backup; the provider must be asked first', p_payment USING ERRCODE = 'insufficient_privilege';
+  END IF;
   PERFORM bank.via('submit');
   UPDATE bank.executions e SET state = 'SUBMITTED', submissions = e.submissions + 1, updated_at = now() WHERE e.payment_id = p_payment;
   RETURN QUERY SELECT doc->>'operationId', doc;
@@ -600,24 +730,79 @@ LANGUAGE sql STABLE ${DEFINER} AS $$
    WHERE p.payment_id = p_payment AND e.submissions > 0
 $$;
 
+-- The operation id of a payment with an open restore mark, for the provider
+-- lookup the gateway makes before it sends; NULL when there is none.
+CREATE OR REPLACE FUNCTION bank.restore_check(p_payment UUID) RETURNS TEXT
+LANGUAGE sql STABLE ${DEFINER} AS $$
+  SELECT p.bank_transaction_reference FROM bank.payments p JOIN bank.restore_marks m ON m.payment_id = p.payment_id
+   WHERE p.payment_id = p_payment AND m.cleared_at IS NULL
+$$;
+
+-- The provider said it has no such operation: the approved attempt may send.
+CREATE OR REPLACE FUNCTION bank.clear_restore_mark(p_payment UUID, p_attempt UUID) RETURNS BOOLEAN
+LANGUAGE plpgsql ${DEFINER} AS $$
+DECLARE n INTEGER;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM bank.executions e WHERE e.payment_id = p_payment AND e.attempt_id = p_attempt AND e.state = 'APPROVED'
+                   AND e.lease_until IS NOT NULL AND e.lease_until >= now()) THEN
+    RAISE EXCEPTION 'payment % : nothing is approved for this attempt', p_payment USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  UPDATE bank.restore_marks m SET cleared_at = now(), cleared_by = session_user WHERE m.payment_id = p_payment AND m.cleared_at IS NULL;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n = 1;
+END $$;
+
+-- ===== owner only (not granted to any role) =====
+
+-- Run by the schema owner right after a restore, before any service starts:
+-- every payment that is not final may have been sent after the backup was
+-- taken, so it gets a restore mark and the gateway asks the provider before
+-- it sends (audit finding C-01). Returns the number of payments marked.
+CREATE OR REPLACE FUNCTION bank.after_restore() RETURNS INTEGER
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE n INTEGER;
+BEGIN
+  INSERT INTO bank.restore_marks (payment_id)
+    SELECT p.payment_id FROM bank.payments p LEFT JOIN bank.executions e ON e.payment_id = p.payment_id
+     WHERE e.state IS NULL OR e.state NOT IN ('EXECUTED', 'PROVIDER_FAILED', 'REFUSED')
+    ON CONFLICT (payment_id) DO NOTHING;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END $$;
+
+-- Installs a bank statement-signing key (P-256 SubjectPublicKeyInfo).
+CREATE OR REPLACE FUNCTION bank.install_trust_key(p_spki BYTEA) RETURNS CHAR(64)
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+DECLARE id CHAR(64);
+BEGIN
+  IF bank.ec_public_point(p_spki) IS NULL THEN RAISE EXCEPTION 'not a P-256 public key' USING ERRCODE = 'invalid_parameter_value'; END IF;
+  id := encode(sha256(p_spki), 'hex');
+  INSERT INTO bank.trust_keys (key_id, spki) VALUES (id, p_spki) ON CONFLICT (key_id) DO NOTHING;
+  RETURN id;
+END $$;
+
 -- ===== registry =====
 
 -- Stores a bank-signed approval (the registry service verified the signature).
 -- A credential is approved for one customer, and never again after a revocation.
 CREATE OR REPLACE FUNCTION bank.approve_credential(p_entry JSONB, p_head_sequence INTEGER DEFAULT NULL, p_head_hash TEXT DEFAULT NULL) RETURNS VOID
 LANGUAGE plpgsql ${DEFINER} AS $$
-DECLARE s JSONB := p_entry->'statement'; cred UUID; tr bank.credential_trust%ROWTYPE;
+DECLARE s JSONB := p_entry->'statement'; cred UUID; tr bank.credential_trust%ROWTYPE; key CHAR(64); stored BIGINT;
 BEGIN
   IF s->>'type' IS DISTINCT FROM '${APPROVAL}' OR coalesce(s->>'credentialId', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      OR coalesce(s->>'nexusId', '') !~ '^[0-9]{9}$' OR coalesce(s->>'signingKeySha256', '') !~ '^[0-9a-f]{64}$' OR jsonb_typeof(p_entry->'signature') IS DISTINCT FROM 'string' THEN
     RAISE EXCEPTION 'not a ${APPROVAL} statement' USING ERRCODE = 'invalid_parameter_value';
   END IF;
+  key := bank.statement_key(p_entry);
+  IF key IS NULL THEN RAISE EXCEPTION 'the bank signature of the statement does not verify with an installed trust key' USING ERRCODE = 'insufficient_privilege'; END IF;
   cred := (s->>'credentialId')::uuid;
   SELECT * INTO tr FROM bank.credential_trust t WHERE t.credential_id = cred FOR UPDATE;
   IF FOUND AND tr.nexus_id <> s->>'nexusId' THEN RAISE EXCEPTION 'credential % is approved for another customer', cred USING ERRCODE = 'integrity_constraint_violation'; END IF;
   IF FOUND AND tr.state = 'REVOKED' THEN RAISE EXCEPTION 'credential % was revoked; a new device gets a new credential', cred USING ERRCODE = 'integrity_constraint_violation'; END IF;
   IF NOT FOUND THEN INSERT INTO bank.credential_trust (credential_id, nexus_id, state) VALUES (cred, s->>'nexusId', 'APPROVED'); END IF;
-  INSERT INTO bank.trust_statements (credential_id, nexus_id, type, entry, recorded_by) VALUES (cred, s->>'nexusId', '${APPROVAL}', p_entry, session_user);
+  INSERT INTO bank.trust_statements (credential_id, nexus_id, type, entry, recorded_by) VALUES (cred, s->>'nexusId', '${APPROVAL}', p_entry, session_user)
+    RETURNING id INTO stored;
+  INSERT INTO bank.verified_statements (statement_id, key_id) VALUES (stored, key);
   PERFORM bank.advance_head(s->>'nexusId', p_head_sequence, p_head_hash);
 END $$;
 
@@ -625,18 +810,22 @@ END $$;
 -- credential's row; returns the payments already past the cut-off (in flight).
 CREATE OR REPLACE FUNCTION bank.revoke_credential(p_entry JSONB) RETURNS TABLE (payment_id UUID, state TEXT)
 LANGUAGE plpgsql ${DEFINER} AS $$
-DECLARE s JSONB := p_entry->'statement'; cred UUID; tr bank.credential_trust%ROWTYPE;
+DECLARE s JSONB := p_entry->'statement'; cred UUID; tr bank.credential_trust%ROWTYPE; key CHAR(64); stored BIGINT;
 BEGIN
   IF s->>'type' IS DISTINCT FROM '${REVOCATION}' OR coalesce(s->>'credentialId', '') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      OR coalesce(s->>'nexusId', '') !~ '^[0-9]{9}$' OR jsonb_typeof(p_entry->'signature') IS DISTINCT FROM 'string' THEN
     RAISE EXCEPTION 'not a ${REVOCATION} statement' USING ERRCODE = 'invalid_parameter_value';
   END IF;
+  key := bank.statement_key(p_entry);
+  IF key IS NULL THEN RAISE EXCEPTION 'the bank signature of the statement does not verify with an installed trust key' USING ERRCODE = 'insufficient_privilege'; END IF;
   cred := (s->>'credentialId')::uuid;
   SELECT * INTO tr FROM bank.credential_trust t WHERE t.credential_id = cred FOR UPDATE;
   IF FOUND AND tr.nexus_id <> s->>'nexusId' THEN RAISE EXCEPTION 'credential % belongs to another customer', cred USING ERRCODE = 'integrity_constraint_violation'; END IF;
   IF FOUND THEN UPDATE bank.credential_trust t SET state = 'REVOKED', updated_at = now() WHERE t.credential_id = cred;
   ELSE INSERT INTO bank.credential_trust (credential_id, nexus_id, state) VALUES (cred, s->>'nexusId', 'REVOKED'); END IF;
-  INSERT INTO bank.trust_statements (credential_id, nexus_id, type, entry, recorded_by) VALUES (cred, s->>'nexusId', '${REVOCATION}', p_entry, session_user);
+  INSERT INTO bank.trust_statements (credential_id, nexus_id, type, entry, recorded_by) VALUES (cred, s->>'nexusId', '${REVOCATION}', p_entry, session_user)
+    RETURNING id INTO stored;
+  INSERT INTO bank.verified_statements (statement_id, key_id) VALUES (stored, key);
   RETURN QUERY SELECT e.payment_id, e.state FROM bank.executions e
     WHERE e.credential_id = cred AND e.state IN ('APPROVED', 'SUBMITTED', 'PENDING_PROVIDER', 'OUTCOME_UNKNOWN', 'RECONCILING', 'REVIEW') ORDER BY e.payment_id;
 END $$;
@@ -678,9 +867,24 @@ const LEGACY_FUNCTIONS = ['bank_submit(uuid,uuid)', 'bank_resubmit(uuid,uuid)', 
  * including the grants of the phase 14 tables in `public` if they still exist.
  * Refuses roles that are superusers, bypass row security, or are members of the owner.
  *
- * @param roles { boundary, gateway, registry, operator } role names (any may be absent)
+ * The bank's statement-signing public keys are installed here, by the owner:
+ * the database verifies every approval and revocation against them and the
+ * customer's device signature against the approved key (p256Sql.mjs). Without
+ * at least one key no statement can be stored and no payment approved.
+ * Statements stored by an earlier version are re-verified; those that do not
+ * verify stay in the log and count nowhere.
+ *
+ * @param roles   { boundary, gateway, registry, operator } role names (any may be absent)
+ * @param options { bankTrustKeys: PEM list, executionWindowSeconds?: seconds after the signed expires_at }
  */
-export async function installSchema(ownerPool, roles = {}) {
+export async function installSchema(ownerPool, roles = {}, { bankTrustKeys = [], executionWindowSeconds } = {}) {
+  const trustKeys = bankTrustKeys.map((pem) => createPublicKey(pem));
+  for (const key of trustKeys) {
+    if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') throw new Error('bank trust keys must be P-256 public keys');
+  }
+  if (executionWindowSeconds !== undefined && !(Number.isInteger(executionWindowSeconds) && executionWindowSeconds >= 0 && executionWindowSeconds <= 604_800)) {
+    throw new Error('executionWindowSeconds must be an integer from 0 to 604800');
+  }
   const given = Object.fromEntries(ROLE_KINDS.filter((k) => roles[k]).map((k) => [k, ident(roles[k])]));
   const client = await ownerPool.connect();
   try {
@@ -699,6 +903,11 @@ export async function installSchema(ownerPool, roles = {}) {
     await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA bank REVOKE ALL ON TABLES FROM PUBLIC`);
     await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA bank REVOKE ALL ON SEQUENCES FROM PUBLIC`);
     await client.query(SCHEMA);
+    for (const key of trustKeys) await client.query(`SELECT bank.install_trust_key($1)`, [key.export({ type: 'spki', format: 'der' })]);
+    if (executionWindowSeconds !== undefined) await client.query(`UPDATE bank.settings SET execution_window_seconds = $1`, [executionWindowSeconds]);
+    await client.query(`INSERT INTO bank.verified_statements (statement_id, key_id)
+      SELECT s.id, bank.statement_key(s.entry) FROM bank.trust_statements s
+       WHERE NOT EXISTS (SELECT 1 FROM bank.verified_statements v WHERE v.statement_id = s.id) AND bank.statement_key(s.entry) IS NOT NULL`);
     await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA bank FROM PUBLIC`);
     await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA bank FROM PUBLIC`);
     await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA bank FROM PUBLIC`);

@@ -185,7 +185,7 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     const bare = maker.device(p.nexusId);
     await db.owner.query(`INSERT INTO bank.credential_trust (credential_id, nexus_id, state) VALUES ($1, $2, 'APPROVED')`, [bare.credentialId, p.nexusId]);
     r = await store.approveExecution(p.paymentId, p.attemptId, maker.confirm(bare, { authorizationId: p.authorizationId, terms: p.terms }), 30_000);
-    assert.equal(r.ok, false); assert.match(r.reason, /no stored approval statement/);
+    assert.equal(r.ok, false); assert.match(r.reason, /has not approved device key/);
     // Evidence for other terms, another authorization or another customer; no evidence.
     for (const [evidence, why] of [
       [maker.confirm(p.device, { authorizationId: p.authorizationId, terms: p.terms, signedOverride: { amount_minor: '990000' } }), /signed terms/],
@@ -220,29 +220,112 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     assert.equal(provider.calls.length, 1);
   });
 
-  test('an approval on evidence the boundary forged: the database cannot check signatures, the gateway does, and sends nothing', async () => {
+  // Audit finding C-02: before 2.0.0-rc.3 bank.approve bound the evidence but
+  // could not verify signatures, so the boundary role could approve forged
+  // evidence and any code with the gateway's login could submit it with
+  // bank.submit, bypassing the gateway's JavaScript check. The database now
+  // verifies the device signature (ECDSA P-256 in PL/pgSQL) against the key the
+  // bank approved in a statement whose signature it verified too.
+  test('forged evidence is refused by the database itself, and the gateway role cannot submit it with raw SQL', async () => {
     const p = await claimed();
-    // The boundary's role holder makes evidence for the customer's approved credential without the device:
-    // right shape, right terms, signature by another key.
+    // Right shape, right terms, the customer's approved credential and key in the record, signature by another key.
     const impostor = maker.device(p.nexusId);
-    const forged = maker.confirm({ ...impostor, credentialId: p.credentialId, enrolment: p.device.enrolment }, { authorizationId: p.authorizationId, terms: p.terms });
-    assert.equal((await store.approveExecution(p.paymentId, p.attemptId, forged, 30_000)).ok, true, 'the database binds, it does not verify signatures');
+    const forged = maker.confirm({ ...impostor, credentialId: p.credentialId, publicKeyPem: p.device.publicKeyPem, enrolment: p.device.enrolment }, { authorizationId: p.authorizationId, terms: p.terms });
+    let r = await store.approveExecution(p.paymentId, p.attemptId, forged, 30_000);
+    assert.equal(r.ok, false); assert.match(r.reason, /device signature does not verify/);
+    // The impostor's own key in the record: not the key the bank approved.
+    const ownKey = maker.confirm({ ...impostor, credentialId: p.credentialId, enrolment: p.device.enrolment }, { authorizationId: p.authorizationId, terms: p.terms });
+    r = await store.approveExecution(p.paymentId, p.attemptId, ownKey, 30_000);
+    assert.equal(r.ok, false); assert.match(r.reason, /has not approved device key/);
+    // Code-only offline confirmation: no device signature.
+    r = await store.approveExecution(p.paymentId, p.attemptId, { ...p.evidence, sealedPayload: { ...p.evidence.sealedPayload, confirmationMethod: 'OFFLINE_CODE', signatureFormat: 'hmac' } }, 30_000);
+    assert.equal(r.ok, false); assert.match(r.reason, /no device signature/);
+    assert.equal(await state(p.paymentId), 'CHECKING');
+    // The gateway role, in SQL, without the gateway's own check: nothing is approved, nothing to submit.
+    await assert.rejects(db.pools.gateway.query(`SELECT * FROM bank.submit($1, $2)`, [p.paymentId, p.attemptId]), /nothing is approved/);
+    // The genuine confirmation is approved and sent once.
     const { provider, gateway } = gatewayWith();
-    const answer = await gateway.submit(p.paymentId, p.attemptId);
-    assert.equal(answer.outcome, 'review');
-    assert.match(answer.reason, /gateway's check of the approval failed/);
-    assert.equal(provider.calls.length, 0);
-    assert.equal(await state(p.paymentId), 'REVIEW');
-    assert.deepEqual((await store.transitions(p.paymentId)).map((t) => [t.to, t.via]), [['CHECKING', 'claim'], ['APPROVED', 'approve'], ['REVIEW', 'gateway_refuse']]);
-    // A statement the registry role stored without the bank's signature does not count at the gateway either.
+    assert.equal((await store.approveExecution(p.paymentId, p.attemptId, p.evidence, 30_000)).ok, true);
+    assert.equal((await gateway.submit(p.paymentId, p.attemptId)).outcome, 'succeeded');
+    assert.equal(provider.calls.length, 1);
+  });
+
+  // Audit finding C-04: the registry role stored any statement whose
+  // signature field was a string; an unsigned revocation blocked a customer.
+  test('the registry role cannot store a statement the bank did not sign: approvals and revocations are verified in the database', async () => {
     const q = await claimed();
     const unsigned = maker.device(q.nexusId);
-    await db.pools.registry.query(`SELECT bank.approve_credential($1, NULL, NULL)`, [JSON.stringify({ statement: { ...approvalStatement({ nexusId: q.nexusId, credentialId: unsigned.credentialId, signingKeySha256: unsigned.fingerprint, reference: 'x' }), bankKeyId: 'd'.repeat(64) }, signature: 'AAAA' })]);
-    const evidence = maker.confirm(unsigned, { authorizationId: q.authorizationId, terms: q.terms });
-    assert.equal((await store.approveExecution(q.paymentId, q.attemptId, evidence, 30_000)).ok, true);
-    const second = gatewayWith();
-    assert.equal((await second.gateway.submit(q.paymentId, q.attemptId)).outcome, 'review');
-    assert.equal(second.provider.calls.length, 0);
+    const bankKeyId = (await import('../../scripts/lib/bankTrust.mjs')).bankKeyId(bankTrustKeys[0]);
+    const statement = { ...approvalStatement({ nexusId: q.nexusId, credentialId: unsigned.credentialId, signingKeySha256: unsigned.fingerprint, reference: 'x' }), bankKeyId };
+    for (const signature of ['NOT-A-SIGNATURE', 'AAAA', signStatement(approvalStatement({ nexusId: q.nexusId, credentialId: randomUUID(), signingKeySha256: unsigned.fingerprint, reference: 'x' }), bankKey.privateKey).signature]) {
+      await assert.rejects(db.pools.registry.query(`SELECT bank.approve_credential($1, NULL, NULL)`, [JSON.stringify({ statement, signature })]), /does not verify/);
+    }
+    const otherKey = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    await assert.rejects(db.pools.registry.query(`SELECT bank.approve_credential($1, NULL, NULL)`, [JSON.stringify(signStatement(approvalStatement({ nexusId: q.nexusId, credentialId: unsigned.credentialId, signingKeySha256: unsigned.fingerprint, reference: 'x' }), otherKey.privateKey))]), /does not verify/);
+    // An unsigned revocation of the customer's approved credential is refused, and the credential keeps working.
+    await assert.rejects(db.pools.registry.query(`SELECT * FROM bank.revoke_credential($1)`, [JSON.stringify({ statement: { ...revocationStatement({ nexusId: q.nexusId, credentialId: q.credentialId, reason: 'x' }), bankKeyId }, signature: 'x' })]), /does not verify/);
+    const { provider, gateway } = gatewayWith();
+    assert.equal((await store.approveExecution(q.paymentId, q.attemptId, q.evidence, 30_000)).ok, true);
+    assert.equal((await gateway.submit(q.paymentId, q.attemptId)).outcome, 'succeeded');
+    assert.equal(provider.calls.length, 1);
+    // An evidence for a device approved only by a rejected statement: not approvable.
+    const r = await store.approveExecution(q.paymentId, q.attemptId, maker.confirm(unsigned, { authorizationId: q.authorizationId, terms: q.terms }), 30_000);
+    assert.equal(r.ok, false);
+  });
+
+  // Audit finding C-03: the bank never checked the signed expiry.
+  test('the execution window: no approval and no submission later than the signed expires_at plus the bank\'s window', async () => {
+    const p = await claimed();
+    const past = new Date(Date.now() - 3 * 3600_000);
+    const stale = maker.confirm(p.device, { authorizationId: p.authorizationId, terms: p.terms, signedOverride: { issued_at: new Date(past.getTime() - 120_000).toISOString(), expires_at: past.toISOString() } });
+    let r = await store.approveExecution(p.paymentId, p.attemptId, stale, 30_000);
+    assert.equal(r.ok, false); assert.match(r.reason, /expired at/);
+    const noExpiry = maker.confirm(p.device, { authorizationId: p.authorizationId, terms: p.terms, signedOverride: { expires_at: undefined } });
+    r = await store.approveExecution(p.paymentId, p.attemptId, noExpiry, 30_000);
+    assert.equal(r.ok, false); assert.match(r.reason, /no valid expires_at/);
+    // Approved inside the window; the window closes before the gateway submits (owner sets it to 0 and the confirmation is two minutes old).
+    const recent = new Date(Date.now() - 1000);
+    const q = await claimed();
+    const confirmation = maker.confirm(q.device, { authorizationId: q.authorizationId, terms: q.terms, signedOverride: { issued_at: new Date(recent.getTime() - 120_000).toISOString(), expires_at: recent.toISOString() } });
+    assert.equal((await store.approveExecution(q.paymentId, q.attemptId, confirmation, 30_000)).ok, true);
+    await db.owner.query(`UPDATE bank.settings SET execution_window_seconds = 0`);
+    try {
+      await assert.rejects(db.pools.gateway.query(`SELECT * FROM bank.submit($1, $2)`, [q.paymentId, q.attemptId]), /expired at/);
+    } finally {
+      await db.owner.query(`UPDATE bank.settings SET execution_window_seconds = 3600`);
+    }
+  });
+
+  // Audit finding C-01: after a restore, a payment executed after the backup
+  // was claimed again and sent a second time.
+  test('after a restore the gateway asks the provider before it sends: executed payments go to REVIEW, unknown ones are sent once', async () => {
+    // A: executed at the provider after the backup; the restored journal says APPROVED-to-be.
+    const a = await claimed();
+    const provider = providerDouble();
+    await provider.submit({ operationId: `CORE-${a.paymentId.slice(0, 8)}`, amountMinor: '125000' });
+    provider.calls.length = 0;
+    // B: never sent.
+    const b = await claimed();
+    assert.ok((await db.owner.query(`SELECT bank.after_restore() AS n`)).rows[0].n >= 2);
+    const gateway = lib.createPaymentGateway({ pool: db.pools.gateway, provider, evidenceKeys, bankTrustKeys });
+    assert.equal((await store.approveExecution(a.paymentId, a.attemptId, a.evidence, 30_000)).ok, true);
+    const answerA = await gateway.submit(a.paymentId, a.attemptId);
+    assert.equal(answerA.outcome, 'review'); assert.match(answerA.reason, /restored from a backup/);
+    assert.equal(await state(a.paymentId), 'REVIEW');
+    // The raw function refuses too, while the mark is open.
+    assert.equal((await store.approveExecution(b.paymentId, b.attemptId, b.evidence, 30_000)).ok, true);
+    await assert.rejects(db.pools.gateway.query(`SELECT * FROM bank.submit($1, $2)`, [b.paymentId, b.attemptId]), /restored from a backup/);
+    assert.equal((await gateway.submit(b.paymentId, b.attemptId)).outcome, 'succeeded');
+    assert.equal(provider.calls.length, 1, 'only the payment the provider did not know was sent');
+    assert.equal(provider.totalExecutions(), 2);
+    // A provider without lookup: nothing is sent after a restore.
+    const c = await claimed();
+    await db.owner.query(`SELECT bank.after_restore()`);
+    const blind = providerDouble(); delete blind.lookup;
+    const blindGateway = lib.createPaymentGateway({ pool: db.pools.gateway, provider: blind, evidenceKeys, bankTrustKeys });
+    assert.equal((await store.approveExecution(c.paymentId, c.attemptId, c.evidence, 30_000)).ok, true);
+    assert.equal((await blindGateway.submit(c.paymentId, c.attemptId)).outcome, 'review');
+    assert.equal(blind.calls.length, 0);
   });
 
   test('terms changed after the approval (owner, trigger disabled): the gateway sends nothing, REVIEW', async () => {

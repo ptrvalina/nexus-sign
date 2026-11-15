@@ -27,7 +27,7 @@ The bank's database is in its own schema `bank`. **No application role has `INSE
 | Schema owner (`schema.mjs`, `installSchema`) | migrations only | owns the schema, the tables, the triggers and the functions | not used by any running service; see the residual risk below |
 | Auth Core | outside the bank | answers about authorizations and evidence; sends webhooks | everything above: it holds no bank database credentials and no client certificate for the gateway |
 
-Authority to send a payment is the `APPROVED` row in the bank's database, for one attempt ID and one order hash, together with the confirmation evidence stored with it. The gateway checks that evidence again before it sends. A holder of the boundary's database role alone cannot get a payment sent without a valid customer confirmation for exactly those terms with a key the bank approved (DA «forged evidence»).
+Authority to send a payment is the `APPROVED` row in the bank's database, for one attempt ID and one order hash, together with the confirmation evidence stored with it. The database grants it only after verifying, itself, the customer's device signature over exactly these terms with the key the bank approved in a statement whose bank signature it also verified (ECDSA P-256 in PL/pgSQL, [`p256Sql.mjs`](p256Sql.mjs)), and only inside the execution window after the signed expiry. The gateway checks the full evidence again (HSM seal, chain) before it sends. No holder of the boundary's or the gateway's database login, alone or together, can get a payment sent without a genuine customer confirmation (DA «forged evidence is refused by the database itself»).
 
 Caller authentication to the gateway uses mutual TLS with an allow-list of client certificate names: standard, no custom protocol. It is defence in depth. Even a caller with a valid certificate can only cause the payment that was already approved, with its stored order, to be sent once.
 
@@ -54,7 +54,10 @@ import { installSchema, DATABASE_HARDENING, privilegeMatrix, intendedPrivileges,
 // database administrator, once: no temporary objects, nothing in public
 await adminClient.query(DATABASE_HARDENING('bankdb'));
 // migration, as the schema owner (not a superuser); revokes everything first, then grants each role its part
-await installSchema(ownerPool, { boundary: 'bank_boundary', gateway: 'bank_gateway', registry: 'bank_registry', operator: 'bank_ops_anna' });
+await installSchema(ownerPool, { boundary: 'bank_boundary', gateway: 'bank_gateway', registry: 'bank_registry', operator: 'bank_ops_anna' },
+  { bankTrustKeys: [bankStatementKeyPem], executionWindowSeconds: 3600 });   // keys from the key ceremony
+// after restoring the database from a backup, before any service starts, as the owner:
+await ownerPool.query('SELECT bank.after_restore()');
 assert.deepEqual(await privilegeMatrix(ownerPool, roles), intendedPrivileges(roles));   // after every migration
 
 // gateway process

@@ -1,8 +1,10 @@
 // The bank's credential registry service, with its own database role: it
-// verifies the bank's signature on an approval or revocation (PostgreSQL has
-// no ECDSA) and stores it with bank.approve_credential / bank.revoke_credential.
-// The boundary and the gateway verify the stored statements again before they
-// rely on them, so a holder of this role alone cannot make a forged statement count.
+// stores the bank's signed approvals and revocations with
+// bank.approve_credential / bank.revoke_credential. The database verifies the
+// bank's signature against the trust keys installed by the schema owner and
+// refuses anything else, so a holder of this role cannot store a statement the
+// bank did not sign. The service checks the signature first as well, to give
+// a clear error before the database call.
 import { APPROVAL, REVOCATION, readRegistry } from '../auth-core/scripts/lib/bankTrust.mjs';
 
 /**

@@ -1,13 +1,15 @@
 // The payment gateway: the only component that talks to the payment
 // provider. It runs in its own process with its own database role, which can
 // only call bank.submit_basis, bank.submit, bank.resubmit, bank.gateway_refuse,
-// bank.report and bank.operation_for_lookup (schema.mjs). Its authority to
-// send a payment comes from the bank's database, not from the caller: a
-// payment is sent only if it is APPROVED for that attempt, the order still has
-// the hash bound at approval, and the evidence stored with the approval passes
-// the bank's decision again here (pinned evidence keys, the bank's signed
-// statements, the payment's terms). A holder of the boundary's role alone
-// therefore cannot get a payment sent without a valid customer confirmation.
+// bank.report, bank.operation_for_lookup, bank.restore_check and
+// bank.clear_restore_mark (schema.mjs). Its authority to send a payment comes
+// from the bank's database, not from the caller: a payment is sent only if it
+// is APPROVED for that attempt, which the database grants only after it has
+// verified the customer's device signature against the key the bank approved
+// (p256Sql.mjs), the order still has the hash bound at approval, and the
+// confirmation is inside the bank's execution window. The gateway checks the
+// whole evidence again here (HSM seal, pinned evidence keys, the bank's signed
+// statements, the payment's terms) as a second, independent check.
 // The gateway records the provider's answers itself. Callers are
 // authenticated with mutual TLS (allow-listed client certificate names).
 import { createServer } from 'node:https';
@@ -79,7 +81,42 @@ export function createPaymentGateway({ pool, provider, evidenceKeys, bankTrustKe
     }
   }
 
+  /**
+   * A payment marked by bank.after_restore may have been sent after the
+   * backup the database came from. Before its first submission the provider
+   * is asked; only a definite "not found" lets the approved attempt send.
+   * Any other answer, or a provider without lookup, goes to REVIEW: a person
+   * settles it with the provider (audit finding C-01).
+   */
+  async function settleRestoreMark(paymentId, attemptId) {
+    const operationId = (await pool.query(`SELECT bank.restore_check($1) AS id`, [paymentId])).rows[0]?.id;
+    if (!operationId) return null;
+    let status = 'unknown'; let providerReference = null;
+    if (typeof provider.lookup === 'function') {
+      try {
+        const answer = await provider.lookup(operationId);
+        status = String(answer?.status ?? '').toLowerCase();
+        providerReference = answer?.providerReference ?? null;
+      } catch (error) {
+        status = `lookup failed: ${error.message}`;
+      }
+    } else {
+      status = 'no provider lookup';
+    }
+    if (status === 'not_found') {
+      await pool.query(`SELECT bank.clear_restore_mark($1, $2)`, [paymentId, attemptId]);
+      return null;
+    }
+    const reason = `restored from a backup and the provider answered ${JSON.stringify(status)}${providerReference ? ` (${providerReference})` : ''}; nothing was sent`;
+    await pool.query(`SELECT bank.gateway_refuse($1, $2, $3)`, [paymentId, attemptId, reason]);
+    return { outcome: 'review', reason, recorded: true };
+  }
+
   async function send(fn, paymentId, attemptId) {
+    if (fn === 'bank.submit') {
+      const settled = await settleRestoreMark(paymentId, attemptId);
+      if (settled) return settled;
+    }
     const taken = await take(fn, paymentId, attemptId);
     if (taken.refused) return { outcome: 'review', reason: taken.refused, recorded: true };
     let answer;

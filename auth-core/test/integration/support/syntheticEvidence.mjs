@@ -4,7 +4,7 @@
 // bank database tests drive the boundary's and the gateway's checks without
 // running Auth Core. The end-to-end tests with Auth Core and SoftHSM are in
 // bank-execution-boundary.test.mjs and bank-execution-processes.test.mjs.
-import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto';
 import { canonicalJson, evidenceKeyId } from '../../../scripts/lib/evidence.mjs';
 import { signingKeyFingerprint } from '../../../scripts/lib/bankTrust.mjs';
 
@@ -36,7 +36,11 @@ export function evidenceMaker() {
     },
     /** The device confirms these terms for this authorization. `signedOverride` changes what it signed. */
     confirm(device, { authorizationId, terms, signedOverride = {} }) {
+      // A complete authorization object v1 (docs/protocol/authorization-protocol-v1.md), valid for two minutes from now.
+      const issuedAt = new Date();
       const fields = {
+        protocol_version: '1', domain: 'NEXUS-SIGN/TRANSACTION-AUTH', policy_reference: 'synthetic', policy_version: '1',
+        issued_at: issuedAt.toISOString(), expires_at: new Date(issuedAt.getTime() + 120_000).toISOString(), nonce: randomBytes(32).toString('hex'),
         authorization_id: authorizationId, nexus_id: device.nexusId, credential_id: device.credentialId, transaction_reference: terms.transactionReference,
         operation_type: terms.operationType, amount_minor: String(terms.amountMinor), currency: terms.currency, beneficiary: terms.beneficiary, ...signedOverride,
       };
