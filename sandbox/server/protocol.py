@@ -157,6 +157,8 @@ _CONFUSABLE_SCRIPTS = {
     'Latin': re.compile('[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]'),
     'Cyrillic': re.compile('[\u0400-\u052F]'),
     'Greek': re.compile('[\u0370-\u03FF\u1F00-\u1FFF]'),
+    'Armenian': re.compile('[\u0530-\u058F]'),
+    'Cherokee': re.compile('[\u13A0-\u13FF\uAB70-\uABBF]'),
 }
 
 
@@ -174,6 +176,8 @@ def display_text_problem(text):
         return 'control, format or separator character'
     if unicodedata.normalize('NFC', text) != text:
         return 'not in Unicode Normalization Form C'
+    if unicodedata.normalize('NFKC', text) != text:
+        return 'compatibility characters are not allowed'
     if any(unicodedata.category(ch) == 'Zs' and ch != ' ' for ch in text):
         return 'only the ASCII space is allowed'
     if text[:1] == ' ' or text[-1:] == ' ':
@@ -183,12 +187,12 @@ def display_text_problem(text):
     if any(unicodedata.category(ch) == 'Nd' and ch not in '0123456789' for ch in text):
         return 'only ASCII digits are allowed'
     if sum(1 for pattern in _CONFUSABLE_SCRIPTS.values() if pattern.search(text)) > 1:
-        return 'Latin, Cyrillic and Greek letters mixed in one value'
+        return 'Latin, Cyrillic, Greek, Armenian and Cherokee letters mixed in one value'
     return None
 
 
 def is_valid_iban(value):
-    if not _IBAN.match(value):
+    if not _IBAN.match(value) or not 2 <= int(value[2:4]) <= 98:
         return False
     rearranged = value[4:] + value[:4]
     return int(''.join(str(int(ch, 36)) for ch in rearranged)) % 97 == 1
@@ -275,9 +279,10 @@ def parse_signed_payload(data):
     for key in FIELDS - {'beneficiary'}:
         if not is_display_safe(obj[key]):
             raise Rejected('invalid_value', f'{key} contains a control, format or separator character')
-    problem = display_text_problem(obj['transaction_reference'])
-    if problem:
-        raise Rejected('invalid_value', f'transaction_reference: {problem}')
+    for key in ('transaction_reference', 'operation_type'):
+        problem = display_text_problem(obj[key])
+        if problem:
+            raise Rejected('invalid_value', f'{key}: {problem}')
     return {k: (dict(v) if isinstance(v, dict) else str(v)) for k, v in obj.items()}
 
 

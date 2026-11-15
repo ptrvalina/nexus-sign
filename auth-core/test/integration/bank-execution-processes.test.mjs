@@ -51,7 +51,7 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     client = await server.registerBank('bank-processes');
     bank = await bankSession(server, client);
     lib = await integration();
-    bankDb = await bankDatabase(lib);
+    bankDb = await bankDatabase(lib, { bankTrustKeys });
     store = lib.createTrustStore(bankDb.pools.boundary);
     registry = lib.createRegistry(bankDb.pools.registry, { bankTrustKeys });
     operator = lib.createOperatorTools(bankDb.pools.operator);

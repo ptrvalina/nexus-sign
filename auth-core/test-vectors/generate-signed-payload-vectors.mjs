@@ -124,6 +124,18 @@ addValid('smallest non-zero amount', { ...base, authorization_id: '00000000-0000
 
 const baseBytes = canonical(base);
 const baseText = baseBytes.toString('utf8');
+
+// A Polish IBAN whose valid check digits are 02, written with 99 instead: the
+// mod-97 test still passes (99 = 02 + 97), but ISO 13616 allows only 02 to 98.
+function ibanWithCheckDigits99() {
+  const mod97 = (digits) => [...digits].reduce((r, d) => (r * 10 + Number(d)) % 97, 0);
+  for (let n = 0; n < 1_000_000; n += 1) {
+    const bban = `1090101400000712198${String(n).padStart(5, '0')}`;
+    const check = 98 - mod97(`${bban}252100`); // "PL00" moved to the end, P=25 L=21
+    if (check === 2) return `PL99${bban}`;
+  }
+  throw new Error('no BBAN with check digits 02 found');
+}
 const invalid = [];
 const addInvalid = (name, text, reason) => invalid.push({ name, reason, canonical_base64: b64(Buffer.from(text, 'utf8')) });
 
@@ -175,6 +187,13 @@ addInvalid('iban with wrong check digits', JSON.stringify(normalize({ ...base, b
 addInvalid('iban with spaces', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'PL61 1090 1014 0000 0712 1981 2874' } })), 'invalid_value');
 addInvalid('malformed bic', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'PL61109010140000071219812874', bic: 'COBA-DE-FF' } })), 'invalid_value');
 addInvalid('padded transaction reference', JSON.stringify(normalize({ ...base, transaction_reference: ' BANK-2026-000001' })), 'invalid_value');
+addInvalid('full-width letter in payee name', JSON.stringify(normalize({ ...base, beneficiary: { name: '\uff30ayPal Ltd', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('mathematical bold letter in payee name', JSON.stringify(normalize({ ...base, beneficiary: { name: '\u{1d40f}ayPal Ltd', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('superscript digit in beneficiary value', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'PL61109010140000071219812874', address_line_1: 'ul. Marsza\u0142kowska \u00b2' } })), 'invalid_value');
+addInvalid('payee name mixing Latin and Armenian letters', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan K\u0585walski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('payee name mixing Latin and Cherokee letters', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowa\u13de ski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('iban with check digits 99', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: ibanWithCheckDigits99() } })), 'invalid_value');
+addInvalid('look-alike letter in operation type', JSON.stringify(normalize({ ...base, operation_type: 'tr\u0430nsfer' })), 'invalid_value');
 addInvalid('17 beneficiary fields', JSON.stringify(normalize({ ...base, beneficiary: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`f${String(i).padStart(2, '0')}`, 'x'])) })), 'invalid_value');
 addInvalid('amount of 31 digits', JSON.stringify(normalize({ ...base, amount_minor: '1'.repeat(31) })), 'invalid_value');
 addInvalid('currency with a digit', JSON.stringify(normalize({ ...base, currency: 'PL1' })), 'invalid_value');

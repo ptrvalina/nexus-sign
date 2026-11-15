@@ -46,7 +46,7 @@ describe('bank execution boundary (SoftHSM, PostgreSQL)', { skip: skipWithoutSer
     client = await server.registerBank('bank-boundary');
     bank = await bankSession(server, client);
     lib = await integration();
-    bankDb = await bankDatabase(lib); // the bank's own database, with a role per component
+    bankDb = await bankDatabase(lib, { bankTrustKeys }); // the bank's own database, with a role per component
     store = lib.createTrustStore(bankDb.pools.boundary);
     registry = lib.createRegistry(bankDb.pools.registry, { bankTrustKeys });
     // Key ceremony: the evidence public key, recorded once by the bank.

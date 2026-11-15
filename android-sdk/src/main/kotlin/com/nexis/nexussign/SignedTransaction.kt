@@ -147,7 +147,9 @@ internal object SignedPayload {
             if (key == "iban" && !isValidIban(value)) throw Rejected("invalid_value", "beneficiary.iban is not a valid IBAN")
             if (key == "bic" && !BIC.matches(value)) throw Rejected("invalid_value", "beneficiary.bic is not a valid BIC")
         }
-        displayTextViolation(str("transaction_reference"))?.let { throw Rejected("invalid_value", "transaction_reference: $it") }
+        for (key in listOf("transaction_reference", "operation_type")) {
+            displayTextViolation(str(key))?.let { throw Rejected("invalid_value", "$key: $it") }
+        }
 
         return NexusSignedTransaction(
             authorizationId = str("authorization_id"),
@@ -235,37 +237,41 @@ internal object SignedPayload {
     private val IBAN = Regex("[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}")
     private val BIC = Regex("[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?")
 
-    /** Latin, Cyrillic and Greek letters as fixed code point ranges, identical
+    /** Latin, Cyrillic, Greek, Armenian and Cherokee letters as fixed code point ranges, identical
      * in Auth Core, the iOS SDK and the sandbox, so the decision does not
      * depend on the Unicode version of the device's runtime. */
     private val CONFUSABLE_SCRIPTS = listOf(
         Regex("[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]"),
         Regex("[\u0400-\u052F]"),
         Regex("[\u0370-\u03FF\u1F00-\u1FFF]"),
+        Regex("[\u0530-\u058F]"),
+        Regex("[\u13A0-\u13FF\uAB70-\uABBF]"),
     )
 
     /**
      * The display text rules of authorization protocol v1 for values the
-     * customer reads (beneficiary values, transaction_reference): NFC, only the
-     * ASCII space and never doubled or at either end, only ASCII digits, and no
-     * mix of Latin, Cyrillic and Greek letters in one value. Returns the broken
+     * customer reads (beneficiary values, transaction_reference, operation_type):
+     * NFC and no compatibility characters (NFKC-stable), only the ASCII space and
+     * never doubled or at either end, only ASCII digits, and no mix of Latin,
+     * Cyrillic, Greek, Armenian and Cherokee letters in one value. Returns the broken
      * rule, or null. Auth Core refuses to create an authorization that breaks
      * them; the device checks again because it trusts only the signed bytes.
      */
     fun displayTextViolation(value: String): String? {
         if (!isDisplaySafe(value)) return "control, format or separator character"
         if (!Normalizer.isNormalized(value, Normalizer.Form.NFC)) return "not in Unicode Normalization Form C"
+        if (!Normalizer.isNormalized(value, Normalizer.Form.NFKC)) return "compatibility characters are not allowed"
         if (value.codePoints().anyMatch { Character.getType(it) == Character.SPACE_SEPARATOR.toInt() && it != 0x20 }) return "only the ASCII space is allowed"
         if (value.startsWith(' ') || value.endsWith(' ')) return "leading or trailing space"
         if (value.contains("  ")) return "repeated spaces"
         if (value.codePoints().anyMatch { Character.getType(it) == Character.DECIMAL_DIGIT_NUMBER.toInt() && it !in 0x30..0x39 }) return "only ASCII digits are allowed"
-        if (CONFUSABLE_SCRIPTS.count { it.containsMatchIn(value) } > 1) return "Latin, Cyrillic and Greek letters mixed in one value"
+        if (CONFUSABLE_SCRIPTS.count { it.containsMatchIn(value) } > 1) return "Latin, Cyrillic, Greek, Armenian and Cherokee letters mixed in one value"
         return null
     }
 
     /** ISO 13616 IBAN in electronic format with valid check digits (mod 97). */
     fun isValidIban(value: String): Boolean {
-        if (!IBAN.matches(value)) return false
+        if (!IBAN.matches(value) || value.substring(2, 4).toInt() !in 2..98) return false
         var remainder = 0
         for (ch in value.substring(4) + value.substring(0, 4)) {
             remainder = if (ch in 'A'..'Z') (remainder * 100 + (ch - 'A' + 10)) % 97 else (remainder * 10 + (ch - '0')) % 97

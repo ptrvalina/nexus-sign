@@ -47,19 +47,26 @@ export const BENEFICIARY_MAX_VALUE_LENGTH = 140;
  *   match the text.
  * - Unicode Normalization Form C. "José" in NFC and NFD looks identical and
  *   hashes differently; only one of them may be signed.
+ * - No compatibility characters: the value is unchanged by NFKC. Full-width
+ *   "Ｐ", mathematical "𝐏", superscript "²" and ligatures read as ordinary
+ *   letters and digits.
  * - The only space is U+0020, never doubled and never leading or trailing.
  *   A no-break or ideographic space, or a run of spaces, changes the layout
  *   without changing how the value reads.
  * - Decimal digits are ASCII 0-9. Full-width or other-script digits render
  *   like ASCII digits in many fonts.
- * - One value does not mix Latin, Cyrillic and Greek letters: "PаyPal" with a
+ * - One value does not mix letters of Latin, Cyrillic, Greek, Armenian or
+ *   Cherokee, the scripts with letters that look like Latin ones: "PаyPal" with a
  *   Cyrillic "а" is the classic payee confusable (a subset of the UTS #39
  *   mixed-script check, limited to the scripts that share glyphs). The three
  *   letter sets are fixed code point ranges rather than the Unicode Script
  *   property, so that Auth Core, both SDKs and the sandbox decide the same
  *   way whatever Unicode version their runtime ships.
  * - A beneficiary "iban" is an ISO 13616 IBAN in electronic format (no
- *   spaces) with valid check digits, and a "bic" is an ISO 9362 BIC.
+ *   spaces) with check digits 02 to 98 that verify, and a "bic" is an ISO
+ *   9362 BIC.
+ * The rules apply to every beneficiary value, transaction_reference and
+ * operation_type: all three are shown in the confirmation prompt.
  */
 export const DISPLAY_UNSAFE_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
 const NON_ASCII_SPACE = /[\p{Zs}--\x20]/v;
@@ -70,12 +77,16 @@ const CONFUSABLE_SCRIPTS = [
   /[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]/, // Basic Latin letters, Latin-1 letters, Latin Extended-A/B, Latin Extended Additional
   /[\u0400-\u052F]/, // Cyrillic, Cyrillic Supplement
   /[\u0370-\u03FF\u1F00-\u1FFF]/, // Greek and Coptic, Greek Extended
+  /[\u0530-\u058F]/, // Armenian
+  /[\u13A0-\u13FF\uAB70-\uABBF]/, // Cherokee, Cherokee Supplement
 ];
 const IBAN = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/;
 const BIC = /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
 
 export function isValidIban(value: string): boolean {
   if (!IBAN.test(value)) return false;
+  const check = Number(value.slice(2, 4));
+  if (check < 2 || check > 98) return false;
   const rearranged = value.slice(4) + value.slice(0, 4);
   let remainder = 0;
   for (const ch of rearranged) {
@@ -93,11 +104,12 @@ function mixesConfusableScripts(value: string): boolean {
 export function displayTextViolation(value: string): string | null {
   if (DISPLAY_UNSAFE_CHARACTER.test(value)) return 'control, format or separator characters are not allowed';
   if (value !== value.normalize('NFC')) return 'text must be in Unicode Normalization Form C';
+  if (value !== value.normalize('NFKC')) return 'compatibility characters (full-width, mathematical, superscript, ligature) are not allowed';
   if (NON_ASCII_SPACE.test(value)) return 'only the ASCII space U+0020 is allowed';
   if (PADDED.test(value)) return 'leading or trailing space';
   if (SPACE_RUN.test(value)) return 'repeated spaces are not allowed';
   if (NON_ASCII_DIGIT.test(value)) return 'only ASCII digits 0-9 are allowed';
-  if (mixesConfusableScripts(value)) return 'Latin, Cyrillic and Greek letters must not be mixed in one value';
+  if (mixesConfusableScripts(value)) return 'Latin, Cyrillic, Greek, Armenian and Cherokee letters must not be mixed in one value';
   return null;
 }
 
@@ -117,12 +129,14 @@ export function assertValidBeneficiary(beneficiary: unknown): asserts beneficiar
   }
 }
 
-/** Applies the display text rules to transaction_reference and the
- * character rule to every other top-level string field. */
+/** Applies the display text rules to the displayed top-level fields
+ * (transaction_reference, operation_type) and the character rule to every
+ * other top-level string field. */
+const DISPLAYED_FIELDS = new Set(['transaction_reference', 'operation_type']);
 export function assertDisplaySafeFields(value: AuthorizationObject): void {
   for (const [key, field] of Object.entries(value)) {
     if (typeof field !== 'string') continue;
-    const violation = key === 'transaction_reference' ? displayTextViolation(field) : DISPLAY_UNSAFE_CHARACTER.test(field) ? 'control, format or separator characters are not allowed' : null;
+    const violation = DISPLAYED_FIELDS.has(key) ? displayTextViolation(field) : DISPLAY_UNSAFE_CHARACTER.test(field) ? 'control, format or separator characters are not allowed' : null;
     if (violation) throw new ValidationError(`Invalid ${key}: ${violation}`);
   }
 }

@@ -25,7 +25,8 @@ const ADMIN_DB_URL = process.env.INTEGRATION_DATABASE_URL;
  * operator), a role that inherits the boundary's (for inheritance tests), the
  * administrator's hardening (DATABASE_HARDENING), then installSchema as the owner.
  */
-export async function bankDatabase(lib) {
+/** The bank's own database with a role per component; `bankTrustKeys` are installed for the database's own signature checks. */
+export async function bankDatabase(lib, { bankTrustKeys = [], executionWindowSeconds } = {}) {
   const db = await createDatabase({ schema: false });
   const suffix = randomBytes(4).toString('hex');
   const kinds = ['owner', 'boundary', 'gateway', 'registry', 'operator', 'member'];
@@ -46,7 +47,7 @@ export async function bankDatabase(lib) {
   const urlFor = (k) => { const u = new URL(db.url); u.username = names[k]; u.password = passwords[k]; return u.toString(); };
   const owner = new pg.Pool({ connectionString: urlFor('owner'), max: 4 });
   const roles = { boundary: names.boundary, gateway: names.gateway, registry: names.registry, operator: names.operator };
-  await lib.installSchema(owner, roles);
+  await lib.installSchema(owner, roles, { bankTrustKeys, executionWindowSeconds });
   const pools = Object.fromEntries(Object.keys(roles).map((k) => [k, new pg.Pool({ connectionString: urlFor(k), max: 6 })]));
   return {
     owner, ownerRole: names.owner, pools, roles, memberRole: names.member,

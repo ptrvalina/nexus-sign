@@ -200,8 +200,10 @@ enum SignedPayload {
                 throw Rejected(reason: "invalid_value", detail: "beneficiary.bic is not a valid BIC")
             }
         }
-        if let violation = displayTextViolation(try str("transaction_reference")) {
-            throw Rejected(reason: "invalid_value", detail: "transaction_reference: \(violation)")
+        for key in ["transaction_reference", "operation_type"] {
+            if let violation = displayTextViolation(try str(key)) {
+                throw Rejected(reason: "invalid_value", detail: "\(key): \(violation)")
+            }
         }
 
         return NexusSignedTransaction(
@@ -286,19 +288,22 @@ enum SignedPayload {
         !value.unicodeScalars.contains { displayUnsafeCategories.contains($0.properties.generalCategory) }
     }
 
-    /// Latin, Cyrillic and Greek letters as fixed code point ranges, identical
+    /// Latin, Cyrillic, Greek, Armenian and Cherokee letters as fixed code point ranges, identical
     /// in Auth Core, the Android SDK and the sandbox, so the decision does not
     /// depend on the Unicode version of the device's runtime.
     private static let confusableScripts: [[ClosedRange<UInt32>]] = [
         [0x41...0x5A, 0x61...0x7A, 0xC0...0xD6, 0xD8...0xF6, 0xF8...0x24F, 0x1E00...0x1EFF],
         [0x400...0x52F],
         [0x370...0x3FF, 0x1F00...0x1FFF],
+        [0x530...0x58F],
+        [0x13A0...0x13FF, 0xAB70...0xABBF],
     ]
 
     /// The display text rules of authorization protocol v1 for values the
-    /// customer reads (beneficiary values, transaction_reference): NFC, only
+    /// customer reads (beneficiary values, transaction_reference,
+    /// operation_type): NFC and no compatibility characters (NFKC-stable), only
     /// the ASCII space and never doubled or at either end, only ASCII digits,
-    /// and no mix of Latin, Cyrillic and Greek letters in one value. Returns
+    /// and no mix of Latin, Cyrillic, Greek, Armenian and Cherokee letters. Returns
     /// the broken rule, or nil. Auth Core refuses to create an authorization
     /// that breaks them; the device checks again because it trusts only the
     /// signed bytes.
@@ -308,6 +313,9 @@ enum SignedPayload {
         // String equality in Swift is canonical equivalence, so compare scalars.
         if !value.precomposedStringWithCanonicalMapping.unicodeScalars.elementsEqual(scalars) {
             return "not in Unicode Normalization Form C"
+        }
+        if !value.precomposedStringWithCompatibilityMapping.unicodeScalars.elementsEqual(scalars) {
+            return "compatibility characters are not allowed"
         }
         if scalars.contains(where: { $0.properties.generalCategory == .spaceSeparator && $0.value != 0x20 }) {
             return "only the ASCII space is allowed"
@@ -325,7 +333,7 @@ enum SignedPayload {
         let scriptsUsed = confusableScripts.filter { ranges in
             scalars.contains { scalar in ranges.contains { $0.contains(scalar.value) } }
         }
-        if scriptsUsed.count > 1 { return "Latin, Cyrillic and Greek letters mixed in one value" }
+        if scriptsUsed.count > 1 { return "Latin, Cyrillic, Greek, Armenian and Cherokee letters mixed in one value" }
         return nil
     }
 
@@ -342,6 +350,8 @@ enum SignedPayload {
             default: guard isLetter || isDigit else { return false }
             }
         }
+        let check = Int(bytes[2] - 48) * 10 + Int(bytes[3] - 48)
+        guard (2...98).contains(check) else { return false }
         var remainder = 0
         for byte in Array(bytes[4...]) + Array(bytes[..<4]) {
             remainder = byte >= 65 ? (remainder * 100 + Int(byte) - 55) % 97 : (remainder * 10 + Int(byte) - 48) % 97

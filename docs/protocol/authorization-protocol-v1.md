@@ -26,18 +26,19 @@ Floating-point numbers never appear in the object. Beneficiary keys are restrict
 
 ### Display text rules
 
-The customer decides on a payment by reading the beneficiary and the transaction reference. Text that looks like something else defeats the signature even when the signed bytes match the screen, so every beneficiary value and `transaction_reference` must satisfy all of these rules. Auth Core refuses to create an authorization that breaks them (400 `VALIDATION_ERROR`) and both SDKs refuse signed bytes that break them (`invalid_value`).
+The customer decides on a payment by reading the beneficiary and the transaction reference. Text that looks like something else defeats the signature even when the signed bytes match the screen, so every beneficiary value, `transaction_reference` and `operation_type` (all three appear in the confirmation prompt) must satisfy all of these rules. Auth Core refuses to create an authorization that breaks them (400 `VALIDATION_ERROR`) and both SDKs refuse signed bytes that break them (`invalid_value`).
 
 | Rule | Reason |
 |---|---|
 | Unicode Normalization Form C | `José` in NFC and in NFD looks the same and hashes differently |
+| No compatibility characters: the value is unchanged by NFKC | full-width `Ｐ`, mathematical `𝐏`, superscript `²` and ligatures read as ordinary letters and digits |
 | The only space character is U+0020; never at the start or end, never two in a row | a no-break, ideographic or other space, or a run of spaces, changes the layout without changing how the value reads |
 | Decimal digits are ASCII `0`–`9` | full-width and other-script digits look like ASCII digits in many fonts |
-| One value does not contain letters from more than one of these sets: Latin `A-Z a-z U+00C0–U+00D6 U+00D8–U+00F6 U+00F8–U+024F U+1E00–U+1EFF`; Cyrillic `U+0400–U+052F`; Greek `U+0370–U+03FF U+1F00–U+1FFF` | `PаyPal` with a Cyrillic `а` is the usual look-alike payee. The sets are fixed ranges, not the Unicode Script property, so that every implementation decides the same way whatever Unicode version its runtime has |
-| A beneficiary `iban` is an IBAN in electronic format (`^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$`) with valid ISO 13616 check digits | a typo or a substituted digit is caught before the customer sees it |
+| One value does not contain letters from more than one of these sets: Latin `A-Z a-z U+00C0–U+00D6 U+00D8–U+00F6 U+00F8–U+024F U+1E00–U+1EFF`; Cyrillic `U+0400–U+052F`; Greek `U+0370–U+03FF U+1F00–U+1FFF`; Armenian `U+0530–U+058F`; Cherokee `U+13A0–U+13FF U+AB70–U+ABBF` | `PаyPal` with a Cyrillic `а` is the usual look-alike payee. The sets are fixed ranges, not the Unicode Script property, so that every implementation decides the same way whatever Unicode version its runtime has |
+| A beneficiary `iban` is an IBAN in electronic format (`^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$`) with ISO 13616 check digits from 02 to 98 that verify (mod 97) | a typo or a substituted digit is caught before the customer sees it |
 | A beneficiary `bic` matches `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` (ISO 9362) | |
 
-These rules do not detect every confusable (for example `1` for `l` within Latin). A bank that compares the payee with the customer's saved payees catches those; NEXUS-SIGN binds and shows what the bank sent. The invalid vectors named "payee name mixing…", "…not in NFC", "no-break space…", "repeated spaces…", "full-width digit…", "iban…", "malformed bic" and "padded transaction reference" pin the rules in all four implementations. Introduced in 2.0.0-rc.3; earlier versions refused only leading and trailing Zs in beneficiary values.
+These rules do not detect every confusable: `1` for `l` within Latin, or a name written entirely in Cyrillic letters that look like Latin ones (`РАУРАЛ`), passes. A bank that compares the payee with the customer's saved payees catches those; NEXUS-SIGN binds and shows what the bank sent. The invalid vectors named "payee name mixing…", "…not in NFC", "no-break space…", "repeated spaces…", "full-width digit…", "iban…", "malformed bic", "padded transaction reference", "full-width…", "mathematical bold…", "superscript digit…", "…Armenian…", "…Cherokee…", "iban with check digits 99" and "look-alike letter in operation type" pin the rules in all four implementations. Introduced in 2.0.0-rc.3; earlier versions refused only leading and trailing Zs in beneficiary values.
 
 ### Characters refused in every field
 

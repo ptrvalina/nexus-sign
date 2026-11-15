@@ -31,7 +31,7 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
 
   before(async () => {
     lib = await integration();
-    db = await bankDatabase(lib);
+    db = await bankDatabase(lib, { bankTrustKeys });
     store = lib.createTrustStore(db.pools.boundary);
     registry = lib.createRegistry(db.pools.registry, { bankTrustKeys });
     operator = lib.createOperatorTools(db.pools.operator);
@@ -406,14 +406,14 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     await db.owner.query(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA bank TO ${db.roles.boundary}`);
     await db.owner.query(`GRANT EXECUTE ON FUNCTION bank.submit(uuid, uuid) TO ${db.roles.boundary}`);
     await db.owner.query(`GRANT EXECUTE ON FUNCTION bank.report(uuid, uuid, text, text, text) TO PUBLIC`);
-    await lib.installSchema(db.owner, db.roles);
+    await lib.installSchema(db.owner, db.roles, { bankTrustKeys });
     assert.equal((await db.owner.query(`SELECT has_function_privilege('public', 'bank.report(uuid,uuid,text,text,text)', 'EXECUTE') AS x`)).rows[0].x, false);
     assert.deepEqual(await lib.privilegeMatrix(db.owner, db.roles), lib.intendedPrivileges(db.roles));
     // The phase 14 tables in public, with their grants, if a bank upgrades in place: no grant survives.
     await db.adminQuery(`CREATE TABLE public.bank_executions (payment_id uuid); ALTER TABLE public.bank_executions OWNER TO ${db.ownerRole};
       GRANT SELECT, INSERT, UPDATE ON public.bank_executions TO ${db.roles.boundary}`);
     assert.equal((await db.owner.query(`SELECT has_table_privilege($1, 'public.bank_executions', 'UPDATE') AS x`, [db.roles.boundary])).rows[0].x, true);
-    await lib.installSchema(db.owner, db.roles);
+    await lib.installSchema(db.owner, db.roles, { bankTrustKeys });
     for (const priv of ['SELECT', 'INSERT', 'UPDATE']) {
       assert.equal((await db.owner.query(`SELECT has_table_privilege($1, 'public.bank_executions', $2) AS x`, [db.roles.boundary, priv])).rows[0].x, false, priv);
     }
