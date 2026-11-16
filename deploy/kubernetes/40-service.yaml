@@ -1,0 +1,21 @@
+# Reached only through the bank's mTLS gateway (NetworkPolicy below).
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-auth-core
+  labels: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/part-of: nexus-sign }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/component: api }
+  ports:
+    - { name: http, port: 8080, targetPort: http, protocol: TCP }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexus-auth-core
+  labels: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/part-of: nexus-sign }
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/component: api }

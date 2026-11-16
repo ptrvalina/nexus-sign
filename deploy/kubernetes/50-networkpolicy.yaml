@@ -1,0 +1,38 @@
+# Ingress only from the mTLS gateway and the metrics scraper; egress only to
+# DNS, PostgreSQL, Redis, the HSM, the push providers and the webhook egress
+# proxy. Selectors and ports are the bank's (CHANGE); the shape is the point:
+# Auth Core talks to nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nexus-auth-core
+  labels: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/part-of: nexus-sign }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: nexus-auth-core }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: api-gateway } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+      ports:
+        - { port: 8080, protocol: TCP }
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - ipBlock: { cidr: 10.20.0.0/24 }   # PostgreSQL. CHANGE
+      ports: [{ port: 5432, protocol: TCP }]
+    - to:
+        - ipBlock: { cidr: 10.20.1.0/24 }   # Redis. CHANGE
+      ports: [{ port: 6380, protocol: TCP }]
+    - to:
+        - ipBlock: { cidr: 10.30.0.0/24 }   # HSM. CHANGE: the vendor's port
+      ports: [{ port: 1792, protocol: TCP }]
+    - to:
+        - ipBlock: { cidr: 10.40.0.0/24 }   # Egress proxy for webhooks and push providers. CHANGE
+      ports: [{ port: 3128, protocol: TCP }]

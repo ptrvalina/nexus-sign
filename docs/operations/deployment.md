@@ -117,4 +117,6 @@ Production is deployed behind the bank's API gateway and WAF.
 | Monitoring | Prometheus-compatible metrics, SIEM integration, alerting |
 | Evidence | Append-only retention with WORM or SIEM export per bank policy; banks keep the chain heads they receive |
 
+Kubernetes manifests to adapt, with a check that runs Auth Core's own posture checks over them: [`deploy/kubernetes`](../../deploy/kubernetes/README.md). The image runs as the fixed user 10001.
+
 Startup is fail-closed unless the PKCS#11 HSM, device attestation, database and Redis TLS, trusted gateway mTLS, admin MFA and webhook egress controls are all configured ([production blockers](configuration.md#production-blockers)). See the [threat model](../security/threat-model.md).
