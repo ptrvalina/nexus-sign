@@ -120,6 +120,15 @@ test('the device signature is verified offline, so a re-sealed record with alter
 
   const otherRecord = payload('e', null, signedBytes('f'));
   assert.ok(verifyEvidenceRecord(await seal(hsm, otherRecord), key).some((p) => p.includes('different authorization')));
+
+  // Finding B-07: a valid signature by a key of another type or curve is refused.
+  for (const [type, options, encoding] of [['ec', { namedCurve: 'P-384' }, 'der'], ['rsa', { modulusLength: 2048 }, undefined], ['ed25519', {}, undefined]]) {
+    const other = generateKeyPairSync(type, options);
+    const record = payload('g', null);
+    record.credentialPublicKeyPem = other.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    record.signature = sign(type === 'ed25519' ? null : 'sha256', signedBytes('g'), encoding ? { key: other.privateKey, dsaEncoding: encoding } : other.privateKey).toString('base64');
+    assert.ok(verifyEvidenceRecord(await seal(hsm, record), key).some((p) => p.includes('not an ECDSA P-256 key')), type);
+  }
 });
 
 test('an offline confirmation is sealed and chained, but its code is not treated as a device signature', async () => {

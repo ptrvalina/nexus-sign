@@ -76,6 +76,7 @@ export function verifyMandateRecord(payload) {
       || fields.credential_id !== payload.credentialId)) {
     problems.push('signed terms are not the terms of this mandate, identity and credential');
   }
+  if (!isP256PublicKey(payload.credentialPublicKeyPem)) return [...problems, 'device key is not an ECDSA P-256 key'];
   let valid = false;
   try {
     valid = verify('sha256', terms, { key: payload.credentialPublicKeyPem, dsaEncoding: payload.signatureFormat === 'raw' ? 'ieee-p1363' : 'der' },
@@ -177,6 +178,17 @@ function verifyEnrolmentLink(authorization, enrolment, keys) {
   return problems;
 }
 
+/** Device keys are ECDSA P-256 (Secure Enclave, StrongBox); a record naming
+ * any other key type or curve is refused, whatever its signature (B-07). */
+function isP256PublicKey(pem) {
+  try {
+    const key = createPublicKey(pem);
+    return key.asymmetricKeyType === 'ec' && key.asymmetricKeyDetails?.namedCurve === 'prime256v1';
+  } catch {
+    return false;
+  }
+}
+
 /** Steps 4 of verifyEvidenceRecord, on an AUTHORIZATION payload alone. */
 export function verifyDeviceSignature(payload, { rejectOfflineCode = false } = {}) {
   if (typeof payload.signedPayloadBase64 !== 'string' || typeof payload.credentialPublicKeyPem !== 'string') {
@@ -217,6 +229,7 @@ export function verifyDeviceSignature(payload, { rejectOfflineCode = false } = {
   } else if (payload.confirmationMethod !== undefined && payload.confirmationMethod !== 'DEVICE_SIGNATURE') {
     return [...problems, `unknown confirmation method ${payload.confirmationMethod}`];
   }
+  if (!isP256PublicKey(payload.credentialPublicKeyPem)) return [...problems, 'device key is not an ECDSA P-256 key'];
   let deviceOk = false;
   try {
     deviceOk = verify('sha256', signed,
