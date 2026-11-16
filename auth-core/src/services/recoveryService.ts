@@ -202,12 +202,10 @@ export async function createRecoverySession(bankCustomerRef: string, clientId: s
     throw new ConflictError('The recovery phrase uses retired protocol 1; the customer must set up a new recovery phrase', 'RECOVERY_PROTOCOL_RETIRED');
   }
   await assertPhraseNotUsed(pool, row.nexus_id);
-  const failures = await pool.query<{ failures: string }>(
-    `SELECT COALESCE(SUM(failed_attempt_count), 0) AS failures FROM recovery_sessions
-     WHERE nexus_id = $1 AND created_at > now() - interval '${RECOVERY_FAILURE_WINDOW}'`, [row.nexus_id]);
-  if (Number(failures.rows[0]?.failures ?? 0) >= MAX_IDENTITY_FAILURES) {
-    await recordAuditEvent('recovery_locked', { nexusId: row.nexus_id, actor: `bank:${clientId}` }, { failures: Number(failures.rows[0]?.failures) });
-    throw new ConflictError('Too many failed recovery attempts for this customer; try again later', 'RECOVERY_LOCKED');
+  const failures = await identityRecoveryFailures(pool, row.nexus_id);
+  if (failures >= MAX_IDENTITY_FAILURES) {
+    await recordAuditEvent('recovery_locked', { nexusId: row.nexus_id, actor: `bank:${clientId}` }, { failures });
+    throw recoveryLocked();
   }
   // What the device receives must be what it registered.
   if (!row.recovery_public_key_pem || !row.recovery_wrapped_key) throw new RecoveryNotConfiguredError();
@@ -262,6 +260,16 @@ export interface CompleteRecoveryInput {
   hsm: HsmAdapter;
 }
 
+/** Failed recovery proofs of a NEXUS ID, across all its sessions, in RECOVERY_FAILURE_WINDOW. */
+async function identityRecoveryFailures(runner: Pick<import('pg').PoolClient, 'query'>, nexusId: string): Promise<number> {
+  const result = await runner.query<{ failures: string }>(
+    `SELECT COALESCE(SUM(failed_attempt_count), 0) AS failures FROM recovery_sessions
+     WHERE nexus_id = $1 AND created_at > now() - interval '${RECOVERY_FAILURE_WINDOW}'`, [nexusId]);
+  return Number(result.rows[0]?.failures ?? 0);
+}
+
+const recoveryLocked = () => new ConflictError('Too many failed recovery attempts for this customer; try again later', 'RECOVERY_LOCKED');
+
 export async function completeRecovery(input: CompleteRecoveryInput): Promise<RecoveryResult> {
   // A wrong proof must be committed as a failed attempt; throwing inside the
   // transaction would roll back the attempt counter and the audit event. The
@@ -289,6 +297,10 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     }
     if (!i.recovery_public_key_pem || !i.recovery_wrapped_key) throw new RecoveryNotConfiguredError();
     await assertPhraseNotUsed(tx, s.nexus_id);
+    // The identity-wide limit applies to every attempt, not only when a session
+    // is opened: sessions opened in parallel share it (finding A2-04). The
+    // identity row is locked above, so attempts of one identity are serialized.
+    if (await identityRecoveryFailures(tx, s.nexus_id) >= MAX_IDENTITY_FAILURES) throw recoveryLocked();
     await assertRecoveryKeyIntegrity(tx, s.nexus_id, i.recovery_evidence_id, i.recovery_public_key_pem, i.recovery_wrapped_key);
     const proof = decodeBase64(input.proofB64);
     const signed = recoveryProofSigningInput({ sessionId: s.recovery_session_id, nonceB64: s.nonce.toString('base64'), nexusId: s.nexus_id, newSigningKeySpki: spkiOf(newPublicKey.pem) });

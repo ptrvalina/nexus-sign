@@ -27,7 +27,7 @@ const keyPair = () => {
   return { privateKey, publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(), publicKey };
 };
 
-describe('recovery phrase is single use (PostgreSQL)', { skip: skipWithoutServices }, () => {
+describe('recovery phrase is single use, and failures are limited per identity (PostgreSQL)', { skip: skipWithoutServices }, () => {
   let db; let admin; let s; let hsm; const clientId = `bank-${randomBytes(4).toString('hex')}`;
 
   before(async () => {
@@ -120,5 +120,38 @@ describe('recovery phrase is single use (PostgreSQL)', { skip: skipWithoutServic
       sessionId: early.sessionId, accessToken: early.accessToken, proofB64, newPublicKeyPem: next.publicKeyPem,
       platform: 'IOS', securityLevel: 'SECURE_ENCLAVE', attestationStatus: 'UNKNOWN', attestation: { status: 'UNKNOWN', bindingSha256: null, material: { format: 'none' } }, hsm,
     }), (e) => e.code === 'RECOVERY_PHRASE_USED');
+  });
+
+  test('sessions opened in parallel share the limit of 10 failed proofs per identity (finding A2-04)', async () => {
+    const bankCustomerRef = `cust-${randomBytes(4).toString('hex')}`;
+    const identity = await s.identities.createNexusIdentity(clientId, bankCustomerRef);
+    const signing = keyPair();
+    const enrolled = await s.credentials.createCredential({
+      nexusId: identity.nexusId, publicKeyPem: signing.publicKeyPem, platform: 'IOS', securityLevel: 'SECURE_ENCLAVE', attestationStatus: 'VERIFIED', clientId, hsm,
+      enrolment: { reason: 'ENROLMENT', attestation: { status: 'VERIFIED', bindingSha256: null, material: { format: 'none' } } },
+    });
+    await setUp({ nexusId: identity.nexusId, credentialId: enrolled.credentialId, signing }, PHRASE);
+    // Three sessions opened before any failure: each allows 5 attempts, 15 in all.
+    const sessions = [];
+    for (let i = 0; i < 3; i += 1) sessions.push(await s.recovery.createRecoverySession(bankCustomerRef, clientId));
+    const attempt = (session, words) => {
+      const next = keyPair();
+      // words === null: a proof signed by a key that is not the recovery key.
+      const signer = words === null ? keyPair().privateKey : openRecoveryKey(words, { ...session, salt: session.parameters.salt, iterations: session.parameters.iterations });
+      const proofB64 = signDerB64(signer, proofSigningInput({
+        sessionId: session.sessionId, nonceB64: session.nonce, nexusId: session.nexusId, newSigningPublicKey: next.publicKey,
+      }));
+      return s.recovery.completeRecovery({
+        sessionId: session.sessionId, accessToken: session.accessToken, proofB64, newPublicKeyPem: next.publicKeyPem,
+        platform: 'IOS', securityLevel: 'SECURE_ENCLAVE', attestationStatus: 'UNKNOWN', attestation: { status: 'UNKNOWN', bindingSha256: null, material: { format: 'none' } }, hsm,
+      });
+    };
+    for (const [session, count] of [[sessions[0], 4], [sessions[1], 4], [sessions[2], 2]]) {
+      for (let i = 0; i < count; i += 1) await assert.rejects(attempt(session, null), (e) => e.code !== 'RECOVERY_LOCKED');
+    }
+    // Ten failures in all: the third session still has attempts, but the identity is locked, even for the right phrase.
+    await assert.rejects(attempt(sessions[2], PHRASE), (e) => e.code === 'RECOVERY_LOCKED');
+    const active = (await admin.query(`SELECT credential_id FROM credentials WHERE nexus_id = $1 AND state = 'ACTIVE'`, [identity.nexusId])).rows;
+    assert.deepEqual(active.map((r) => r.credential_id), [enrolled.credentialId], 'the enrolled device is untouched');
   });
 });
