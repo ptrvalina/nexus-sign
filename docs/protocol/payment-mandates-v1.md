@@ -50,8 +50,18 @@ The database repeats the decision: the trigger `mandate_debits_check` refuses an
 
 A `MANDATE` record carries `mandateId`, `credentialId`, `event`, `termsHash`, `mandateReference`, `reason`, `occurredAt` and the `enrolmentEvidenceHash` of the device. A `SIGNED` record also carries the terms bytes (`signedTermsBase64`), the signature, its format and the device public key. `verify-evidence.mjs` checks that the terms hash to `termsHash`, are mandate terms (domain) of this mandate, identity and credential, that the signature verifies, and that the key is the one sealed at the device's enrolment earlier in the chain.
 
+## In the bank database
+
+The bank's execution boundary (`bank-integration/`) executes a mandate debit without trusting Auth Core's decision or the gateway. The payment names its mandate (`trustStore.attachMandate`, `bank.attach_mandate`), and `bank.approve` takes the sealed `SIGNED` record of that mandate as its evidence. The database then checks, in SQL:
+
+- `bank.mandate_problem`: the terms bytes hash to `termsHash`, are mandate terms of this mandate, customer and credential, and cover the payment: payee, currency, the per-payment limit and the validity;
+- that the mandate is not in `bank.mandate_stops` (stops are recorded by the registry role from sealed events the boundary verified, `registry.recordMandateStop`);
+- the device signature over the terms with the key the bank approved for the credential (`bank.device_signature_problem`, ECDSA P-256 in SQL);
+- one approved debit per period and the total limit, counted in the bank's own append-only `bank.mandate_debits`.
+
+`bank.submit` refuses a mandate debit after `valid_until`. Tests: `auth-core/test/integration/bank-db-mandates.test.mjs`.
+
 ## Limits of this version
 
-- Auth Core decides the debit; the bank's own payment execution (`bank-integration/`) does not yet re-verify the mandate signature in the bank database the way it re-verifies payment signatures.
 - Periods are UTC calendar periods; a bank that bills in another time zone sets `valid_from` accordingly.
 - The SDK methods to show and sign mandates are written but have not been compiled or run on a device.

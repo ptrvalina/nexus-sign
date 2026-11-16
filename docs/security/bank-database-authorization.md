@@ -112,3 +112,8 @@ The schema owner can disable triggers, replace functions, change grants and rows
 - A bank's real roles, connection pooling (a shared pool login would make `session_user` meaningless) and its audit logging.
 - Row-level security: not used; the schema relies on no table rights at all.
 - Performance of the locks under the bank's load (pilot pack, section 10).
+
+## Debits under a payment mandate
+
+A payment attached to a mandate (`bank.attach_mandate`, boundary role) is approved by `bank.approve` only with the sealed `SIGNED` record of that mandate, after `bank.mandate_problem` (terms, customer, payee, currency, limit per payment, validity, not stopped), the device signature over the terms with the bank-approved key, and the bank's own count of one debit per period and the total limit (`bank.mandate_debits`, append-only, written only by `bank.approve`). The registry role records stops with `bank.record_mandate_stop`. See [payment mandates v1](../protocol/payment-mandates-v1.md#in-the-bank-database).
+

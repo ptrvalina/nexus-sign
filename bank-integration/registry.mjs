@@ -32,6 +32,14 @@ export function createRegistry(pool, { bankTrustKeys } = {}) {
      * Stores a signed revocation (final). Payments already APPROVED or later
      * are returned: the revocation came after the cut-off and does not stop them.
      */
+    /**
+     * Records that the customer's mandate was stopped (REVOKED, SUSPENDED,
+     * WITHDRAWN or EXPIRED), from a sealed MANDATE record whose HSM seal and
+     * chain the caller verified. No debit is approved under it afterwards.
+     */
+    async recordMandateStop({ mandateId, event, evidenceHash }) {
+      await pool.query(`SELECT bank.record_mandate_stop($1, $2, $3)`, [mandateId, event, evidenceHash]).catch(plain);
+    },
     async revoke(entry) {
       checked(entry, REVOCATION);
       const rows = (await pool.query(`SELECT * FROM bank.revoke_credential($1)`, [JSON.stringify(entry)]).catch(plain)).rows;

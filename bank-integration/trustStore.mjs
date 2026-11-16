@@ -32,6 +32,10 @@ export function createTrustStore(pool) {
     async attachAuthorization(paymentId, authorizationId) {
       if (!(await one(`SELECT bank.attach_authorization($1, $2) AS ok`, [paymentId, authorizationId])).ok) throw new Error(`payment ${paymentId} already has an authorization`);
     },
+    /** The payment is a debit under the customer's signed mandate. */
+    async attachMandate(paymentId, mandateId) {
+      if (!(await one(`SELECT bank.attach_mandate($1, $2) AS ok`, [paymentId, mandateId])).ok) throw new Error(`payment ${paymentId} already has an authorization`);
+    },
     payment,
     async paymentForAuthorization(authorizationId) {
       return paymentView(await one(`SELECT * FROM bank.payments WHERE authorization_id = $1`, [authorizationId]));

@@ -34,6 +34,25 @@ export function evidenceMaker() {
         previousEvidenceHash: null, keys: { signingPublicKeyPem: pemOf(key) } });
       return { nexusId, credentialId, key, publicKeyPem: pemOf(key), fingerprint: signingKeyFingerprint(pemOf(key)), enrolment };
     },
+    /** The device signs a payment mandate (payment mandates v1); `termsOverride` changes what it signed. */
+    mandate(device, { mandateId, payee, currency, perPaymentLimitMinor, totalLimitMinor = null, frequency = 'MONTHLY', validFrom, validUntil, termsOverride = {} }) {
+      const now = Date.now();
+      const terms = canonicalJson({
+        protocol_version: '1', domain: 'NEXUS-SIGN/MANDATE', mandate_id: mandateId, nexus_id: device.nexusId, credential_id: device.credentialId,
+        mandate_reference: `M-${mandateId.slice(0, 8)}`, payee, currency, per_payment_limit_minor: perPaymentLimitMinor, total_limit_minor: totalLimitMinor,
+        frequency, valid_from: validFrom ?? new Date(now - 60_000).toISOString(), valid_until: validUntil ?? new Date(now + 365 * 864e5).toISOString(),
+        terms_version: '1', issued_at: new Date(now - 60_000).toISOString(), offer_expires_at: new Date(now + 864e5).toISOString(),
+        nonce: randomBytes(32).toString('hex'), ...termsOverride,
+      });
+      const sealedPayload = {
+        schemaVersion: '3', recordType: 'MANDATE', chainSequence: 2, nexusId: device.nexusId, credentialId: device.credentialId, sealKeyId,
+        previousEvidenceHash: device.enrolment.evidenceHash, enrolmentEvidenceHash: device.enrolment.evidenceHash,
+        mandateId, event: 'SIGNED', termsHash: sha256hex(terms), mandateReference: `M-${mandateId.slice(0, 8)}`, reason: 'SIGNED_BY_CUSTOMER',
+        occurredAt: new Date(now).toISOString(), signedTermsBase64: terms.toString('base64'), credentialPublicKeyPem: device.publicKeyPem,
+        signatureFormat: 'der', signatureAlgorithm: 'ES256', signature: sign('sha256', terms, { key: device.key.privateKey, dsaEncoding: 'der' }).toString('base64'),
+      };
+      return seal(sealedPayload, { mandateId, credentialEnrolment: device.enrolment });
+    },
     /** The device confirms these terms for this authorization. `signedOverride` changes what it signed. */
     confirm(device, { authorizationId, terms, signedOverride = {} }) {
       // A complete authorization object v1 (docs/protocol/authorization-protocol-v1.md), valid for two minutes from now.

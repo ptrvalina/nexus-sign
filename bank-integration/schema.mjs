@@ -67,7 +67,7 @@ export const DEFAULT_EXECUTION_WINDOW_SECONDS = 3600;
 /** Function signatures as PostgreSQL prints them (regprocedure). */
 export const FUNCTIONS = Object.freeze({
   boundary: [
-    'bank.create_payment(uuid,text,jsonb,uuid)', 'bank.attach_authorization(uuid,uuid)', 'bank.claim(uuid,integer)',
+    'bank.create_payment(uuid,text,jsonb,uuid)', 'bank.attach_authorization(uuid,uuid)', 'bank.attach_mandate(uuid,uuid)', 'bank.claim(uuid,integer)',
     'bank.approve(uuid,uuid,jsonb,integer)', 'bank.refuse(uuid,uuid,jsonb)', 'bank.hold(uuid,uuid,text,text[])',
     'bank.mark_unknown(uuid,uuid,text)', 'bank.mark_review(uuid,uuid,text)', 'bank.keep_head(character varying,integer,text)',
     'bank.add_finding(uuid,text,text,jsonb)',
@@ -76,7 +76,7 @@ export const FUNCTIONS = Object.freeze({
     'bank.submit_basis(uuid,uuid)', 'bank.submit(uuid,uuid)', 'bank.resubmit(uuid,uuid)', 'bank.gateway_refuse(uuid,uuid,text)',
     'bank.report(uuid,uuid,text,text,text)', 'bank.operation_for_lookup(uuid)', 'bank.restore_check(uuid)', 'bank.clear_restore_mark(uuid,uuid)',
   ],
-  registry: ['bank.approve_credential(jsonb,integer,text)', 'bank.revoke_credential(jsonb)'],
+  registry: ['bank.approve_credential(jsonb,integer,text)', 'bank.revoke_credential(jsonb)', 'bank.record_mandate_stop(uuid,text,text)'],
   operator: ['bank.resolve_review(uuid,text,text,text)'],
 });
 
@@ -155,6 +155,32 @@ CREATE TABLE IF NOT EXISTS bank.payments (
   terms JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK ((status = 'CREATED') = (authorization_id IS NULL))
+);
+-- A debit under a payment mandate: its basis is the customer's signed
+-- mandate (mandate_id), not a per-payment authorization.
+ALTER TABLE bank.payments ADD COLUMN IF NOT EXISTS mandate_id UUID;
+ALTER TABLE bank.payments DROP CONSTRAINT IF EXISTS payments_check;
+ALTER TABLE bank.payments DROP CONSTRAINT IF EXISTS payments_basis_check;
+ALTER TABLE bank.payments ADD CONSTRAINT payments_basis_check
+  CHECK ((status = 'CREATED') = (authorization_id IS NULL AND mandate_id IS NULL) AND (authorization_id IS NULL OR mandate_id IS NULL));
+-- Mandates the customer stopped (revoked, suspended without resume,
+-- withdrawn, expired), recorded by the registry role from sealed events the
+-- boundary verified; no debit is approved under a stopped mandate.
+CREATE TABLE IF NOT EXISTS bank.mandate_stops (
+  mandate_id UUID PRIMARY KEY,
+  event TEXT NOT NULL CHECK (event IN ('REVOKED', 'WITHDRAWN', 'EXPIRED', 'SUSPENDED')),
+  evidence_hash CHAR(64) NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- The bank's own count of debits approved per mandate and period: at most
+-- one per period, and the total limit, checked here and not only in Auth Core.
+CREATE TABLE IF NOT EXISTS bank.mandate_debits (
+  payment_id UUID PRIMARY KEY REFERENCES bank.payments (payment_id),
+  mandate_id UUID NOT NULL,
+  period_start DATE NOT NULL,
+  amount_minor NUMERIC(30,0) NOT NULL CHECK (amount_minor > 0),
+  approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (mandate_id, period_start)
 );
 CREATE TABLE IF NOT EXISTS bank.executions (
   payment_id UUID PRIMARY KEY REFERENCES bank.payments (payment_id),
@@ -270,6 +296,13 @@ CREATE OR REPLACE FUNCTION bank.window_problem(p_evidence JSONB) RETURNS TEXT
 LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
 DECLARE expires TIMESTAMPTZ; window_s INTEGER;
 BEGIN
+  IF p_evidence->'sealedPayload'->>'recordType' = 'MANDATE' THEN
+    -- A mandate debit may be executed while the signed mandate is valid.
+    expires := (convert_from(decode(p_evidence->'sealedPayload'->>'signedTermsBase64', 'base64'), 'UTF8')::jsonb->>'valid_until')::timestamptz;
+    IF expires IS NULL THEN RETURN 'the mandate validity cannot be determined'; END IF;
+    IF now() >= expires THEN RETURN format('the mandate expired at %s', expires); END IF;
+    RETURN NULL;
+  END IF;
   expires := (convert_from(decode(p_evidence->'sealedPayload'->>'signedPayloadBase64', 'base64'), 'UTF8')::jsonb->>'expires_at')::timestamptz;
   SELECT st.execution_window_seconds INTO window_s FROM bank.settings st;
   IF expires IS NULL OR window_s IS NULL THEN RETURN 'the execution window cannot be determined'; END IF;
@@ -279,6 +312,50 @@ BEGIN
   RETURN NULL;
 EXCEPTION WHEN OTHERS THEN
   RETURN 'the execution window cannot be determined';
+END $$;
+
+-- A debit under a payment mandate: the evidence must be the sealed SIGNED
+-- event of the mandate the payment names, its terms (the bytes the customer's
+-- device signed, domain NEXUS-SIGN/MANDATE) must cover this payment: same
+-- customer, payee and currency, amount within the per-payment limit, inside
+-- the validity, the mandate not stopped. The period and total limits are
+-- checked against bank.mandate_debits in bank.approve.
+CREATE OR REPLACE FUNCTION bank.mandate_problem(p_payment UUID, p_evidence JSONB) RETURNS TEXT
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
+DECLARE pay bank.payments%ROWTYPE; sealed JSONB; terms_bytes BYTEA; terms JSONB;
+BEGIN
+  SELECT * INTO pay FROM bank.payments p WHERE p.payment_id = p_payment;
+  sealed := p_evidence->'sealedPayload';
+  IF jsonb_typeof(sealed) IS DISTINCT FROM 'object' OR sealed->>'schemaVersion' IS DISTINCT FROM '3' OR sealed->>'recordType' IS DISTINCT FROM 'MANDATE'
+     OR sealed->>'event' IS DISTINCT FROM 'SIGNED' THEN
+    RETURN 'the evidence is not the signed event of a mandate';
+  END IF;
+  IF pay.mandate_id IS NULL OR sealed->>'mandateId' IS DISTINCT FROM pay.mandate_id::text THEN RETURN 'the evidence is for another mandate'; END IF;
+  IF coalesce(p_evidence->>'evidenceHash', '') !~ '^[0-9a-f]{64}$' THEN RETURN 'the evidence has no evidence hash'; END IF;
+  IF EXISTS (SELECT 1 FROM bank.mandate_stops m WHERE m.mandate_id = pay.mandate_id) THEN RETURN 'the customer''s mandate was stopped'; END IF;
+  BEGIN
+    terms_bytes := decode(sealed->>'signedTermsBase64', 'base64');
+    terms := convert_from(terms_bytes, 'UTF8')::jsonb;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN 'the mandate terms are not readable';
+  END;
+  IF terms_bytes IS NULL OR encode(sha256(terms_bytes), 'hex') IS DISTINCT FROM sealed->>'termsHash' THEN RETURN 'the mandate terms do not match termsHash'; END IF;
+  IF terms->>'domain' IS DISTINCT FROM 'NEXUS-SIGN/MANDATE' OR terms->>'mandate_id' IS DISTINCT FROM pay.mandate_id::text
+     OR terms->>'credential_id' IS DISTINCT FROM sealed->>'credentialId' THEN
+    RETURN 'the signed bytes are not the terms of this mandate';
+  END IF;
+  IF terms->>'nexus_id' IS DISTINCT FROM pay.terms->>'nexusId' THEN RETURN 'the mandate is another customer''s'; END IF;
+  IF terms->'payee' IS DISTINCT FROM pay.terms->'beneficiary' OR terms->>'currency' IS DISTINCT FROM pay.terms->>'currency' THEN
+    RETURN 'the payment''s payee or currency is not the mandate''s';
+  END IF;
+  IF coalesce(terms->>'per_payment_limit_minor', '') !~ '^[1-9][0-9]{0,29}$'
+     OR (pay.terms->>'amountMinor')::numeric > (terms->>'per_payment_limit_minor')::numeric THEN
+    RETURN 'the amount is above the mandate''s limit per payment';
+  END IF;
+  IF now() < (terms->>'valid_from')::timestamptz OR now() >= (terms->>'valid_until')::timestamptz THEN RETURN 'the mandate is not valid now'; END IF;
+  RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
+  RETURN 'the mandate terms cannot be checked';
 END $$;
 
 -- The customer's part, verified here and not only in a service process:
@@ -383,7 +460,8 @@ BEGIN
   IF NEW.terms IS DISTINCT FROM OLD.terms OR NEW.bank_transaction_reference IS DISTINCT FROM OLD.bank_transaction_reference OR NEW.payment_id IS DISTINCT FROM OLD.payment_id THEN
     RAISE EXCEPTION 'payment % : terms and reference are immutable', OLD.payment_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
-  IF OLD.authorization_id IS NOT NULL AND NEW.authorization_id IS DISTINCT FROM OLD.authorization_id THEN
+  IF (OLD.authorization_id IS NOT NULL AND NEW.authorization_id IS DISTINCT FROM OLD.authorization_id)
+     OR (OLD.mandate_id IS NOT NULL AND NEW.mandate_id IS DISTINCT FROM OLD.mandate_id) THEN
     RAISE EXCEPTION 'payment % : the authorization is attached once', OLD.payment_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
   IF NOT (OLD.status = NEW.status OR (OLD.status = 'CREATED' AND NEW.status = 'AWAITING_AUTHORIZATION')) THEN
@@ -440,6 +518,10 @@ DROP TRIGGER IF EXISTS verified_statements_append_only ON bank.verified_statemen
 CREATE TRIGGER verified_statements_append_only BEFORE UPDATE OR DELETE ON bank.verified_statements FOR EACH ROW EXECUTE FUNCTION bank.append_only();
 DROP TRIGGER IF EXISTS restore_marks_no_delete ON bank.restore_marks;
 CREATE TRIGGER restore_marks_no_delete BEFORE DELETE ON bank.restore_marks FOR EACH ROW EXECUTE FUNCTION bank.append_only();
+DROP TRIGGER IF EXISTS mandate_stops_append_only ON bank.mandate_stops;
+CREATE TRIGGER mandate_stops_append_only BEFORE UPDATE OR DELETE ON bank.mandate_stops FOR EACH ROW EXECUTE FUNCTION bank.append_only();
+DROP TRIGGER IF EXISTS mandate_debits_append_only ON bank.mandate_debits;
+CREATE TRIGGER mandate_debits_append_only BEFORE UPDATE OR DELETE ON bank.mandate_debits FOR EACH ROW EXECUTE FUNCTION bank.append_only();
 CREATE OR REPLACE FUNCTION bank.restore_mark_clear_once() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF NEW.payment_id IS DISTINCT FROM OLD.payment_id OR NEW.marked_at IS DISTINCT FROM OLD.marked_at OR OLD.cleared_at IS NOT NULL THEN
@@ -494,6 +576,29 @@ BEGIN
   RETURN n = 1;
 END $$;
 
+-- The payment is a debit under the customer's mandate p_mandate.
+CREATE OR REPLACE FUNCTION bank.attach_mandate(p_payment UUID, p_mandate UUID) RETURNS BOOLEAN
+LANGUAGE plpgsql ${DEFINER} AS $$
+DECLARE n INTEGER;
+BEGIN
+  UPDATE bank.payments p SET status = 'AWAITING_AUTHORIZATION', mandate_id = p_mandate
+   WHERE p.payment_id = p_payment AND p.status = 'CREATED' AND p_mandate IS NOT NULL;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n = 1;
+END $$;
+
+-- The registry records that a mandate was stopped, from a sealed event the
+-- boundary verified (HSM seal, chain). Once stopped, no debit is approved.
+CREATE OR REPLACE FUNCTION bank.record_mandate_stop(p_mandate UUID, p_event TEXT, p_evidence_hash TEXT) RETURNS BOOLEAN
+LANGUAGE plpgsql ${DEFINER} AS $$
+BEGIN
+  IF p_mandate IS NULL OR p_event NOT IN ('REVOKED', 'WITHDRAWN', 'EXPIRED', 'SUSPENDED') OR coalesce(p_evidence_hash, '') !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'not a mandate stop' USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  INSERT INTO bank.mandate_stops (mandate_id, event, evidence_hash) VALUES (p_mandate, p_event, p_evidence_hash) ON CONFLICT (mandate_id) DO NOTHING;
+  RETURN true;
+END $$;
+
 -- Takes the payment for one attempt (see trustStore.claim for the outcomes).
 CREATE OR REPLACE FUNCTION bank.claim(p_payment UUID, p_lease_ms INTEGER) RETURNS TABLE (outcome TEXT, attempt UUID)
 LANGUAGE plpgsql ${DEFINER} AS $$
@@ -539,6 +644,7 @@ RETURNS TABLE (ok BOOLEAN, lost BOOLEAN, reason TEXT)
 LANGUAGE plpgsql ${DEFINER} AS $$
 DECLARE
   ex bank.executions%ROWTYPE; pay bank.payments%ROWTYPE; tr bank.credential_trust%ROWTYPE; problem TEXT; cred UUID;
+  signed_evidence JSONB; terms JSONB; period DATE;
 BEGIN
   ${LEASE}
   SELECT * INTO ex FROM bank.executions e WHERE e.payment_id = p_payment FOR UPDATE;
@@ -546,17 +652,44 @@ BEGIN
     RETURN QUERY SELECT false, true, 'the claim was lost (lease expired or taken over)'::text; RETURN;
   END IF;
   SELECT * INTO pay FROM bank.payments p WHERE p.payment_id = p_payment;
-  problem := bank.evidence_problem(p_payment, p_evidence);
-  IF problem IS NOT NULL THEN RETURN QUERY SELECT false, false, problem; RETURN; END IF;
+  IF pay.mandate_id IS NOT NULL THEN
+    problem := bank.mandate_problem(p_payment, p_evidence);
+    IF problem IS NOT NULL THEN RETURN QUERY SELECT false, false, problem; RETURN; END IF;
+    -- The device signature over the mandate terms is checked below like a
+    -- payment signature: the terms stand in for the signed payment bytes.
+    signed_evidence := jsonb_set(p_evidence, '{sealedPayload,signedPayloadBase64}', p_evidence->'sealedPayload'->'signedTermsBase64');
+  ELSE
+    problem := bank.evidence_problem(p_payment, p_evidence);
+    IF problem IS NOT NULL THEN RETURN QUERY SELECT false, false, problem; RETURN; END IF;
+    signed_evidence := p_evidence;
+  END IF;
   cred := (p_evidence->'sealedPayload'->>'credentialId')::uuid;
   SELECT * INTO tr FROM bank.credential_trust t WHERE t.credential_id = cred FOR SHARE;
   IF NOT FOUND THEN RETURN QUERY SELECT false, false, format('credential %s is not in the bank''s registry', cred); RETURN; END IF;
   IF tr.nexus_id IS DISTINCT FROM pay.terms->>'nexusId' THEN RETURN QUERY SELECT false, false, format('credential %s is approved for another customer', cred); RETURN; END IF;
   IF tr.state <> 'APPROVED' THEN RETURN QUERY SELECT false, false, format('credential %s was revoked by the bank', cred); RETURN; END IF;
-  problem := bank.device_signature_problem(p_evidence, tr.nexus_id);
+  problem := bank.device_signature_problem(signed_evidence, tr.nexus_id);
   IF problem IS NOT NULL THEN RETURN QUERY SELECT false, false, problem; RETURN; END IF;
   problem := bank.window_problem(p_evidence);
   IF problem IS NOT NULL THEN RETURN QUERY SELECT false, false, problem; RETURN; END IF;
+  IF pay.mandate_id IS NOT NULL THEN
+    -- One debit per period and the total limit, counted by the bank; the row
+    -- is kept for this payment (a retry of the same payment reuses it).
+    terms := convert_from(decode(p_evidence->'sealedPayload'->>'signedTermsBase64', 'base64'), 'UTF8')::jsonb;
+    period := date_trunc(CASE terms->>'frequency' WHEN 'WEEKLY' THEN 'week' WHEN 'MONTHLY' THEN 'month' WHEN 'QUARTERLY' THEN 'quarter' ELSE 'year' END,
+                         now() AT TIME ZONE 'UTC')::date;
+    PERFORM 1 FROM bank.payments p WHERE p.mandate_id = pay.mandate_id ORDER BY p.payment_id FOR UPDATE;
+    IF NOT EXISTS (SELECT 1 FROM bank.mandate_debits d WHERE d.payment_id = p_payment) THEN
+      IF EXISTS (SELECT 1 FROM bank.mandate_debits d WHERE d.mandate_id = pay.mandate_id AND d.period_start = period) THEN
+        RETURN QUERY SELECT false, false, 'a debit under this mandate was already approved in this period'::text; RETURN;
+      END IF;
+      IF terms->>'total_limit_minor' IS NOT NULL AND (SELECT coalesce(sum(d.amount_minor), 0) FROM bank.mandate_debits d WHERE d.mandate_id = pay.mandate_id)
+           + (pay.terms->>'amountMinor')::numeric > (terms->>'total_limit_minor')::numeric THEN
+        RETURN QUERY SELECT false, false, 'the debit is above the mandate''s total limit'::text; RETURN;
+      END IF;
+      INSERT INTO bank.mandate_debits (payment_id, mandate_id, period_start, amount_minor) VALUES (p_payment, pay.mandate_id, period, (pay.terms->>'amountMinor')::numeric);
+    END IF;
+  END IF;
   PERFORM bank.via('approve');
   UPDATE bank.executions e SET state = 'APPROVED', credential_id = cred, approval_evidence = p_evidence,
          approval_registry_id = (SELECT max(s.id) FROM bank.trust_statements s WHERE s.nexus_id = tr.nexus_id),
