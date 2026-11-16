@@ -1,6 +1,7 @@
 // SoftHSM2 tokens for HSM integration tests. Needs SOFTHSM2_MODULE (path of
 // libsofthsm2.so) and SOFTHSM2_UTIL (path of softhsm2-util); without them the
 // HSM suites are skipped.
+import { requiredOrSkip } from './harness.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -40,10 +41,10 @@ function softHsmSupportsEcdsaSha256() {
   return run.stdout.trim() !== 'no'; // only a definite "no" disables the suite
 }
 
-export const skipWithoutSoftHsm = !(SOFTHSM_MODULE && SOFTHSM_UTIL)
+export const skipWithoutSoftHsm = requiredOrSkip(!(SOFTHSM_MODULE && SOFTHSM_UTIL)
   ? 'SOFTHSM2_MODULE and SOFTHSM2_UTIL are not set'
   : (softHsmSupportsEcdsaSha256() ? false
-    : 'this SoftHSM build does not implement CKM_ECDSA_SHA256, which Auth Core uses to sign evidence; build SoftHSM 2.7+ against OpenSSL, or run these tests against a real HSM');
+    : 'this SoftHSM build does not implement CKM_ECDSA_SHA256, which Auth Core uses to sign evidence; build SoftHSM 2.7+ against OpenSSL, or run these tests against a real HSM'));
 
 /** One SoftHSM configuration directory; tokens created in it share SOFTHSM2_CONF. */
 export function softHsmDirectory() {

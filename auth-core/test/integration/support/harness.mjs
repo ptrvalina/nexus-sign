@@ -22,10 +22,21 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..',
 const ADMIN_DB_URL = process.env.INTEGRATION_DATABASE_URL;
 const REDIS_URL = process.env.INTEGRATION_REDIS_URL;
 
+/**
+ * With REQUIRE_ALL_INTEGRATION_SUITES=1 (set in CI) a missing service is a
+ * failure, not a skip: a required suite must never pass by not running.
+ */
+export function requiredOrSkip(reason) {
+  if (reason && process.env.REQUIRE_ALL_INTEGRATION_SUITES === '1') {
+    throw new Error(`Required integration suite cannot run: ${reason} (REQUIRE_ALL_INTEGRATION_SUITES=1)`);
+  }
+  return reason;
+}
+
 /** node:test `skip` option for suites that need PostgreSQL and Redis. */
-export const skipWithoutServices = ADMIN_DB_URL && REDIS_URL
+export const skipWithoutServices = requiredOrSkip(ADMIN_DB_URL && REDIS_URL
   ? false
-  : 'INTEGRATION_DATABASE_URL and INTEGRATION_REDIS_URL are not set';
+  : 'INTEGRATION_DATABASE_URL and INTEGRATION_REDIS_URL are not set');
 
 let redisDbCounter = 1;
 

@@ -76,6 +76,8 @@ jobs:
       INTEGRATION_REDIS_URL: redis://localhost:6379
       SOFTHSM2_MODULE: /usr/lib/softhsm/libsofthsm2.so
       SOFTHSM2_UTIL: /usr/bin/softhsm2-util
+      # A suite that cannot run (no PostgreSQL, Redis or SoftHSM) fails the job instead of skipping.
+      REQUIRE_ALL_INTEGRATION_SUITES: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: SoftHSM (PKCS#11 adapter tests)
