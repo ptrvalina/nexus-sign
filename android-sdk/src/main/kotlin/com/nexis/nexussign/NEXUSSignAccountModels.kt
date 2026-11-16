@@ -91,37 +91,6 @@ data class NexusMandate(
     val usedTotalMinor: String,
 )
 
-/** The mandate terms as signed, parsed and checked by the SDK. */
-data class NexusMandateTerms(
-    val mandateId: String,
-    val nexusId: String,
-    val credentialId: String,
-    val mandateReference: String,
-    val payee: Map<String, String>,
-    val currency: String,
-    val perPaymentLimitMinor: String,
-    val totalLimitMinor: String?,
-    val frequency: String,
-    val validFrom: String,
-    val validUntil: String,
-    val termsVersion: String,
-    val offerExpiresAt: String,
-) {
-    /** The text of the biometric prompt, built from the signed terms only. */
-    fun confirmationText(): String {
-        val digits = SignedPayload.fractionDigits(currency)
-        val lines = mutableListOf(
-            "Recurring payments to",
-            payee.keys.sorted().joinToString("\n") { "$it: ${payee.getValue(it)}" },
-            "Up to ${SignedPayload.formatMinorUnits(perPaymentLimitMinor, digits)} $currency per payment, ${frequency.lowercase()}",
-        )
-        totalLimitMinor?.let { lines += "At most ${SignedPayload.formatMinorUnits(it, digits)} $currency in total" }
-        lines += "Valid $validFrom – $validUntil"
-        lines += "Mandate $mandateReference, conditions $termsVersion"
-        return lines.joinToString("\n")
-    }
-}
-
 @Serializable
 data class NexusConversationAttachment(val reference: String, val sha256: String, val mediaType: String, val fileName: String, val sizeBytes: Int)
 

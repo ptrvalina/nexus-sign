@@ -567,31 +567,12 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      * shown value, SHA-256 equal to termsHash.
      */
     fun mandateTerms(mandate: NexusMandate): NexusMandateTerms {
-        fun invalid(reason: String, detail: String) = NEXUSSignError.AuthorizationPayloadInvalid(reason, detail)
-        val bytes = try { Base64.getDecoder().decode(mandate.termsBase64) } catch (e: IllegalArgumentException) { throw invalid("invalid_json", "termsBase64") }
-        val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-        if (hash != mandate.termsHash) throw invalid("hash_mismatch", "termsHash")
-        val o = try { accountJson.parseToJsonElement(String(bytes, Charsets.UTF_8)) as JsonObject } catch (e: Exception) { throw invalid("invalid_json", "terms") }
-        fun field(key: String): String? = (o[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        fun text(key: String): String {
-            val v = field(key) ?: throw invalid("missing", key)
-            if (key !in setOf("valid_from", "valid_until", "offer_expires_at") && SignedPayload.displayTextViolation(v) != null) throw invalid("display", key)
-            return v
-        }
-        if (field("domain") != "NEXUS-SIGN/MANDATE" || field("protocol_version") != "1") throw invalid("wrong_domain", "not mandate terms")
-        if (field("mandate_id") != mandate.mandateId) throw invalid("mismatch", "mandate_id")
         val credentialId = state.registeredCredentialId() ?: throw NEXUSSignError.NotRegistered
-        if (field("credential_id") != credentialId) throw invalid("wrong_device", "the mandate is for another device")
-        val payeeObject = o["payee"] as? JsonObject ?: throw invalid("missing", "payee")
-        val payee = payeeObject.mapValues { (k, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { SignedPayload.displayTextViolation(it) == null } ?: throw invalid("display", "payee.$k") }
-        if (payee.isEmpty()) throw invalid("missing", "payee")
-        payee["iban"]?.let { if (!SignedPayload.isValidIban(it)) throw invalid("iban", "payee.iban") }
-        return NexusMandateTerms(
-            mandateId = mandate.mandateId, nexusId = text("nexus_id"), credentialId = credentialId, mandateReference = text("mandate_reference"),
-            payee = payee, currency = text("currency"), perPaymentLimitMinor = text("per_payment_limit_minor"), totalLimitMinor = field("total_limit_minor"),
-            frequency = text("frequency"), validFrom = text("valid_from"), validUntil = text("valid_until"), termsVersion = text("terms_version"),
-            offerExpiresAt = text("offer_expires_at"),
-        )
+        return try {
+            MandateTermsParser.parse(mandate.termsBase64, mandate.termsHash, mandate.mandateId, credentialId)
+        } catch (e: SignedPayload.Rejected) {
+            throw NEXUSSignError.AuthorizationPayloadInvalid(e.reason, e.message ?: e.reason)
+        }
     }
 
     /** Signs the mandate after biometric authentication, with the prompt built from the signed terms. */

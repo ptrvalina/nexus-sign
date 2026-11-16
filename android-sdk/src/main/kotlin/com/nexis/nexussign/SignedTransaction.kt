@@ -107,6 +107,17 @@ internal object SignedPayload {
 
     class Rejected(val reason: String, detail: String) : Exception("$reason: $detail")
 
+    /**
+     * Strict UTF-8, JSON, and canonical form (the bytes re-encode to
+     * themselves). Shared by payment and mandate terms parsing.
+     */
+    fun parseCanonicalObject(canonical: ByteArray, allowNull: Boolean = false): Map<*, *> {
+        val text = decodeUtf8Strict(canonical)
+        val obj = JsonReader(text, allowNull).readDocument() as? Map<*, *> ?: throw Rejected("invalid_json", "top level is not an object")
+        if (!encode(obj).contentEquals(canonical)) throw Rejected("not_canonical", "bytes are not in canonical form")
+        return obj
+    }
+
     fun parse(canonical: ByteArray): NexusSignedTransaction {
         val text = decodeUtf8Strict(canonical)
         val parsed = JsonReader(text).readDocument()
@@ -298,6 +309,7 @@ internal object SignedPayload {
     private fun write(out: StringBuilder, value: Any?) {
         when (value) {
             is String -> writeString(out, value)
+            JsonNull -> out.append("null")
             is Map<*, *> -> {
                 out.append('{')
                 // String.compareTo orders by UTF-16 code units, like Array.prototype.sort().
@@ -341,10 +353,14 @@ internal object SignedPayload {
         throw Rejected("invalid_json", "payload is not valid UTF-8")
     }
 
+    /** JSON null, accepted only where a protocol allows it (mandate terms:
+     * total_limit_minor). Payment bytes never contain it. */
+    object JsonNull
+
     /** Minimal RFC 8259 reader limited to objects and strings (the only types
-     * the v1 protocol uses). Numbers, arrays, booleans and null are rejected;
-     * duplicate keys are rejected explicitly. */
-    private class JsonReader(private val s: String) {
+     * the v1 protocol uses), and null when [allowNull]. Numbers, arrays and
+     * booleans are rejected; duplicate keys are rejected explicitly. */
+    private class JsonReader(private val s: String, private val allowNull: Boolean = false) {
         private var i = 0
         private var depth = 0
 
@@ -360,6 +376,7 @@ internal object SignedPayload {
             '{' -> readObject()
             '"' -> readString()
             '[' -> throw Rejected("invalid_json", "arrays are not allowed")
+            'n' -> if (allowNull && s.startsWith("null", i)) { i += 4; JsonNull } else throw Rejected("invalid_value", "only strings and objects are allowed")
             null -> throw Rejected("invalid_json", "unexpected end of input")
             else -> throw Rejected("invalid_value", "only strings and objects are allowed")
         }

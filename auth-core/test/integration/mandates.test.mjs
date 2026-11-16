@@ -9,6 +9,7 @@ import { generateKeyPairSync, randomBytes, randomUUID, sign } from 'node:crypto'
 import pg from 'pg';
 import { createDatabase, skipWithoutServices } from './support/harness.mjs';
 import { loadTs } from '../support/load-ts.mjs';
+import { readFileSync } from 'node:fs';
 import { verifyEvidenceChain } from '../../scripts/lib/evidence.mjs';
 
 class Metric { inc() {} observe() {} set() {} labels() { return this; } startTimer() { return () => {}; } }
@@ -31,6 +32,7 @@ describe('payment mandates (PostgreSQL)', { skip: skipWithoutServices }, () => {
       mandates: loadTs('services/mandateService.ts', { stubs, cache }),
       requests: loadTs('services/deviceReplacementService.ts', { stubs, cache }),
       evidence: loadTs('services/evidenceService.ts', { stubs, cache }),
+      canonical: loadTs('services/canonicalAuthorization.ts', { stubs, cache }),
       db: loadTs('db/pool.ts', { stubs, cache }),
     };
     const { SoftwareHsmAdapter } = loadTs('crypto/softwareHsmAdapter.ts', { stubs, cache });
@@ -214,5 +216,17 @@ describe('payment mandates (PostgreSQL)', { skip: skipWithoutServices }, () => {
     await assert.rejects(propose(c, { totalLimitMinor: '100' }), /not below perPaymentLimitMinor/);
     const m = await propose(c);
     await assert.rejects(propose(c, { mandateReference: m.mandateReference }), /exists for this bank client/);
+  });
+  test('Auth Core encodes mandate terms to the bytes of the shared vectors (the SDKs parse the same file)', () => {
+    const vectors = JSON.parse(readFileSync(new URL('../../test-vectors/mandate-terms-v1.json', import.meta.url), 'utf8'));
+    for (const v of vectors.valid) {
+      const e = v.expected;
+      const bytes = s.canonical.canonicalJson(s.mandates.mandateTermsObject({
+        mandateId: e.mandate_id, nexusId: e.nexus_id, credentialId: e.credential_id, mandateReference: e.mandate_reference, payee: e.payee,
+        currency: e.currency, perPaymentLimitMinor: e.per_payment_limit_minor, totalLimitMinor: e.total_limit_minor, frequency: e.frequency,
+        validFrom: e.valid_from, validUntil: e.valid_until, termsVersion: e.terms_version, issuedAt: e.issued_at, offerExpiresAt: e.offer_expires_at, nonce: e.nonce,
+      }));
+      assert.equal(Buffer.from(bytes).toString('base64'), v.termsBase64, v.name);
+    }
   });
 });
