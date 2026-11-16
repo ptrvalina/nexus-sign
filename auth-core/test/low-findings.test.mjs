@@ -50,3 +50,27 @@ test('Production refuses an APNs DEVELOPMENT registration', async () => {
   // Outside production the request gets past validation (and stops at the stubbed database).
   await assert.rejects(load('development').registerPushDevice(device, input), (error) => !/DEVELOPMENT/.test(error.message));
 });
+
+test('A failed ROLLBACK keeps the original error and destroys the connection (A1-08)', async () => {
+  const { withTransaction } = loadTs('db/pool.ts', { stubs: { pg: { Pool: class { connect() {} } }, ...envStub() } });
+  const fakeSource = (rollbackFails) => {
+    const released = [];
+    const client = {
+      async query(sql) { if (sql === 'ROLLBACK' && rollbackFails) throw new Error('connection terminated'); },
+      release(error) { released.push(error); },
+    };
+    return { released, source: { connect: async () => client } };
+  };
+  const work = async () => { throw new Error('unique violation'); };
+
+  const broken = fakeSource(true);
+  await assert.rejects(withTransaction(work, broken.source), /unique violation/);
+  assert.equal(broken.released.length, 1);
+  assert.match(String(broken.released[0]), /connection terminated/, 'the client is released with the error, so pg destroys it');
+
+  const healthy = fakeSource(false);
+  await assert.rejects(withTransaction(work, healthy.source), /unique violation/);
+  assert.deepEqual(healthy.released, [undefined], 'after a clean rollback the client goes back to the pool');
+
+  assert.equal(await withTransaction(async () => 42, fakeSource(false).source), 42);
+});
