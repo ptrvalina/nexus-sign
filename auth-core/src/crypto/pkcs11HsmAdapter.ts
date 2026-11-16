@@ -16,10 +16,20 @@ import { env } from '../config/env';
  *   choice. The private key must be sensitive, non-extractable and a P-256
  *   signing key; the public key with the same label and ID must belong to it
  *   (checked by the self-test).
- * - Sign and verify run on a pool of logged-in sessions through the async
- *   pkcs11js calls, so the event loop is never blocked by the HSM, and every
- *   operation has a deadline (HSM_OPERATION_TIMEOUT_MS). A session whose
- *   operation timed out is never reused; it is closed once the call returns.
+ * - Sign and verify run on a pool of logged-in sessions. C_SignAsync and
+ *   C_VerifyAsync run on libuv worker threads; every operation has a deadline
+ *   (HSM_OPERATION_TIMEOUT_MS) that starts before its first PKCS#11 call. A
+ *   session whose operation timed out is never reused; it is closed once the
+ *   call returns.
+ * - Not bounded (audit finding B-01, open): pkcs11js has no asynchronous form
+ *   of C_OpenSession, C_Login, C_FindObjects*, C_GetAttributeValue,
+ *   C_SignInit, C_VerifyInit, C_CreateObject or C_DestroyObject. They run on
+ *   the main thread, and an HSM that stalls in one of them blocks the event
+ *   loop for as long as the vendor library waits. To keep the common path
+ *   free of the slowest ones, healthCheck() (run at startup and by the
+ *   readiness probe) fills the pool, so requests open a session only after
+ *   one was retired. Moving the module into a worker thread is the complete
+ *   fix and is not done.
  * - A lost session (HSM restart, failover) is discarded and the operation is
  *   retried once on a new session; a module that lost its initialisation is
  *   finalised and initialised again. Nothing falls back to software keys.
@@ -150,6 +160,7 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   /** Signs a probe and checks it with the published public key, so a wrong
    * key pairing or an unusable token is found before traffic arrives. */
   async healthCheck(): Promise<void> {
+    this.fillPool();
     const probe = createHash('sha256').update('NEXUS-SIGN-HSM-HEALTH-CHECK').digest();
     const { signature } = await this.signEvidence(probe);
     if (!cryptoVerify('sha256', probe, { key: await this.evidencePublicKeyPem(), dsaEncoding: 'der' }, signature)) {
@@ -180,10 +191,20 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   private async run<T>(operation: string, work: (session: PooledSession) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt += 1) {
       const session = await this.acquire();
+      // The deadline starts before work() runs: its synchronous PKCS#11 calls
+      // (C_SignInit, C_CreateObject, ...) count against it. A timer cannot
+      // fire while they block the thread, so the time they took is measured.
+      const started = Date.now();
       const pending = work(session);
+      const remaining = this.options.operationTimeoutMs - (Date.now() - started);
+      if (remaining <= 0) {
+        pending.catch(() => { /* the session is retired either way */ });
+        this.retire(session, pending);
+        throw new HsmTimeoutError(operation, this.options.operationTimeoutMs);
+      }
       let timer: NodeJS.Timeout | undefined;
       const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new HsmTimeoutError(operation, this.options.operationTimeoutMs)), this.options.operationTimeoutMs);
+        timer = setTimeout(() => reject(new HsmTimeoutError(operation, this.options.operationTimeoutMs)), remaining);
       });
       try {
         const result = await Promise.race([pending, deadline]);
@@ -239,6 +260,20 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
       waiter.reject = (error) => { clearTimeout(timer); reject(error); };
       this.waiting.push(waiter);
     });
+  }
+
+  /** Opens idle sessions up to the pool size (synchronous PKCS#11 calls),
+   * so request paths reuse them instead of opening one. */
+  private fillPool(): void {
+    while (!this.closed && this.openSessions < this.options.poolSize && this.stuckCalls === 0) {
+      this.openSessions += 1;
+      try {
+        this.release(this.openSession());
+      } catch (error) {
+        this.openSessions -= 1;
+        throw error;
+      }
+    }
   }
 
   private release(session: PooledSession): void {
