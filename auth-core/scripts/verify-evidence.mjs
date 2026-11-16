@@ -4,7 +4,7 @@
 // (sealed enrolment), and the customer's device signature over the exact
 // transaction bytes.
 //
-//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>] [--reject-offline-code]
+//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>] [--reject-offline-code] [--allow-unchecked-head]
 //
 // <export.json> is the response of either
 //   GET /v1/authorizations/{id}/evidence        (one record with its enrolment)
@@ -12,7 +12,13 @@
 // Both include the evidence public keys; for an audit, pass keys obtained out
 // of band with --public-keys (one or more PEM public keys in one file).
 // Exit codes: 0 valid against the given keys, 1 invalid, 2 usage error,
-// 3 consistent only with the keys inside the export (no --public-keys).
+// 3 consistent only with the keys inside the export (no --public-keys),
+// 4 a chain valid against the given keys whose end was not checked against
+// a head the bank kept (no --expect-head or --heads): records removed from
+// the end would not be noticed. --allow-unchecked-head turns 4 into 0 for
+// callers that check the end themselves.
+// An empty chain export is invalid, and so is one that ends before the
+// `head` the export itself names (a page or a truncated export).
 // --expect-head is the chainSequence and evidenceHash the bank received with
 // its latest confirmation: records removed after it are then detected.
 // --heads is a file of the heads the bank kept from `evidence.appended`
@@ -24,7 +30,7 @@ import { describeSignedTransaction, legacyRecords, verifyEvidenceChain, verifyEv
 const args = process.argv.slice(2);
 const file = args.find((a) => !a.startsWith('--'));
 if (!file) {
-  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>] [--reject-offline-code]');
+  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>] [--reject-offline-code] [--allow-unchecked-head]');
   process.exit(2);
 }
 const option = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -62,8 +68,10 @@ if (headsFile) {
 // v1, a code only); for banks that accept offline payments only with the
 // device's deferred signature (OFFLINE_SIGNED).
 const rejectOfflineCode = args.includes('--reject-offline-code');
+const allowUncheckedHead = args.includes('--allow-unchecked-head');
 const problems = isChain ? verifyEvidenceChain(records, keys, { expectedHead, rejectOfflineCode }) : verifyEvidenceRecord(exported, keys, { standalone: true, rejectOfflineCode });
 if (heads.length > 0) problems.push(...verifyRetainedHeads(records, heads, keys));
+if (isChain) problems.push(...exportCompleteness(exported));
 if (problems.length > 0) {
   for (const p of problems) console.error(`INVALID  ${p}`);
   process.exit(1);
@@ -88,4 +96,22 @@ const pinned = Boolean(keyFile);
 if (!pinned) console.error('WARNING  seals were checked against the public keys inside the export; pass --public-keys with keys obtained out of band for an independent check');
 console.log(`${pinned ? 'EVIDENCE_VALID' : 'EVIDENCE_SELF_CONSISTENT'} records=${records.length} hsm_seal=${pinned ? 'verified' : 'verified_with_export_keys'} ${signatures}${isChain ? ' chain=linked' : ''}`
   + `${heads.length > 0 ? ` heads=${heads.length}_matched` : ''}${expectedHead ? ' head=matched' : isChain && heads.length === 0 ? ' head=not_checked' : ''}${legacy ? ` legacy_records=${legacy} (sealed before schema 3: no key provenance)` : ''}`);
+const headUnchecked = isChain && !expectedHead && heads.length === 0;
 if (!pinned) process.exitCode = 3;
+else if (headUnchecked && !allowUncheckedHead) {
+  console.error('WARNING  the end of the chain was not checked: pass --expect-head or --heads with a head the bank kept, or --allow-unchecked-head');
+  process.exitCode = 4;
+}
+
+/** An empty chain, or one that ends before the export's own head, is not a whole chain. */
+function exportCompleteness(chain) {
+  if (chain.records.length === 0) return ['the export contains no records'];
+  const head = chain.head;
+  if (head === undefined || head === null) return [];
+  if (!Number.isInteger(head.chainSequence)) return ['the export\'s head is malformed'];
+  const last = Math.max(...chain.records.map((r) => Number(r.chainSequence)));
+  if (head.chainSequence > last) return [`records missing at the end of the chain: the export names head ${head.chainSequence} but ends at ${last} (a page or a truncated export)`];
+  const record = chain.records.find((r) => Number(r.chainSequence) === head.chainSequence);
+  if (record && head.evidenceHash !== undefined && record.evidenceHash !== head.evidenceHash) return [`record ${head.chainSequence} differs from the export's head`];
+  return [];
+}

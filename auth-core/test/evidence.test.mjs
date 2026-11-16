@@ -231,3 +231,33 @@ test('the verifier trusts only keys passed out of band: exit 0 with --public-key
   assert.match(selfConsistent.stderr, /WARNING/);
   assert.equal(verify(`--public-keys=${join(dir, 'other.pem')}`).status, 1, 'a key not used by the HSM makes the chain invalid');
 });
+
+test('the verifier does not call a chain valid when its end was not checked (audit B-05)', async () => {
+  const hsm = new SoftwareHsmAdapter();
+  const records = await chainV3(hsm);
+  const key = await hsm.evidencePublicKeyPem();
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-verify-head-'));
+  writeFileSync(join(dir, 'keys.pem'), key);
+  const run = (exported, ...extra) => {
+    const file = join(dir, `e-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(file, JSON.stringify({ nexusId: '123456789', evidencePublicKeys: [key], ...exported }));
+    return spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-evidence.mjs', import.meta.url)), file, `--public-keys=${join(dir, 'keys.pem')}`, ...extra], { encoding: 'utf8' });
+  };
+  const head = { chainSequence: 3, evidenceHash: records[2].evidenceHash };
+  // Whole chain, no head the bank kept: valid seals, but exit 4, not 0.
+  const unchecked = run({ records, head });
+  assert.equal(unchecked.status, 4, unchecked.stdout + unchecked.stderr);
+  assert.match(unchecked.stdout, /head=not_checked/);
+  assert.equal(run({ records, head }, '--allow-unchecked-head').status, 0);
+  // The last record removed: the export's own head shows it.
+  const truncated = run({ records: records.slice(0, 2), head }, '--allow-unchecked-head');
+  assert.equal(truncated.status, 1, truncated.stdout + truncated.stderr);
+  assert.match(truncated.stderr, /records missing at the end of the chain/);
+  // Removed together with the export's head: only a head the bank kept shows it.
+  assert.equal(run({ records: records.slice(0, 2) }).status, 4);
+  assert.equal(run({ records: records.slice(0, 2) }, `--expect-head=3:${records[2].evidenceHash}`).status, 1);
+  // Nothing at all is never a valid chain.
+  const empty = run({ records: [], head: null }, '--allow-unchecked-head');
+  assert.equal(empty.status, 1);
+  assert.match(empty.stderr, /no records/);
+});

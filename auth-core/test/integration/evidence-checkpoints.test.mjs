@@ -58,8 +58,17 @@ describe('evidence chain checkpoints held by the bank', { skip: skipWithoutServi
 
     const truncated = join(dir, 'truncated.json');
     writeFileSync(truncated, JSON.stringify({ ...chain, records: chain.records.slice(0, 2) }));
+    // The export's own head shows a careless truncation (audit B-05)...
+    const ownHead = verify(truncated, `--public-keys=${keys}`);
+    assert.equal(ownHead.status, 1, ownHead.stdout + ownHead.stderr);
+    assert.match(ownHead.stderr, /the export names head 3 but ends at 2/);
+    // ...but whoever removes records can remove that head too. Without a head
+    // the bank kept, the result is never a plain "valid" (exit 4).
+    const { head: _removed, ...headless } = chain;
+    writeFileSync(truncated, JSON.stringify({ ...headless, records: chain.records.slice(0, 2) }));
     const withoutHeads = verify(truncated, `--public-keys=${keys}`);
-    assert.equal(withoutHeads.status, 0, 'the chain alone cannot show a removed tail');
+    assert.equal(withoutHeads.status, 4, 'the chain alone cannot show a removed tail');
+    assert.match(withoutHeads.stdout, /head=not_checked/);
     const withHeads = verify(truncated, `--public-keys=${keys}`, `--heads=${headsFile}`);
     assert.equal(withHeads.status, 1);
     assert.match(withHeads.stderr, /records missing at the end of the chain: the bank holds head #3, the export ends at 2/);
