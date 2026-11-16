@@ -20,8 +20,9 @@ const { sealCredentialEnrolment } = require(${JSON.stringify(join(ROOT, 'dist/se
     // hold of audit finding A2-01 does not stop a compromised Auth Core),
     // attestation claimed as verified.
     const replacementId = require('node:crypto').randomUUID();
-    await pool.query(`INSERT INTO device_replacements (replacement_id, nexus_id, client_id, method, reference, state, not_before, expires_at)
-      VALUES ($1, $2, $3, 'OTHER', 'not-issued-by-the-bank', 'APPROVED', now() - interval '1 hour', now() + interval '1 hour')`, [replacementId, op.nexusId, op.clientId]);
+    // (Inside SCRIPT, itself a template literal: the SQL is a plain string.)
+    await pool.query("INSERT INTO device_replacements (replacement_id, nexus_id, client_id, method, reference, state, not_before, expires_at) " +
+      "VALUES ($1, $2, $3, 'OTHER', 'not-issued-by-the-bank', 'APPROVED', now() - interval '1 hour', now() + interval '1 hour')", [replacementId, op.nexusId, op.clientId]);
     const c = await createCredential({
       nexusId: op.nexusId, publicKeyPem: op.signingPublicKeyPem, platform: 'IOS', securityLevel: 'SECURE_ENCLAVE',
       attestationStatus: 'VERIFIED', clientId: op.clientId, replacement: { method: 'OTHER', reference: 'not-issued-by-the-bank', replacementId },
