@@ -81,14 +81,30 @@ jobs:
     env:
       INTEGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       INTEGRATION_REDIS_URL: redis://localhost:6379
-      SOFTHSM2_MODULE: /usr/lib/softhsm/libsofthsm2.so
-      SOFTHSM2_UTIL: /usr/bin/softhsm2-util
+      SOFTHSM2_MODULE: /opt/softhsm/lib/softhsm/libsofthsm2.so
+      SOFTHSM2_UTIL: /opt/softhsm/bin/softhsm2-util
       # A suite that cannot run (no PostgreSQL, Redis or SoftHSM) fails the job instead of skipping.
       REQUIRE_ALL_INTEGRATION_SUITES: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: SoftHSM (PKCS#11 adapter tests)
-        run: sudo apt-get update -q && sudo apt-get install -y -q softhsm2
+      # Ubuntu 24.04 packages SoftHSM 2.6.1, which lacks CKM_ECDSA_SHA256 (the
+      # mechanism Auth Core signs evidence with), so the HSM suites could not run.
+      # Build the 2.7.0 release against OpenSSL, pinned to the tag's commit.
+      - name: SoftHSM 2.7.0 from source (PKCS#11 adapter tests)
+        working-directory: ${{ runner.temp }}
+        env:
+          SOFTHSM_COMMIT: 13e6e86b83748fef74046dbf0c91f664b7acc1c3 # tag 2.7.0
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q autoconf automake libtool pkg-config libssl-dev
+          git clone -q --depth 1 --branch 2.7.0 https://github.com/softhsm/SoftHSMv2 softhsm
+          cd softhsm
+          test "$(git rev-parse HEAD)" = "$SOFTHSM_COMMIT"
+          sh autogen.sh
+          ./configure --prefix=/opt/softhsm --with-crypto-backend=openssl --disable-gost
+          make -j"$(nproc)"
+          sudo make install
+          /opt/softhsm/bin/softhsm2-util --version
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -316,7 +332,7 @@ jobs:
 
   ios-sdk:
     name: ios-sdk / build and unit tests
-    runs-on: macos-14
+    runs-on: macos-15
     defaults:
       run:
         working-directory: ios-sdk
@@ -327,7 +343,7 @@ jobs:
 
   ios-demo:
     name: ios demo app / build
-    runs-on: macos-14
+    runs-on: macos-15
     needs: ios-sdk
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -380,7 +396,7 @@ jobs:
 
   ios-sdk-calls:
     name: ios-sdk-calls / WebRTC module build
-    runs-on: macos-14
+    runs-on: macos-15
     needs: ios-sdk
     defaults:
       run:
