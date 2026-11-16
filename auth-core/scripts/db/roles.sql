@@ -69,6 +69,14 @@ BEGIN
   END IF;
 END $$;
 
+-- Mandate debit decisions are only ever added.
+DO $$
+BEGIN
+  IF to_regclass('public.mandate_debits') IS NOT NULL THEN
+    REVOKE UPDATE ON mandate_debits FROM nexus_app;
+  END IF;
+END $$;
+
 -- Archival reads.
 GRANT SELECT ON evidence_records, audit_logs TO nexus_audit_reader;
 

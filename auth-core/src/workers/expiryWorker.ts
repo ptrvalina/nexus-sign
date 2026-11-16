@@ -4,6 +4,7 @@ import { expireOverdueAuthorizations, expireOverdueVerificationSessions, purgeEx
 import { expireUnsignedOfflineConfirmations } from '../services/authorizationConfirmation';
 import { sealPendingOutcomes, unsealedOutcomes } from '../services/evidenceService';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
+import { expireMandates } from '../services/mandateService';
 
 /** An outcome not sealed after this long is reported on every sweep. */
 const UNSEALED_WARNING_SECONDS = 300;
@@ -34,6 +35,9 @@ export function startExpiryWorker(logger: Logger, hsm: HsmAdapter): ExpiryWorker
         const unsigned = await expireUnsignedOfflineConfirmations();
         if (unsigned > 0) logger.warn({ count: unsigned }, 'Offline confirmations without a device signature (OFFLINE_UNSIGNED)');
         if (env.DEVICE_NONCE_STORE === 'postgres') await purgeExpiredDeviceNonces();
+        // Mandate offers nobody signed and mandates past their validity.
+        const mandates = await expireMandates(hsm);
+        if (mandates > 0) logger.info({ count: mandates }, 'Expired payment mandates');
         // Outcomes the state changes above (and every other path) recorded
         // are sealed into the evidence chains (audit finding B-04).
         const outcomes = await sealPendingOutcomes(hsm);

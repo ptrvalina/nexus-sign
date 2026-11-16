@@ -1,4 +1,4 @@
-import { Router, type Response } from 'express';
+import { Router, type NextFunction, type Response } from 'express';
 import { z } from 'zod';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { authenticateBankClient, type AuthenticatedRequest } from '../middleware/auth';
@@ -6,6 +6,7 @@ import { authenticateMobileSession, type MobileAuthenticatedRequest } from '../m
 import { consumeMobileSession, issueBootstrapToken, type ReplacementAuthorization } from '../services/mobileSessionService';
 import { decideDeviceReplacement, listOpenReplacements, requestDeviceReplacement } from '../services/deviceReplacementService';
 import { getNexusIdentityForClient } from '../services/nexusIdentityService';
+import { customerMandateAction, getMandateForDevice, listMandatesForIdentity, signMandate, type CustomerMandateAction } from '../services/mandateService';
 import { createCredential, getActiveDeviceCredential, getCredentialForClient, hasEnrolledCredential, hasRevokedCredential, revokeDeviceByCustomer } from '../services/credentialService';
 import { assertCredentialIntegrity } from '../services/credentialIntegrity';
 import { recordAuditEvent } from '../services/auditService';
@@ -415,6 +416,42 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       res.json({ credentialId: target, state: 'REVOKED', remainingActiveDevices: result.remainingActive });
     } catch (e) { next(e); }
   });
+
+  // --- Payment mandates: the customer signs, declines, suspends, resumes, revokes ---
+
+  router.get('/v1/mobile/mandates', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ mandates: await listMandatesForIdentity(device.nexusId) });
+    } catch (e) { next(e); }
+  });
+
+  /** The terms to show; termsBase64 are the exact bytes to sign. */
+  router.get('/v1/mobile/mandates/:mandateId', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json(await getMandateForDevice(device.nexusId, z.string().uuid().parse(req.params.mandateId)));
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/mandates/:mandateId/signature', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ signature: z.string().min(1).max(256), signatureFormat: z.enum(['der', 'raw']) }).strict().parse(req.body);
+      res.json(await signMandate(hsmAdapter, device, z.string().uuid().parse(req.params.mandateId), body.signature, body.signatureFormat));
+    } catch (e) { next(e); }
+  });
+
+  const mandateAction = (action: CustomerMandateAction) => async (req: MobileAuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json(await customerMandateAction(hsmAdapter, device, z.string().uuid().parse(req.params.mandateId), action));
+    } catch (e) { next(e); }
+  };
+  router.post('/v1/mobile/mandates/:mandateId/decline', mandateAction('DECLINE'));
+  router.post('/v1/mobile/mandates/:mandateId/suspend', mandateAction('SUSPEND'));
+  router.post('/v1/mobile/mandates/:mandateId/resume', mandateAction('RESUME'));
+  router.post('/v1/mobile/mandates/:mandateId/revoke', mandateAction('REVOKE'));
 
   /** Confirmations, declines and open requests, newest first. */
   router.get('/v1/mobile/history', async (req: MobileAuthenticatedRequest, res, next) => {

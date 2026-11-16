@@ -44,6 +44,7 @@ tags:
   - { name: Authorizations }
   - { name: Adaptive verification }
   - { name: Bank transaction }
+  - { name: Mandates }
   - { name: Evidence }
   - { name: Secure push }
   - { name: Mobile SDK }
@@ -162,6 +163,217 @@ paths:
       responses:
         '200': { description: Active, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [ACTIVE] } } } } } }
         '404': { description: Not found, or not SUSPENDED, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /v1/mandates:
+    post:
+      tags: [Mandates]
+      summary: Propose a recurring payment mandate to one of the customer's devices
+      description: >
+        Creates the mandate PENDING_SIGNATURE with canonical terms (domain NEXUS-SIGN/MANDATE) that the
+        addressed device shows and signs. The bank tells the customer through its own channels (push).
+        Signed terms are immutable: changed terms are a new mandate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [nexusId, credentialId, mandateReference, payee, currency, perPaymentLimitMinor, frequency, validFrom, validUntil, termsVersion]
+              properties:
+                nexusId: { $ref: '#/components/schemas/NexusId' }
+                credentialId: { type: string, format: uuid, description: The device that signs }
+                mandateReference: { type: string, minLength: 1, maxLength: 128, description: "The bank's reference, unique per bank client; display text rules apply" }
+                payee: { type: object, additionalProperties: { type: string }, description: Same rules as an authorization beneficiary }
+                currency: { type: string, pattern: '^[A-Z]{3}$' }
+                perPaymentLimitMinor: { type: string, pattern: '^[1-9][0-9]{0,29}$' }
+                totalLimitMinor: { type: string, nullable: true, pattern: '^[1-9][0-9]{0,29}$', description: Sum of all allowed debits; null for none }
+                frequency: { type: string, enum: [WEEKLY, MONTHLY, QUARTERLY, YEARLY], description: At most one allowed debit per UTC calendar period }
+                validFrom: { type: string, format: date-time }
+                validUntil: { type: string, format: date-time }
+                termsVersion: { type: string, minLength: 1, maxLength: 64 }
+                offerExpiresInSeconds: { type: integer, minimum: 60, maximum: 604800, default: 86400 }
+      responses:
+        '201':
+          description: Proposed
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mandates/{mandateId}:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mandates]
+      summary: A mandate of this bank client
+      responses:
+        '200':
+          description: Mandate
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mandates/{mandateId}/debits:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mandates]
+      summary: Ask before a debit whether it is inside the signed terms
+      description: >
+        Allowed only when the mandate is ACTIVE, within its validity, in its currency, not above the per-payment
+        limit or, with the debits allowed so far, the total limit, and no debit was allowed in the same UTC
+        period. Every decision is recorded; the database checks an allowed debit again. Idempotent per
+        debitReference (the same reference with another amount or currency is refused with DEBIT_REFERENCE_REUSED).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [debitReference, amountMinor, currency]
+              properties:
+                debitReference: { type: string, minLength: 1, maxLength: 128 }
+                amountMinor: { type: string, pattern: '^[1-9][0-9]{0,29}$' }
+                currency: { type: string, pattern: '^[A-Z]{3}$' }
+      responses:
+        '201':
+          description: Allowed
+          content: { application/json: { schema: { $ref: '#/components/schemas/MandateDebit' } } }
+        '200':
+          description: Allowed earlier for the same debitReference (replayed=true)
+          content: { application/json: { schema: { $ref: '#/components/schemas/MandateDebit' } } }
+        '409':
+          description: Refused (code MANDATE_DEBIT_REFUSED, with the decision and reason), or another conflict
+          content: { application/json: { schema: { allOf: [{ $ref: '#/components/schemas/Error' }, { $ref: '#/components/schemas/MandateDebit' }] } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mandates/{mandateId}/withdraw:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mandates]
+      summary: Withdraw a mandate (the bank cannot change one)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 64 } } } } }
+      responses:
+        '200':
+          description: Withdrawn; the event is sealed into the evidence chain
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/nexus-identities/{nexusId}/mandates:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Mandates]
+      summary: The identity's mandates with this bank client, newest first
+      responses:
+        '200':
+          description: Mandates
+          content: { application/json: { schema: { type: object, required: [mandates], properties: { mandates: { type: array, items: { $ref: '#/components/schemas/Mandate' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/mandates:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's mandates
+      responses:
+        '200':
+          description: Mandates
+          content: { application/json: { schema: { type: object, required: [mandates], properties: { mandates: { type: array, items: { $ref: '#/components/schemas/Mandate' } } } } } }
+
+  /v1/mobile/mandates/{mandateId}:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: A mandate's terms; termsBase64 are the bytes the device shows and signs
+      responses:
+        '200':
+          description: Mandate
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/mandates/{mandateId}/signature:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The addressed device signs the mandate terms (ECDSA P-256 over termsBase64)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [signature, signatureFormat]
+              properties:
+                signature: { type: string, description: Base64 }
+                signatureFormat: { type: string, enum: [der, raw] }
+      responses:
+        '200':
+          description: Signed; the mandate is ACTIVE and the signature is sealed into the evidence chain
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422':
+          description: The signature does not verify over the terms
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /v1/mobile/mandates/{mandateId}/decline:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Decline an offered mandate (PENDING_SIGNATURE → DECLINED)
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/mandates/{mandateId}/suspend:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Suspend a signed mandate (ACTIVE → SUSPENDED); debits are refused
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/mandates/{mandateId}/resume:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Resume a suspended mandate under its signed terms (SUSPENDED → ACTIVE)
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/mandates/{mandateId}/revoke:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Revoke a mandate (ACTIVE or SUSPENDED → REVOKED); final
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /v1/nexus-identities/{nexusId}/devices:
     parameters: [{ $ref: '#/components/parameters/NexusId' }]
@@ -1324,6 +1536,43 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    Mandate:
+      type: object
+      required: [mandateId, nexusId, credentialId, mandateReference, payee, currency, perPaymentLimitMinor, totalLimitMinor, frequency, validFrom, validUntil, termsVersion, termsHash, termsBase64, offerExpiresAt, state, usedTotalMinor, createdAt]
+      properties:
+        mandateId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        credentialId: { type: string, format: uuid }
+        mandateReference: { type: string }
+        payee: { type: object, additionalProperties: { type: string } }
+        currency: { type: string }
+        perPaymentLimitMinor: { type: string }
+        totalLimitMinor: { type: string, nullable: true }
+        frequency: { type: string, enum: [WEEKLY, MONTHLY, QUARTERLY, YEARLY] }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time }
+        termsVersion: { type: string }
+        termsHash: { type: string, description: SHA-256 (hex) of the canonical terms }
+        termsBase64: { type: string, description: The canonical terms the device shows and signs }
+        offerExpiresAt: { type: string, format: date-time }
+        state: { type: string, enum: [PENDING_SIGNATURE, ACTIVE, SUSPENDED, REVOKED, EXPIRED, DECLINED, WITHDRAWN] }
+        stateReason: { type: string, nullable: true }
+        signedAt: { type: string, format: date-time, nullable: true }
+        usedTotalMinor: { type: string, description: Sum of the debits allowed so far }
+        createdAt: { type: string, format: date-time }
+    MandateDebit:
+      type: object
+      required: [debitId, mandateId, debitReference, amountMinor, currency, periodStart, decision, replayed]
+      properties:
+        debitId: { type: string, format: uuid }
+        mandateId: { type: string, format: uuid }
+        debitReference: { type: string }
+        amountMinor: { type: string }
+        currency: { type: string }
+        periodStart: { type: string, format: date }
+        decision: { type: string, enum: [ALLOWED, REFUSED] }
+        reason: { type: string, nullable: true, enum: [MANDATE_NOT_ACTIVE, NOT_YET_VALID, VALIDITY_ENDED, CURRENCY_MISMATCH, ABOVE_PAYMENT_LIMIT, PERIOD_ALREADY_DEBITED, ABOVE_TOTAL_LIMIT, null] }
+        replayed: { type: boolean }
     DeviceSummary:
       type: object
       required: [credentialId, platform, securityLevel, attestationStatus, state, enrolledAt, thisDevice]

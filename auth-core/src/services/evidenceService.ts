@@ -46,7 +46,7 @@ import { enqueueWebhook } from './webhookService';
  */
 export const EVIDENCE_SCHEMA_VERSION = '3';
 
-export type EvidenceRecordType = 'AUTHORIZATION' | 'CREDENTIAL_ENROLLED' | 'RECOVERY_CONFIGURED' | 'AUTHORIZATION_OUTCOME' | 'CREDENTIAL_REVOKED';
+export type EvidenceRecordType = 'AUTHORIZATION' | 'CREDENTIAL_ENROLLED' | 'RECOVERY_CONFIGURED' | 'AUTHORIZATION_OUTCOME' | 'CREDENTIAL_REVOKED' | 'MANDATE';
 
 export interface ChainPosition {
   evidenceId: string;
@@ -152,6 +152,7 @@ export function evidenceHash(sealedPayload: Record<string, unknown>): string {
 
 interface RecordColumns {
   authorizationId: string | null;
+  mandateId?: string | null;
   credentialId: string;
   transactionReference?: string;
   canonicalPayloadHash?: string;
@@ -205,14 +206,14 @@ async function appendRecord(
        record_type, authorization_id, nexus_id, credential_id, chain_sequence, transaction_reference, canonical_payload_hash,
        signature, signature_algorithm, key_version, policy_version, attestation_verdict, verified_at, consumed_at, result,
        correlation_id, previous_evidence_hash, evidence_hash, hsm_signature, hsm_key_version, seal_key_id, schema_version,
-       verification_factors, sealed_payload, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,clock_timestamp())
+       verification_factors, sealed_payload, mandate_id, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,clock_timestamp())
      RETURNING evidence_id`,
     [recordType, columns.authorizationId, nexusId, columns.credentialId, chainSequence, columns.transactionReference ?? null,
       columns.canonicalPayloadHash ?? null, columns.signature ?? null, columns.signatureAlgorithm ?? null, columns.keyVersion ?? null,
       columns.policyVersion ?? null, columns.attestationVerdict ?? null, columns.verifiedAt ?? null, columns.result ?? null,
       columns.correlationId ?? null, previousEvidenceHash, hash, seal.signature.toString('base64'), seal.keyVersion, sealKeyId,
-      EVIDENCE_SCHEMA_VERSION, JSON.stringify(columns.verificationFactors ?? []), JSON.stringify(sealedPayload)],
+      EVIDENCE_SCHEMA_VERSION, JSON.stringify(columns.verificationFactors ?? []), JSON.stringify(sealedPayload), columns.mandateId ?? null],
   );
   // Every new chain head goes to the bank (transactional outbox), so
   // the bank holds HSM-sealed checkpoints that Auth Core cannot take back;
@@ -225,6 +226,50 @@ async function appendRecord(
     }, tx);
   }
   return { evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash };
+}
+
+export type MandateEvent = 'SIGNED' | 'DECLINED' | 'SUSPENDED' | 'RESUMED' | 'REVOKED' | 'WITHDRAWN' | 'EXPIRED';
+
+export interface MandateEvidenceInput {
+  nexusId: string;
+  mandateId: string;
+  credentialId: string;
+  event: MandateEvent;
+  /** SHA-256 of the canonical terms; every event names the terms it is about. */
+  termsHash: string;
+  mandateReference: string;
+  reason: string;
+  occurredAt: Date;
+  /** The credential's sealed enrolment, which proves its key. */
+  enrolmentEvidenceHash: string | null;
+  /** SIGNED only: the terms bytes, the device signature over them and the key. */
+  signed?: { termsBase64: string; signature: string; signatureFormat: 'der' | 'raw'; publicKeyPem: string };
+}
+
+/** Seals one event of a payment mandate, in the transaction that makes it. */
+export async function sealMandateEvent(tx: PoolClient, hsm: HsmAdapter, input: MandateEvidenceInput): Promise<ChainPosition> {
+  const body: Record<string, unknown> = {
+    mandateId: input.mandateId,
+    credentialId: input.credentialId,
+    event: input.event,
+    termsHash: input.termsHash,
+    mandateReference: input.mandateReference,
+    reason: input.reason,
+    occurredAt: input.occurredAt.toISOString(),
+    enrolmentEvidenceHash: input.enrolmentEvidenceHash,
+  };
+  if (input.signed) {
+    body.signedTermsBase64 = input.signed.termsBase64;
+    body.signature = input.signed.signature;
+    body.signatureFormat = input.signed.signatureFormat;
+    body.signatureAlgorithm = 'ES256';
+    body.credentialPublicKeyPem = input.signed.publicKeyPem;
+  }
+  return appendRecord(tx, hsm, input.nexusId, 'MANDATE', body, {
+    authorizationId: null, mandateId: input.mandateId, credentialId: input.credentialId,
+    canonicalPayloadHash: input.termsHash, result: input.event, signature: input.signed?.signature,
+    signatureAlgorithm: input.signed ? 'ES256' : undefined,
+  });
 }
 
 /** Seals a confirmed authorization, in the transaction that consumes it. */

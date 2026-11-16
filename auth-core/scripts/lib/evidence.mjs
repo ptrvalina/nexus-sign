@@ -48,6 +48,42 @@ function sealVerifies(record, keys) {
 
 /** Final authorization states other than VERIFIED (AUTHORIZATION_OUTCOME). */
 const OUTCOMES = new Set(['REJECTED', 'EXPIRED', 'CANCELLED', 'OFFLINE_UNSIGNED']);
+/** Events of a payment mandate (MANDATE records). */
+const MANDATE_EVENTS = new Set(['SIGNED', 'DECLINED', 'SUSPENDED', 'RESUMED', 'REVOKED', 'WITHDRAWN', 'EXPIRED']);
+
+/**
+ * A MANDATE record. SIGNED carries the terms bytes, which must hash to
+ * termsHash, be mandate terms (domain NEXUS-SIGN/MANDATE, never payment
+ * bytes) for this mandate, identity and credential, and carry a device
+ * signature that verifies with the key the record names.
+ */
+export function verifyMandateRecord(payload) {
+  const problems = [];
+  if (typeof payload.mandateId !== 'string' || !MANDATE_EVENTS.has(payload.event) || !/^[0-9a-f]{64}$/.test(payload.termsHash ?? '')
+      || typeof payload.reason !== 'string' || typeof payload.occurredAt !== 'string') {
+    problems.push('mandate record does not carry the mandate, the event, the terms and the reason');
+    return problems;
+  }
+  if (payload.event !== 'SIGNED') return problems;
+  if (typeof payload.signedTermsBase64 !== 'string' || typeof payload.signature !== 'string' || typeof payload.credentialPublicKeyPem !== 'string') {
+    return ['signed mandate record does not carry the terms, the signature and the device key'];
+  }
+  const terms = Buffer.from(payload.signedTermsBase64, 'base64');
+  if (sha256hex(terms) !== payload.termsHash) problems.push('mandate terms do not match termsHash');
+  let fields = null;
+  try { fields = JSON.parse(terms.toString('utf8')); } catch { problems.push('mandate terms are not JSON'); }
+  if (fields && (fields.domain !== 'NEXUS-SIGN/MANDATE' || fields.mandate_id !== payload.mandateId || fields.nexus_id !== payload.nexusId
+      || fields.credential_id !== payload.credentialId)) {
+    problems.push('signed terms are not the terms of this mandate, identity and credential');
+  }
+  let valid = false;
+  try {
+    valid = verify('sha256', terms, { key: payload.credentialPublicKeyPem, dsaEncoding: payload.signatureFormat === 'raw' ? 'ieee-p1363' : 'der' },
+      Buffer.from(payload.signature, 'base64'));
+  } catch { valid = false; }
+  if (!valid) problems.push('device signature over the mandate terms does not verify');
+  return problems;
+}
 const labelOf = (record) => record.authorizationId ?? `${record.recordType ?? 'record'}#${record.chainSequence ?? '?'}`;
 
 /**
@@ -116,6 +152,8 @@ export function verifyEvidenceRecord(record, evidenceKeys, { standalone = false,
         || typeof payload.reason !== 'string' || typeof payload.occurredAt !== 'string') {
       problems.push(`${label}: outcome record does not carry the transaction, the outcome and its reason`);
     }
+  } else if (recordType === 'MANDATE') {
+    problems.push(...verifyMandateRecord(payload).map((p) => `${label}: ${p}`));
   } else if (recordType === 'CREDENTIAL_REVOKED') {
     if (payload.credentialId !== record.credentialId || typeof payload.reason !== 'string' || typeof payload.revokedAt !== 'string') {
       problems.push(`${label}: revocation record does not carry the credential and the reason`);
@@ -229,11 +267,16 @@ export function verifyEvidenceChain(records, evidenceKeys, { expectedHead, rejec
     if (payload.schemaVersion === '3' && payload.recordType === 'CREDENTIAL_ENROLLED') {
       enrolments.set(record.evidenceHash, payload);
     }
-    if (payload.schemaVersion === '3' && ['AUTHORIZATION_OUTCOME', 'CREDENTIAL_REVOKED'].includes(payload.recordType) && payload.enrolmentEvidenceHash) {
+    if (payload.schemaVersion === '3' && ['AUTHORIZATION_OUTCOME', 'CREDENTIAL_REVOKED', 'MANDATE'].includes(payload.recordType) && payload.enrolmentEvidenceHash) {
       const enrolment = enrolments.get(payload.enrolmentEvidenceHash);
       if (!enrolment || enrolment.credentialId !== payload.credentialId) {
         problems.push(`${label}: the enrolment of the credential it names is not earlier in the chain`);
+      } else if (payload.recordType === 'MANDATE' && payload.event === 'SIGNED' && !sameKey(enrolment.keys?.signingPublicKeyPem, payload.credentialPublicKeyPem)) {
+        problems.push(`${label}: the device key differs from the key sealed at enrolment`);
       }
+    }
+    if (payload.schemaVersion === '3' && payload.recordType === 'MANDATE' && payload.event === 'SIGNED' && !payload.enrolmentEvidenceHash) {
+      problems.push(`${label}: a signed mandate does not name the enrolment of its device`);
     }
     if (payload.schemaVersion === '3' && payload.recordType === 'AUTHORIZATION') {
       const enrolment = enrolments.get(payload.enrolmentEvidenceHash);

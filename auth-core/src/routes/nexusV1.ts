@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { createNexusIdentity, getNexusIdentityForClient, reactivateNexusIdentity, suspendNexusIdentity } from '../services/nexusIdentityService';
 import { getSettings, listDevices } from '../services/customerAccountService';
+import { createMandate, getMandateForClient, listMandatesForIdentity, requestMandateDebit, withdrawMandate } from '../services/mandateService';
 import { getCredentialForClient, revokeCredentialForClient } from '../services/credentialService';
 import { createAuthorization } from '../services/authorizationService';
 import { getAuthorizationForClient } from '../services/authorizationRecord';
@@ -122,6 +123,50 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
         lastUsedAt: identity.lastUsedAt?.toISOString() ?? null,
         evidenceHead: await getChainHead(pool, identity.nexusId),
       });
+    } catch (e) { next(e); }
+  });
+
+  // --- Recurring payment mandates (presentation pages 17 to 19) ---
+
+  const minor = z.string().regex(/^[1-9]\d{0,29}$/);
+  router.post('/v1/mandates', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({
+        nexusId: nexusIdSchema, credentialId: z.string().uuid(), mandateReference: z.string().min(1).max(128),
+        payee: z.record(z.string()), currency: z.string().regex(/^[A-Z]{3}$/), perPaymentLimitMinor: minor, totalLimitMinor: minor.nullable().default(null),
+        frequency: z.enum(['WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY']), validFrom: z.string().datetime(), validUntil: z.string().datetime(),
+        termsVersion: z.string().min(1).max(64), offerExpiresInSeconds: z.number().int().min(60).max(7 * 24 * 3600).optional(),
+      }).strict().parse(req.body);
+      res.status(201).json(await createMandate(clientIdOf(req), { ...body, credentialId: body.credentialId.toLowerCase() }));
+    } catch (e) { next(e); }
+  });
+
+  router.get('/v1/mandates/:mandateId', async (req: AuthenticatedRequest, res, next) => {
+    try { res.json(await getMandateForClient(clientIdOf(req), z.string().uuid().parse(req.params.mandateId))); } catch (e) { next(e); }
+  });
+
+  router.get('/v1/nexus-identities/:nexusId/mandates', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      res.json({ mandates: await listMandatesForIdentity(identity.nexusId, clientIdOf(req)) });
+    } catch (e) { next(e); }
+  });
+
+  /** Asked before every debit: allowed only inside the signed terms. */
+  router.post('/v1/mandates/:mandateId/debits', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ debitReference: z.string().min(1).max(128), amountMinor: minor, currency: z.string().regex(/^[A-Z]{3}$/) }).strict().parse(req.body);
+      const decision = await requestMandateDebit(clientIdOf(req), z.string().uuid().parse(req.params.mandateId), body);
+      if (decision.decision === 'ALLOWED') res.status(decision.replayed ? 200 : 201).json(decision);
+      else res.status(409).json({ error: `Debit refused: ${decision.reason}`, code: 'MANDATE_DEBIT_REFUSED', ...decision });
+    } catch (e) { next(e); }
+  });
+
+  /** The bank withdraws a mandate; it cannot change one. */
+  router.post('/v1/mandates/:mandateId/withdraw', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ reason: z.string().min(1).max(64) }).strict().parse(req.body);
+      res.json(await withdrawMandate(hsmAdapter, clientIdOf(req), z.string().uuid().parse(req.params.mandateId), body.reason));
     } catch (e) { next(e); }
   });
 
