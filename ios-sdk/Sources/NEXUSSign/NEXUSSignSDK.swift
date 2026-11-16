@@ -425,6 +425,27 @@ public final class NEXUSSignSDK {
             .sendReceipt(for: message, baseURL: config.baseURL, timeout: config.requestTimeout)
     }
 
+    // MARK: - Device replacement
+
+    /// Open device replacements the bank requested for this NEXUS ID. Show
+    /// them to the customer on this (enrolled) device.
+    public func pendingDeviceReplacements() async throws -> [NexusDeviceReplacement] {
+        try await networkClient.deviceReplacements()
+    }
+
+    /// The customer confirms the replacement: the new device can be enrolled
+    /// now instead of after the hold. After enrolment this device is revoked.
+    public func approveDeviceReplacement(replacementID: String) async throws -> NexusDeviceReplacement {
+        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.serverError(statusCode: 400, message: "Malformed replacement ID") }
+        return try await networkClient.decideDeviceReplacement(replacementID: replacementID, approve: true)
+    }
+
+    /// The customer refuses the replacement ("it wasn't me"); it can never be used.
+    public func cancelDeviceReplacement(replacementID: String) async throws -> NexusDeviceReplacement {
+        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.serverError(statusCode: 400, message: "Malformed replacement ID") }
+        return try await networkClient.decideDeviceReplacement(replacementID: replacementID, approve: false)
+    }
+
     // MARK: - Helpers
 
     /// Runs a biometry-bound key operation; when it fails because the

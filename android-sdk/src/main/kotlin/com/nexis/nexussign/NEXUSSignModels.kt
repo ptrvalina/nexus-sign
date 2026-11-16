@@ -112,6 +112,30 @@ class NexusOfflineChallenge internal constructor(
 
 enum class NEXUSVerificationOutcome { VERIFIED, FAILED, EXPIRED }
 
+/**
+ * A device replacement the bank requested for this customer's NEXUS ID
+ * (audit finding A2-01). Show it on the enrolled device: the customer
+ * approves it (the new device can be enrolled at once) or cancels it
+ * ("it wasn't me"). Without a decision it becomes usable at [notBefore].
+ */
+@Serializable
+data class NexusDeviceReplacement(
+    val replacementId: String,
+    val nexusId: String,
+    /** BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION or OTHER. */
+    val method: String,
+    val reference: String,
+    /** PENDING or APPROVED while open; CANCELLED, USED or EXPIRED afterwards. */
+    val state: String,
+    val requestedAt: String,
+    val notBefore: String,
+    val expiresAt: String,
+    val usable: Boolean,
+)
+
+@Serializable
+internal data class DeviceReplacementList(val replacements: List<NexusDeviceReplacement>)
+
 @Serializable
 internal data class VerifyResponse(val status: String, val reason: String? = null)
 

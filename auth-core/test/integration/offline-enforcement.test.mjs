@@ -159,9 +159,7 @@ describe('enforcement: no execution without the device signature', { skip: skipW
 
     const old = await newDevice();
     const pending = await provisional(old);
-    const token = await bank.bootstrapToken(old.nexusId, { replacement: { method: 'BRANCH_VISIT', reference: `case-${randomBytes(3).toString('hex')}` } });
-    assert.equal(token.status, 201, token.text);
-    const replacement = await enrolWithToken(server, old.nexusId, token.json.accessToken);
+    const replacement = await bank.replaceDevice(old, { method: 'BRANCH_VISIT', reference: `case-${randomBytes(3).toString('hex')}` });
     const fromNew = await call(server.baseUrl, 'POST', `/v1/mobile/authorizations/${pending.id}/deferred-signature`,
       { device: replacement, body: { signature: signDer(replacement.signingKey, pending.canonical), signatureFormat: 'der' } });
     assert.equal(fromNew.status, 403, fromNew.text);

@@ -12,6 +12,7 @@ import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { sealCredentialEnrolment, type EnrolmentAttestation, type EnrolmentReason } from './evidenceService';
 import { queueReplacementNotice } from './pushService';
 import { enqueueWebhook } from './webhookService';
+import { consumeDeviceReplacement } from './deviceReplacementService';
 
 export type CredentialPlatform = 'IOS' | 'ANDROID' | 'OTHER';
 export type CredentialState = 'ACTIVE' | 'REVOKED';
@@ -27,7 +28,7 @@ export interface CreateCredentialInput {
    * Without it, enrolment is refused while a credential is not revoked: one
    * NEXUS ID has one active signing key, and a new device must not displace
    * the customer's device silently (the customer uses recovery instead). */
-  replacement?: { method: string; reference: string } | null;
+  replacement?: { method: string; reference: string; replacementId?: string } | null;
   /** Device authentication and offline keys enrolled with the signing key. */
   deviceKeys?: DeviceKeysInput;
   /** Seals the enrolment (keys and attestation) into the identity's evidence chain. */
@@ -97,6 +98,17 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
         'The customer already has an enrolled device. Use recovery with the recovery phrase, or issue a replacement token after re-identifying the customer',
         'ACTIVE_CREDENTIAL_EXISTS');
     }
+    const credentialId = randomUUID();
+    // An identity that had a device before (revoked by the bank, for example)
+    // gets a new one only through recovery or a replacement request with its
+    // hold; otherwise "revoke, then enrol" would bypass the hold (A2-01).
+    const hadDevice = replacedCredentialIds.length === 0 && (await client.query(
+      `SELECT 1 FROM credentials WHERE nexus_id = $1 AND state = 'REVOKED' LIMIT 1`, [input.nexusId])).rowCount !== 0;
+    if (replacedCredentialIds.length > 0 || hadDevice) {
+      // The replacement request must have been approved on the enrolled device
+      // or have passed its hold, and is used once (audit finding A2-01).
+      await consumeDeviceReplacement(client, input.nexusId, input.replacement?.replacementId, credentialId);
+    }
     if (replacedCredentialIds.length > 0) {
       // Announced on the replaced device while it can still be reached.
       for (const credentialId of replacedCredentialIds) await queueReplacementNotice(client, input.clientId, input.nexusId, credentialId);
@@ -106,7 +118,6 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
       await forgetInactivePushRegistrations(client, input.nexusId);
     }
 
-    const credentialId = randomUUID();
     const keys = prepareDeviceKeys(credentialId, publicKey.pem, input.deviceKeys ?? {});
     const result = await client.query<CredentialRow>(
       `INSERT INTO credentials (
@@ -129,7 +140,7 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
       offlinePublicKeyPem: keys.offlinePublicKeyPem,
       attestation: input.enrolment.attestation,
       replacedCredentialIds,
-      replacementAuthorization: replacedCredentialIds.length > 0 && input.replacement
+      replacementAuthorization: (replacedCredentialIds.length > 0 || hadDevice) && input.replacement
         ? { method: input.replacement.method, reference: input.replacement.reference, clientId: input.clientId }
         : null,
     });
@@ -224,6 +235,12 @@ export async function getActiveDeviceCredential(credentialId: string): Promise<(
 /** True when the identity has a credential that is not revoked. */
 export async function hasEnrolledCredential(nexusId: string): Promise<boolean> {
   const result = await pool.query(`SELECT 1 FROM credentials WHERE nexus_id = $1 AND state = 'ACTIVE' LIMIT 1`, [nexusId]);
+  return result.rows.length > 0;
+}
+
+/** True when the identity had a device that is now revoked. */
+export async function hasRevokedCredential(nexusId: string): Promise<boolean> {
+  const result = await pool.query(`SELECT 1 FROM credentials WHERE nexus_id = $1 AND state = 'REVOKED' LIMIT 1`, [nexusId]);
   return result.rows.length > 0;
 }
 

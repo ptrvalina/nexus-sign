@@ -118,6 +118,9 @@ const envSchema = z.object({
    * data. `redis`: as before 2.0.0; a failover to an asynchronous replica or a
    * restore can forget nonces. Production requires postgres. */
   DEVICE_NONCE_STORE: z.enum(['postgres', 'redis']).default('postgres'),
+  /** Hold before a bank-requested device replacement may enrol, unless the
+   * customer approves it from the enrolled device (deviceReplacementService). */
+  DEVICE_REPLACEMENT_HOLD_SECONDS: z.coerce.number().int().min(0).max(30 * 24 * 3600).default(24 * 3600),
   /** Highest amount, per currency, that may be confirmed with an
    * offline code, e.g. `PLN:100000,EUR:20000` (minor units). The offline code
    * is an HMAC under a key Auth Core also holds, so whoever has the database

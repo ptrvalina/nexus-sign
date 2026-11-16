@@ -497,9 +497,15 @@ paths:
                   description: |
                     Required for a BOOTSTRAP token when the customer already has an enrolled device:
                     how the bank re-identified the customer, and its case reference. Without it the
-                    request is refused with 409 and `code` ACTIVE_CREDENTIAL_EXISTS. The enrolment that
-                    uses the token revokes the previous device, notifies it (secure push) and sends the
-                    `credential.replaced` webhook.
+                    request is refused with 409 and `code` ACTIVE_CREDENTIAL_EXISTS.
+                    The first call opens a replacement request and answers 202 `REPLACEMENT_PENDING`
+                    with the `credential.replacement_requested` webhook; the bank shows the request
+                    on the customer's enrolled device, which approves or cancels it
+                    (`/v1/mobile/device-replacements/{replacementId}/approve|cancel`). The same call
+                    returns the token (201) once the request was approved on the enrolled device or
+                    its hold (`DEVICE_REPLACEMENT_HOLD_SECONDS`, default 24 h, at least 1 h in
+                    production) has passed. The enrolment that uses the token revokes the previous
+                    device, uses the request once and sends the `credential.replaced` webhook.
                   required: [method, reference]
                   properties:
                     method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
@@ -508,6 +514,19 @@ paths:
         '201':
           description: Token issued
           content: { application/json: { schema: { $ref: '#/components/schemas/MobileToken' } } }
+        '202':
+          description: Device replacement requested; waiting for the customer's approval on the enrolled device or for the hold
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, replacementId, state, notBefore, expiresAt]
+                properties:
+                  status: { type: string, enum: [REPLACEMENT_PENDING] }
+                  replacementId: { type: string, format: uuid }
+                  state: { type: string, enum: [PENDING] }
+                  notBefore: { type: string, format: date-time }
+                  expiresAt: { type: string, format: date-time }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /v1/mobile/bootstrap:
@@ -711,6 +730,45 @@ paths:
       responses:
         '204': { description: Cancelled }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/device-replacements:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Open device replacement requests for this device's NEXUS ID
+      responses:
+        '200':
+          description: Open requests, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [replacements]
+                properties:
+                  replacements: { type: array, items: { $ref: '#/components/schemas/DeviceReplacement' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/device-replacements/{replacementId}/approve:
+    parameters: [{ in: path, name: replacementId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer approves the replacement on the enrolled device; the hold ends now
+      responses:
+        '200': { description: Approved, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceReplacement' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/device-replacements/{replacementId}/cancel:
+    parameters: [{ in: path, name: replacementId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer cancels the replacement on the enrolled device
+      responses:
+        '200': { description: Cancelled, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceReplacement' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /v1/mobile/push-registration:
@@ -991,6 +1049,19 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    DeviceReplacement:
+      type: object
+      required: [replacementId, nexusId, method, reference, state, requestedAt, notBefore, expiresAt, usable]
+      properties:
+        replacementId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
+        reference: { type: string }
+        state: { type: string, enum: [PENDING, APPROVED, CANCELLED, USED, EXPIRED] }
+        requestedAt: { type: string, format: date-time }
+        notBefore: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        usable: { type: boolean, description: A BOOTSTRAP token may be issued for it now }
     IceServer:
       type: object
       required: [urls]

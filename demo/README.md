@@ -82,3 +82,7 @@ Needs an Android 9 or later phone with a screen lock and a fingerprint or face e
 4. On the operator page, send a payment, then confirm it in the app with "Подтвердить биометрией".
 
 To build the APK locally (JDK 17 and the Android SDK): `cd demo/android && sh ../../android-sdk/gradlew assembleDebug`; the APK is `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Registering a phone again
+
+A NEXUS ID that already has (or had) a device gets a new one only through a held replacement ([device replacement](../docs/architecture/device-replacement.md#hold)). After a reinstall, "Зарегистрировать телефон" answers that the replacement is pending until a stated time; tap it again after that time. `auth-core/scripts/run-local.sh` sets the hold to 120 seconds; production requires at least one hour.

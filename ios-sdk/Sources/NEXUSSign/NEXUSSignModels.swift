@@ -116,6 +116,26 @@ public struct NexusOfflineChallenge {
     }
 }
 
+/// A device replacement the bank requested for this customer's NEXUS ID
+/// (audit finding A2-01). Show it on the enrolled device: the customer
+/// approves it (the new device can be enrolled at once) or cancels it
+/// ("it wasn't me"). Without a decision it becomes usable at `notBefore`.
+public struct NexusDeviceReplacement: Decodable, Equatable {
+    public let replacementId: String
+    public let nexusId: String
+    /// BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION or OTHER.
+    public let method: String
+    public let reference: String
+    /// PENDING or APPROVED while open; CANCELLED, USED or EXPIRED afterwards.
+    public let state: String
+    public let requestedAt: String
+    public let notBefore: String
+    public let expiresAt: String
+    public let usable: Bool
+}
+
+struct DeviceReplacementList: Decodable { let replacements: [NexusDeviceReplacement] }
+
 struct VerifyResponse: Decodable { let status: NEXUSVerificationOutcome; let reason: String? }
 struct ErrorResponse: Decodable { let error: String?; let serverTime: Int64? }
 

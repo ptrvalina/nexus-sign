@@ -149,6 +149,17 @@ final class NetworkClient {
         _ = try await perform("POST", "/v1/mobile/verification-sessions/\(sessionID)/cancel", body: [:], token: .device)
     }
 
+    // MARK: Device replacement hold (A2-01)
+
+    func deviceReplacements() async throws -> [NexusDeviceReplacement] {
+        let list: DeviceReplacementList = try await send("GET", "/v1/mobile/device-replacements")
+        return list.replacements
+    }
+
+    func decideDeviceReplacement(replacementID: String, approve: Bool) async throws -> NexusDeviceReplacement {
+        try await send("POST", "/v1/mobile/device-replacements/\(replacementID)/\(approve ? "approve" : "cancel")", body: [:])
+    }
+
     /// Longest long-poll wait that fits in the request timeout.
     var callPollWaitMilliseconds: Int { max(0, min(15_000, Int(config.requestTimeout * 1000) - 2_000)) }
 

@@ -123,11 +123,20 @@ async function bootstrapToken() {
     log(`NEXUS ID ${customer.nexusId} created for the demo customer`);
   }
   let session = await authCore('POST', '/v1/mobile/sessions', { nexusId: customer.nexusId });
-  if (session.status === 409 && session.json?.code === 'ACTIVE_CREDENTIAL_EXISTS') {
+  if (session.status === 409 && ['ACTIVE_CREDENTIAL_EXISTS', 'REPLACEMENT_REQUIRED'].includes(session.json?.code)) {
+    // A replacement is held until the enrolled phone approves it or the hold
+    // (DEVICE_REPLACEMENT_HOLD_SECONDS) passes; the same open request is
+    // returned while it is held, so asking again is safe.
+    customer.replacementReference ??= `demo-reenrolment-${randomBytes(4).toString('hex')}`;
     session = await authCore('POST', '/v1/mobile/sessions', {
       nexusId: customer.nexusId,
-      replacement: { method: 'OTHER', reference: `demo-reenrolment-${randomBytes(4).toString('hex')}` },
+      replacement: { method: 'OTHER', reference: customer.replacementReference },
     });
+    if (session.status === 202) {
+      log(`the phone enrols again: replacement ${session.json.replacementId} held until ${session.json.notBefore} (approve it on the enrolled phone, or wait)`);
+      throw new HttpError(409, `Замена устройства ожидает подтверждения до ${session.json.notBefore}: подтвердите её на зарегистрированном телефоне или повторите после этого времени.`);
+    }
+    customer.replacementReference = undefined;
     log('the phone enrols again: replacement BOOTSTRAP token issued');
   }
   if (session.status !== 201) throw new HttpError(502, `BOOTSTRAP token not issued: ${session.text}`);

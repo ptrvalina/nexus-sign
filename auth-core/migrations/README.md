@@ -32,6 +32,7 @@ Run migrations as the table owner. After `scripts/db/roles.sql` has been applied
 | `020_secret_key_rotation.sql` | `secret_rewrap_allowed()`; the rotation tool may replace a credential's offline key ciphertext |
 | `021_device_request_nonces.sql` | Device request nonces in PostgreSQL |
 | `022_offline_deferred_signature.sql` | Offline confirmation v2: states `OFFLINE_PROVISIONAL` and `OFFLINE_UNSIGNED` (state column widened to 24), `confirmation_method` `OFFLINE_SIGNED`, columns `offline_code_tag`, `offline_code_accepted_at`, `offline_signature_deadline`, `offline_unsigned_reason`, append-only table `offline_deferred_signatures`; lifecycle trigger with the new transitions; `policy_reference` and `policy_version` immutable. Additive |
+| `023_device_replacement_hold.sql` | Table `device_replacements`: bank-requested device replacements with a hold, decided by the enrolled device; lifecycle and no-delete triggers |
 
 ## Notes on 009
 

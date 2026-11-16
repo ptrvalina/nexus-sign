@@ -487,6 +487,22 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         networkClient.sendPushReceipt(message.messageId, message.credentialId, PushProtocol.receipt(macKey, message.messageId, message.credentialId))
     }
 
+    /** Open device replacements the bank requested for this NEXUS ID; show them on this (enrolled) device. */
+    suspend fun pendingDeviceReplacements(): List<NexusDeviceReplacement> = networkClient.deviceReplacements()
+
+    /** The customer confirms the replacement: the new device can be enrolled now instead of after the hold. */
+    suspend fun approveDeviceReplacement(replacementId: String): NexusDeviceReplacement =
+        networkClient.decideDeviceReplacement(requireReplacementId(replacementId), approve = true)
+
+    /** The customer refuses the replacement ("it wasn't me"); it can never be used. */
+    suspend fun cancelDeviceReplacement(replacementId: String): NexusDeviceReplacement =
+        networkClient.decideDeviceReplacement(requireReplacementId(replacementId), approve = false)
+
+    private fun requireReplacementId(id: String): String {
+        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.ServerError(400, "Malformed replacement ID")
+        return id
+    }
+
     private fun open(envelope: NexusPushEnvelope): NexusPushMessage {
         if (!PushMessages.isWellFormed(envelope)) throw NEXUSSignError.PushMessageInvalid("malformed_envelope")
         val (decryptKey, _) = pushKeys.keysFor(envelope.cid) ?: throw NEXUSSignError.PushMessageInvalid("no_push_key")

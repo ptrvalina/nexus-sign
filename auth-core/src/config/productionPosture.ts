@@ -39,6 +39,9 @@ export function productionBlockers(config: Env): string[] {
   if (!masterKeyConfigured(config, 'ADMIN_SECRET_ENCRYPTION_KEY')) blockers.push('ADMIN_SECRET_ENCRYPTION_KEY is required in production (admin TOTP secrets)');
   if (!config.METRICS_BEARER_TOKEN || config.METRICS_BEARER_TOKEN.length < 32) blockers.push('METRICS_BEARER_TOKEN of at least 32 characters is required in production');
   if (config.DEVICE_NONCE_STORE === 'redis') blockers.push('DEVICE_NONCE_STORE must be postgres in production (Redis failover can forget used nonces)');
+  if (config.DEVICE_REPLACEMENT_HOLD_SECONDS < 3600) {
+    blockers.push('DEVICE_REPLACEMENT_HOLD_SECONDS must be at least 3600 in production (a bank-only device replacement must give the customer time to cancel it)');
+  }
   if (config.OFFLINE_CONFIRMATION_ENABLED && config.OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY === undefined) {
     blockers.push('OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY is required in production when OFFLINE_CONFIRMATION_ENABLED is true');
   }

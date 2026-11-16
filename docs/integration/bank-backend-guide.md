@@ -125,9 +125,9 @@ A customer with a new phone whose old credential is still enrolled gets a new de
 
 | Path | When | Call |
 |---|---|---|
-| Replacement token | The bank re-identified the customer, for example at a branch or by video identification | `POST /v1/mobile/sessions` with `replacement` |
-| Recovery | The customer has the recovery phrase | Step 13 |
-| Revoke, then enrol | The old device is lost or stolen and must be stopped now | Step 14, then a plain `BOOTSTRAP` token |
+| Replacement request | The bank re-identified the customer, for example at a branch or by video identification | `POST /v1/mobile/sessions` with `replacement`; held (202) until the customer approves it on the enrolled device or the hold passes |
+| Recovery | The customer has the recovery phrase | Step 13 (immediate) |
+| Revoke, then replace | The old device is lost or stolen and must be stopped now | Step 14, then a replacement request (no device is left to approve it, so it matures after the hold) |
 
 ```bash
 curl -s -X POST "$BASE/v1/mobile/sessions" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
@@ -141,7 +141,15 @@ curl -s -X POST "$BASE/v1/mobile/sessions" -H "Authorization: Bearer $TOKEN" -H 
 
 Issuing the token writes the audit event `credential_replacement_authorized` with `method` and `reference`. When the new device enrols with the token, Auth Core in one transaction revokes the old credential and cancels its `PENDING_USER` authorizations, seals the new credential's enrolment with reason `REPLACEMENT`, the replaced credential IDs, `method` and `reference`, and sends the webhook `credential.replaced`. In push mode `NEXUS`, with `PUSH_DELIVERY_ENABLED` and a push registration on the old device, the old device receives a `SECURITY` notice (`PUSH_REPLACEMENT_TITLE`, `PUSH_REPLACEMENT_BODY`).
 
-When the old credential was revoked first, the enrolment replaces nothing: no `credential.replaced` webhook and no notice are sent.
+When the old credential was revoked first, the enrolment replaces nothing: no `credential.replaced` webhook and no notice are sent. A plain `BOOTSTRAP` request for such an identity is refused with 409 `REPLACEMENT_REQUIRED`.
+
+**Hold (since the A2-01 fix).** The first call answers 202:
+
+```json
+{ "status": "REPLACEMENT_PENDING", "replacementId": "…", "state": "PENDING", "notBefore": "…", "expiresAt": "…" }
+```
+
+and Auth Core sends `credential.replacement_requested`. Show the request in your app on the enrolled device; the SDK lists it (`pendingDeviceReplacements`) and the customer approves (`approveDeviceReplacement`) or cancels it (`cancelDeviceReplacement`), with webhooks `credential.replacement_approved` / `credential.replacement_cancelled`. Call `POST /v1/mobile/sessions` again after the approval, or after `notBefore`; while the request is open the call returns the same request. A cancelled request is final; investigate it. `DEVICE_REPLACEMENT_HOLD_SECONDS` (default 86400, production minimum 3600) sets the hold. Design: [hold](../architecture/device-replacement.md#hold).
 
 ## 6. Create an authorization
 
@@ -273,10 +281,13 @@ Webhooks report the outcome of each authorization, bank transaction state change
 | `push.failed` | `messageId`, `nexusId`, `category`, `authorizationId`, `reason` (`NO_PUSH_REGISTRATION`, `NO_ACTIVE_REGISTRATION`, `PUSH_KEY_REPLACED`, `PUSH_KEY_UNAVAILABLE`, `PUSH_DELIVERY_DISABLED`, `DEVICE_TOKEN_INVALID`, `REJECTED`, `RETRIES_EXHAUSTED`, `PROVIDER_NOT_CONFIGURED`, `EXPIRED`) |
 | `push.timeout` | `messageId`, `nexusId`, `authorizationId`, `sentAt` |
 | `credential.replaced` | `nexusId`, `newCredentialId`, `replacedCredentialIds`, `method`, `reference`, `enrolmentEvidenceHash` |
+| `credential.replacement_requested` | `nexusId`, `replacementId`, `method`, `reference`, `notBefore`, `expiresAt` |
+| `credential.replacement_approved` | `nexusId`, `replacementId` |
+| `credential.replacement_cancelled` | `nexusId`, `replacementId` |
 | `recovery.configured` | `nexusId`, `credentialId`, `configuredAt` |
 | `identity.recovered` | `nexusId`, `newCredentialId`, `revokedCredentialIds` |
 
-`credential.replaced` that the bank cannot match with one of its own replacement cases, and `identity.recovered` for a recovery session the bank did not open, are security events for the bank.
+`credential.replaced` or `credential.replacement_requested` that the bank cannot match with one of its own replacement cases, `credential.replacement_cancelled` (the customer refused a replacement made in their name), and `identity.recovered` for a recovery session the bank did not open, are security events for the bank.
 
 Headers:
 

@@ -183,7 +183,7 @@ describe('a compromised Auth Core cannot make the bank execute (SoftHSM)', { ski
     assert.ok(decision.problems.some((p) => /revoked by the bank/.test(p)), JSON.stringify(decision.problems));
 
     // Replacement through the bank's own flow: new token, new device, new approval.
-    const replacement = await bank.enrolDevice(device.nexusId, { replacement: { method: 'BRANCH_VISIT', reference: 'R-1' } });
+    const replacement = await bank.replaceDevice(device, { method: 'BRANCH_VISIT', reference: 'R-1' });
     registry.push(signStatement(approvalStatement({ nexusId: replacement.nexusId, credentialId: replacement.credentialId, signingKeySha256: signingKeyFingerprint(replacement.signingKey.publicKeyPem), reference: 'R-1' }), bankKey.privateKey));
     const next = await confirm(replacement);
     const fresh = await authCoreSaysYes(next);

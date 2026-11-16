@@ -1,13 +1,14 @@
 # Lost, stolen or replaced device
 
-A NEXUS ID has at most one `ACTIVE` device credential (unique index since migration 017). When the customer reports the phone lost, stolen or replaced, the bank stops the old credential and, after re-identifying the customer, enrols the new device. Since 2.0 a new device is never enrolled silently over an existing one: the bank either revokes the old credential first or authorizes the replacement explicitly. Design: [device replacement](../../architecture/device-replacement.md). Attestation: [device attestation](../../security/attestation.md); bank API details: [bank backend guide](../../integration/bank-backend-guide.md#device-replacement).
+A NEXUS ID has at most one `ACTIVE` device credential (unique index since migration 017). When the customer reports the phone lost, stolen or replaced, the bank stops the old credential and, after re-identifying the customer, enrols the new device. Since 2.0 a new device is never enrolled silently over an existing one: the bank requests the replacement explicitly, and the request is held until the customer approves it on the old device or the hold passes. Design: [device replacement](../../architecture/device-replacement.md). Attestation: [device attestation](../../security/attestation.md); bank API details: [bank backend guide](../../integration/bank-backend-guide.md#device-replacement).
 
 ## Symptoms
 
 - The customer reports a lost, stolen or replaced phone.
 - Authorizations the customer did not start appear as `PENDING_USER`, or fraud monitoring flags the identity.
 - A customer reports a security notice "set up on a new device" (`PUSH_REPLACEMENT_TITLE`) that they did not expect.
-- `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` returns 409 `ACTIVE_CREDENTIAL_EXISTS` for a customer with a new phone.
+- `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` returns 409 `ACTIVE_CREDENTIAL_EXISTS` or `REPLACEMENT_REQUIRED` for a customer with a new phone.
+- The bank receives `credential.replacement_cancelled`: a customer refused a replacement requested in their name.
 
 ## Impact
 
@@ -88,8 +89,7 @@ Always after the bank has re-identified the customer through its own controls. T
 
 | Path | When | Bank call |
 |---|---|---|
-| Replacement token | The old credential is still `ACTIVE` | `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` and `replacement: {method, reference}` |
-| Plain BOOTSTRAP token | The old credential was revoked in step 1 | `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP`; `replacement` may still be passed to record how the customer was re-identified |
+| Replacement request | The identity has or had a device (its credential is `ACTIVE`, or was revoked in step 1) | `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` and `replacement: {method, reference}`; 202 while held, 201 with the token afterwards |
 | Recovery | The customer has the recovery phrase and the bank requires it | `POST /v1/recovery/sessions`; see [recovery lockout](recovery-lockout.md) |
 
 ```sh
@@ -99,6 +99,8 @@ curl -sS -X POST "$AUTH_CORE/v1/mobile/sessions" \
 ```
 
 `method` is one of `BRANCH_VISIT`, `VIDEO_IDENTIFICATION`, `IN_APP_STRONG_AUTHENTICATION`, `OTHER`; `reference` is the bank's case reference, 1 to 128 characters. Issuing the token writes `credential_replacement_authorized`. The token is single use and valid for 300 s.
+
+Since the A2-01 fix a replacement is held: the first call answers 202 `REPLACEMENT_PENDING` with `replacementId` and `notBefore`. The customer approves it in the bank's app on the old device (if they still have it), or the hold passes (`DEVICE_REPLACEMENT_HOLD_SECONDS`, at least one hour in production, default 24 hours); then the same call returns the token. A cancellation by the customer ends the request: investigate it as a possible takeover attempt. For a stolen phone where the customer needs a device at once, recovery with the phrase is the immediate path. [Hold](../../architecture/device-replacement.md#hold).
 
 When the new device enrols with a replacement token while an old credential is still non-revoked, Auth Core in one transaction:
 

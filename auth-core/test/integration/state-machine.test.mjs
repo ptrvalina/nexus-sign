@@ -177,9 +177,7 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
       const r = await bank.call('POST', path, { body: { publicKeyPem: key, platform: 'OTHER', securityLevel: 'SOFTWARE_TEST' } });
       assert.equal(r.status, 404, `${path}: ${r.text}`);
     }
-    const token = await bank.bootstrapToken(rotating.nexusId, { replacement: { method: 'BRANCH_VISIT', reference: 'rt-03' } });
-    assert.equal(token.status, 201, token.text);
-    await enrolWithToken(server, rotating.nexusId, token.json.accessToken);
+    await bank.replaceDevice(rotating, { method: 'BRANCH_VISIT', reference: 'rt-03' });
     const states = (await q('SELECT state FROM credentials WHERE nexus_id = $1 ORDER BY created_at', [rotating.nexusId])).rows.map((x) => x.state);
     assert.deepEqual(states, ['REVOKED', 'ACTIVE']);
   });

@@ -469,7 +469,7 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     const device = await approvedDevice();
     const p = await payment(device);
     const replace = async () => {
-      const next = await bank.enrolDevice(device.nexusId, { replacement: { method: 'BRANCH_VISIT', reference: 'R-14' } });
+      const next = await bank.replaceDevice(device, { method: 'BRANCH_VISIT', reference: 'R-14' });
       await approve(next);
       await revoke(device);
     };

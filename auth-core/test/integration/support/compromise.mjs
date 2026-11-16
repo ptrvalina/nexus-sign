@@ -16,10 +16,15 @@ const { sealCredentialEnrolment } = require(${JSON.stringify(join(ROOT, 'dist/se
   let result;
   if (op.kind === 'enrol') {
     // Enrolment without a bank token, the bank's replacement authorization
-    // invented, attestation claimed as verified.
+    // invented, the customer's approval of it forged in the database (the
+    // hold of audit finding A2-01 does not stop a compromised Auth Core),
+    // attestation claimed as verified.
+    const replacementId = require('node:crypto').randomUUID();
+    await pool.query(`INSERT INTO device_replacements (replacement_id, nexus_id, client_id, method, reference, state, not_before, expires_at)
+      VALUES ($1, $2, $3, 'OTHER', 'not-issued-by-the-bank', 'APPROVED', now() - interval '1 hour', now() + interval '1 hour')`, [replacementId, op.nexusId, op.clientId]);
     const c = await createCredential({
       nexusId: op.nexusId, publicKeyPem: op.signingPublicKeyPem, platform: 'IOS', securityLevel: 'SECURE_ENCLAVE',
-      attestationStatus: 'VERIFIED', clientId: op.clientId, replacement: { method: 'OTHER', reference: 'not-issued-by-the-bank' },
+      attestationStatus: 'VERIFIED', clientId: op.clientId, replacement: { method: 'OTHER', reference: 'not-issued-by-the-bank', replacementId },
       deviceKeys: { authPublicKeyPem: op.authPublicKeyPem, offlinePublicKeyPem: op.offlinePublicKeyPem },
       hsm, enrolment: { reason: 'REPLACEMENT', attestation: { status: 'VERIFIED' } },
     });

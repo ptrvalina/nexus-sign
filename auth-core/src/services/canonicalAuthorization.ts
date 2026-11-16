@@ -69,10 +69,10 @@ export const BENEFICIARY_MAX_VALUE_LENGTH = 140;
  * operation_type: all three are shown in the confirmation prompt.
  */
 export const DISPLAY_UNSAFE_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
-const NON_ASCII_SPACE = /[\p{Zs}--\x20]/v;
+const NON_ASCII_SPACE = /(?! )\p{Zs}/u;
 const SPACE_RUN = / {2}/;
 const PADDED = /^\p{Zs}|\p{Zs}$/u;
-const NON_ASCII_DIGIT = /[\p{Nd}--[0-9]]/v;
+const NON_ASCII_DIGIT = /(?![0-9])\p{Nd}/u;
 const CONFUSABLE_SCRIPTS = [
   /[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]/, // Basic Latin letters, Latin-1 letters, Latin Extended-A/B, Latin Extended Additional
   /[\u0400-\u052F]/, // Cyrillic, Cyrillic Supplement

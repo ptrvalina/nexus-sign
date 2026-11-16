@@ -14,6 +14,8 @@ export type MobileSessionPurpose = 'BOOTSTRAP';
 export interface ReplacementAuthorization {
   method: 'BRANCH_VISIT' | 'VIDEO_IDENTIFICATION' | 'IN_APP_STRONG_AUTHENTICATION' | 'OTHER';
   reference: string;
+  /** The approved or matured request (deviceReplacementService) the enrolment uses. */
+  replacementId: string;
 }
 
 export interface MobileSession {

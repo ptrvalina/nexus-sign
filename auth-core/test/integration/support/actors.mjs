@@ -80,6 +80,19 @@ export async function bankSession(server, { clientId, secret }, { headers = {} }
       if (issued.status !== 201) throw new Error(`bootstrap token: ${issued.status} ${issued.text}`);
       return enrolWithToken(server, nexusId, issued.json.accessToken);
     },
+    /**
+     * Replaces an enrolled device the way a bank and its customer do since
+     * the A2-01 fix: the bank requests the replacement (202 while held), the
+     * customer approves it on the enrolled device, the bank gets the token,
+     * the new device enrols. Returns the new device.
+     */
+    async replaceDevice(oldDevice, replacement) {
+      const held = await bank.bootstrapToken(oldDevice.nexusId, { replacement });
+      if (held.status !== 202) throw new Error(`replacement request: ${held.status} ${held.text}`);
+      const approved = await call(server.baseUrl, 'POST', `/v1/mobile/device-replacements/${held.json.replacementId}/approve`, { device: oldDevice, body: {} });
+      if (approved.status !== 200) throw new Error(`replacement approval: ${approved.status} ${approved.text}`);
+      return bank.enrolDevice(oldDevice.nexusId, { replacement });
+    },
     async createAuthorization(device, overrides = {}) {
       const r = await bank.call('POST', '/v1/authorizations', {
         headers: { 'Idempotency-Key': randomUUID() },

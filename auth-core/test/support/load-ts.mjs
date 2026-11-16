@@ -16,8 +16,9 @@ process.env.NODE_ENV ??= 'test';
 process.env.DATABASE_URL ??= 'postgres://unit:unit@127.0.0.1:1/unit';
 process.env.REDIS_URL ??= 'redis://127.0.0.1:1';
 
-export function loadTs(relativePath, { stubs = {} } = {}) {
-  const cache = new Map();
+// `cache`: pass the same Map to several calls so that they share one module
+// graph (one database pool, one configuration), e.g. to end the pool after a test.
+export function loadTs(relativePath, { stubs = {}, cache = new Map() } = {}) {
   const load = (file) => {
     if (cache.has(file)) return cache.get(file).exports;
     const module = { exports: {} };

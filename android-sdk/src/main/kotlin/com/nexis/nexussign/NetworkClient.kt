@@ -187,6 +187,14 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
         send("/v1/mobile/verification-sessions/$sessionId/cancel", JsonObject(emptyMap()), TokenSource.Device) // 204
     }
 
+    // Device replacement hold (A2-01)
+
+    suspend fun deviceReplacements(): List<NexusDeviceReplacement> =
+        decode<DeviceReplacementList>(send("/v1/mobile/device-replacements", null, TokenSource.Device)).replacements
+
+    suspend fun decideDeviceReplacement(replacementId: String, approve: Boolean): NexusDeviceReplacement =
+        decode(send("/v1/mobile/device-replacements/$replacementId/${if (approve) "approve" else "cancel"}", JsonObject(emptyMap()), TokenSource.Device))
+
     /** Longest long-poll wait that still fits in the request timeout. */
     val callPollWaitMillis: Long get() = (config.requestTimeoutMillis - 2_000).coerceIn(0, 15_000)
 
