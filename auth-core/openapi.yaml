@@ -89,18 +89,21 @@ paths:
               required: [bankCustomerRef]
               properties:
                 bankCustomerRef: { type: string, minLength: 1, maxLength: 128, description: The bank's own customer reference }
+      description: >
+        Safe to retry. When a non-revoked identity already exists for this
+        bank client and bankCustomerRef, it is returned with 200 and
+        replayed=true instead of creating a second one.
       responses:
         '201':
           description: Created
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  nexusId: { $ref: '#/components/schemas/NexusId' }
-                  status: { $ref: '#/components/schemas/IdentityStatus' }
-                  createdAt: { type: string, format: date-time }
-        '409': { $ref: '#/components/responses/Conflict' }
+              schema: { $ref: '#/components/schemas/CreatedIdentity' }
+        '200':
+          description: The identity already existed for this customer reference (replayed=true)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedIdentity' }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/nexus-identities/{nexusId}:
@@ -1120,6 +1123,14 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    CreatedIdentity:
+      type: object
+      required: [nexusId, status, createdAt, replayed]
+      properties:
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        status: { $ref: '#/components/schemas/IdentityStatus' }
+        createdAt: { type: string, format: date-time }
+        replayed: { type: boolean, description: True when the identity already existed for this customer reference }
     DeviceReplacement:
       type: object
       required: [replacementId, nexusId, method, reference, state, requestedAt, notBefore, expiresAt, usable]

@@ -102,7 +102,11 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
     try {
       const body = z.object({ bankCustomerRef: z.string().min(1).max(128) }).parse(req.body);
       const identity = await createNexusIdentity(clientIdOf(req), body.bankCustomerRef);
-      res.status(201).json({ nexusId: identity.nexusId, status: identity.status, createdAt: identity.createdAt.toISOString() });
+      // 200 with replayed=true: the identity already existed for this
+      // customer reference (a retry after a lost response).
+      res.status(identity.replayed ? 200 : 201).json({
+        nexusId: identity.nexusId, status: identity.status, createdAt: identity.createdAt.toISOString(), replayed: identity.replayed,
+      });
     } catch (e) { next(e); }
   });
 

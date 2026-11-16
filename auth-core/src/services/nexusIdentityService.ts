@@ -37,31 +37,43 @@ async function allocateNexusId(client: { query: Function }): Promise<string> {
   throw new Error('Unable to allocate a unique 9-digit NEXUS ID');
 }
 
-export async function createNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord> {
+/**
+ * Creates the NEXUS ID for a bank customer, or returns the one that already
+ * exists for the same bank client and customer reference (`replayed: true`).
+ *
+ * A retry after a lost response (audit finding A1-04) used to get 409 with no
+ * NEXUS ID, and the bank could neither learn the ID nor create another. The
+ * reference is scoped to the calling bank client, so returning the existing
+ * identity tells the caller nothing it does not already own.
+ */
+export async function createNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord & { replayed: boolean }> {
   // allocateNexusId checks before inserting, so two concurrent requests can
   // still draw the same random ID; the primary key then rejects one of them,
-  // which retries with a new ID. Only the customer-reference index
-  // means a duplicate customer.
+  // which retries with a new ID. A violation of the customer-reference index
+  // means a concurrent request created the identity: the next attempt finds
+  // and returns it.
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await insertNexusIdentity(clientId, bankCustomerRef);
     } catch (error: unknown) {
       const pg = error as { code?: string; constraint?: string };
       if (pg?.code !== '23505') throw error;
-      if (pg.constraint === 'nexus_identities_pkey' && attempt < 3) continue;
-      if (pg.constraint === 'nexus_identities_pkey') throw new Error('Unable to allocate a unique 9-digit NEXUS ID');
-      throw new DuplicateBankCustomerError(bankCustomerRef);
+      if (attempt >= 3) {
+        if (pg.constraint === 'nexus_identities_pkey') throw new Error('Unable to allocate a unique 9-digit NEXUS ID');
+        throw new DuplicateBankCustomerError(bankCustomerRef);
+      }
     }
   }
 }
 
-async function insertNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord> {
+async function insertNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord & { replayed: boolean }> {
   return withTransaction(async (client) => {
-    const duplicate = await client.query(
-      `SELECT nexus_id FROM nexus_identities WHERE client_id = $1 AND bank_customer_ref = $2 AND status <> 'REVOKED' FOR UPDATE`,
+    const existing = await client.query<IdentityRow>(
+      `SELECT nexus_id, client_id, bank_customer_ref, status, created_at, updated_at, last_used_at
+         FROM nexus_identities WHERE client_id = $1 AND bank_customer_ref = $2 AND status <> 'REVOKED' FOR UPDATE`,
       [clientId, bankCustomerRef],
     );
-    if (duplicate.rows[0]) throw new DuplicateBankCustomerError(bankCustomerRef);
+    if (existing.rows[0]) return { ...map(existing.rows[0]), replayed: true };
 
     const nexusId = await allocateNexusId(client);
     const result = await client.query<IdentityRow>(
@@ -73,7 +85,7 @@ async function insertNexusIdentity(clientId: string, bankCustomerRef: string): P
     const row = result.rows[0];
     if (!row) throw new Error('NEXUS identity insert returned no row');
     await recordAuditEvent('identity_created', { nexusId }, {}, client);
-    return map(row);
+    return { ...map(row), replayed: false };
   });
 }
 

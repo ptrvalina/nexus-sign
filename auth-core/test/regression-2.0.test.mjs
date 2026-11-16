@@ -24,7 +24,7 @@ function identityStore(insertErrors) {
   const inserted = [];
   const client = {
     async query(sql, args) {
-      if (/^SELECT nexus_id FROM nexus_identities WHERE client_id/.test(sql.trim())) return { rows: [] };
+      if (/^SELECT nexus_id, client_id, bank_customer_ref, status/.test(sql.trim()) && /bank_customer_ref = \$2/.test(sql)) return { rows: [] };
       if (/^SELECT 1 FROM nexus_identities/.test(sql.trim())) return { rowCount: 0, rows: [] };
       if (/^INSERT INTO nexus_identities/.test(sql.trim())) {
         const error = insertErrors.shift();
@@ -53,8 +53,16 @@ test('A NEXUS ID collision between concurrent requests retries with a new ID', a
   assert.deepEqual(inserted, [identity.nexusId]);
 });
 
-test('A duplicate bank customer reference is still reported as a duplicate customer', async () => {
-  const { service } = identityStore([{ code: '23505', constraint: 'uq_nexus_identity_customer' }]);
+test('A concurrent create for the same customer reference retries and does not fail the retry', async () => {
+  const { service, inserted } = identityStore([{ code: '23505', constraint: 'uq_nexus_identity_customer' }]);
+  const identity = await service.createNexusIdentity('bank-a', 'customer-1');
+  assert.equal(identity.replayed, false);
+  assert.deepEqual(inserted, [identity.nexusId]);
+});
+
+test('A customer reference that keeps colliding ends with a duplicate-customer error', async () => {
+  const ref = { code: '23505', constraint: 'uq_nexus_identity_customer' };
+  const { service } = identityStore([ref, ref, ref]);
   await assert.rejects(service.createNexusIdentity('bank-a', 'customer-1'), { name: 'DuplicateBankCustomerError' });
 });
 

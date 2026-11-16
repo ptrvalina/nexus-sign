@@ -69,7 +69,7 @@ curl -s -X POST "$BASE/v1/nexus-identities" -H "Authorization: Bearer $TOKEN" \
 { "nexusId": "418273650", "status": "ACTIVE", "createdAt": "2026-10-01T09:00:00.000Z" }
 ```
 
-One bank client has at most one non-revoked NEXUS ID per `bankCustomerRef`; a second request returns 409. The bank API has no lookup by `bankCustomerRef`, so the bank stores `nexusId` with its customer record when the first response arrives. `GET /v1/nexus-identities/{nexusId}` returns the identity, its status and `evidenceHead`, the latest record of its evidence chain (step 12).
+One bank client has at most one non-revoked NEXUS ID per `bankCustomerRef`. The call is safe to retry: a second request for the same `bankCustomerRef` returns the existing identity with 200 and `"replayed": true` instead of creating another (before this release it returned 409 without the ID). The bank stores `nexusId` with its customer record; after a timeout it repeats the same request to learn it. `GET /v1/nexus-identities/{nexusId}` returns the identity, its status and `evidenceHead`, the latest record of its evidence chain (step 12).
 
 ## 4. Issue a BOOTSTRAP token for the app
 
