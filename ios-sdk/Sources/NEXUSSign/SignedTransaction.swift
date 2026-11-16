@@ -100,10 +100,13 @@ enum SignedPayload {
     indirect enum Value: Equatable {
         case string(String)
         case object([(key: String, value: Value)])
+        /// Only in documents read with `allowNull` (mandate terms).
+        case null
 
         static func == (lhs: Value, rhs: Value) -> Bool {
             switch (lhs, rhs) {
             case let (.string(a), .string(b)): return a == b
+            case (.null, .null): return true
             case let (.object(a), .object(b)):
                 return a.count == b.count && zip(a, b).allSatisfy { $0.key == $1.key && $0.value == $1.value }
             default: return false
@@ -113,11 +116,14 @@ enum SignedPayload {
 
     // MARK: - Parsing
 
-    static func parse(_ canonical: Data) throws -> NexusSignedTransaction {
+    /// Strict UTF-8, JSON, and canonical form (the bytes re-encode to
+    /// themselves). Shared by payment and mandate terms parsing; mirrors
+    /// `parseCanonicalObject` in the Android SDK.
+    static func parseCanonicalObject(_ canonical: Data, allowNull: Bool = false) throws -> [String: Value] {
         guard let text = String(data: canonical, encoding: .utf8) else {
             throw Rejected(reason: "invalid_json", detail: "payload is not valid UTF-8")
         }
-        var reader = Reader(units: Array(text.utf16))
+        var reader = Reader(units: Array(text.utf16), allowNull: allowNull)
         let document = try reader.readDocument()
         guard case let .object(pairs) = document else {
             throw Rejected(reason: "invalid_json", detail: "top level is not an object")
@@ -125,9 +131,13 @@ enum SignedPayload {
         guard encode(document) == canonical else {
             throw Rejected(reason: "not_canonical", detail: "bytes are not in canonical form")
         }
-
         var object: [String: Value] = [:]
         for pair in pairs { object[pair.key] = pair.value }
+        return object
+    }
+
+    static func parse(_ canonical: Data) throws -> NexusSignedTransaction {
+        let object = try parseCanonicalObject(canonical)
         let keys = Set(object.keys)
         let missing = fields.subtracting(keys)
         if !missing.isEmpty { throw Rejected(reason: "missing_field", detail: missing.sorted().joined(separator: ", ")) }
@@ -180,9 +190,9 @@ enum SignedPayload {
         guard matches(nexusID, nexusIDPattern) else { throw Rejected(reason: "invalid_value", detail: "nexus_id") }
         let nonceValue = try str("nonce")
         guard matches(nonceValue, noncePattern) else { throw Rejected(reason: "invalid_value", detail: "nonce") }
-        for pair in pairs {
-            if case let .string(text) = pair.value, !isDisplaySafe(text) {
-                throw Rejected(reason: "invalid_value", detail: "\(pair.key) contains a control, format or separator character")
+        for (key, value) in object.sorted(by: { $0.key < $1.key }) {
+            if case let .string(text) = value, !isDisplaySafe(text) {
+                throw Rejected(reason: "invalid_value", detail: "\(key) contains a control, format or separator character")
             }
         }
         if beneficiary.count > beneficiaryMaxFields {
@@ -426,6 +436,8 @@ enum SignedPayload {
         switch value {
         case let .string(s):
             writeString(s, into: &out)
+        case .null:
+            out.append(contentsOf: Array("null".utf16))
         case let .object(pairs):
             out.append(0x7B) // {
             // Array.prototype.sort() orders keys by UTF-16 code units.
@@ -476,13 +488,15 @@ enum SignedPayload {
     // MARK: - Reader
 
     /// Minimal RFC 8259 reader limited to objects and strings (the only types
-    /// the v1 protocol uses). Works on UTF-16 code units, like Auth Core.
+    /// the v1 protocol uses), and null when `allowNull`. Works on UTF-16 code
+    /// units, like Auth Core.
     private struct Reader {
         let units: [UInt16]
+        let allowNull: Bool
         var i = 0
         var depth = 0
 
-        init(units: [UInt16]) { self.units = units }
+        init(units: [UInt16], allowNull: Bool = false) { self.units = units; self.allowNull = allowNull }
 
         mutating func readDocument() throws -> Value {
             skipWhitespace()
@@ -499,6 +513,9 @@ enum SignedPayload {
             case 0x7B?: return try readObject()
             case 0x22?: return .string(try readString())
             case 0x5B?: throw Rejected(reason: "invalid_json", detail: "arrays are not allowed")
+            case 0x6E? where allowNull && Array(units[i..<min(i + 4, units.count)]) == Array("null".utf16):
+                i += 4
+                return .null
             case nil: throw Rejected(reason: "invalid_json", detail: "unexpected end of input")
             default: throw Rejected(reason: "invalid_value", detail: "only strings and objects are allowed")
             }

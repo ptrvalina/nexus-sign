@@ -694,32 +694,20 @@ extension NEXUSSignSDK {
         try await networkClient.deviceCall("GET", "/v1/mobile/mandates/\(try Self.checkedID(id, "mandate ID"))")
     }
 
-    /// Parses and checks the signed terms: domain NEXUS-SIGN/MANDATE (never
-    /// payment bytes), this mandate, this identity and this device, display
-    /// rules on every shown value, SHA-256 equal to termsHash.
+    /// Parses and checks the signed terms (`MandateTermsParser`): domain
+    /// NEXUS-SIGN/MANDATE (never payment bytes), canonical bytes with exactly
+    /// the protocol's fields, this mandate and this device, display rules on
+    /// every shown value, consistent limits and validity, SHA-256 equal to termsHash.
     public func mandateTerms(_ mandate: NexusMandate) throws -> NexusMandateTerms {
-        func invalid(_ reason: String, _ detail: String) -> NEXUSSignError { .authorizationPayloadInvalid(reason: reason, detail: detail) }
-        guard let bytes = Data(base64Encoded: mandate.termsBase64) else { throw invalid("invalid_json", "termsBase64") }
-        guard SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == mandate.termsHash else { throw invalid("hash_mismatch", "termsHash") }
-        guard let o = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { throw invalid("invalid_json", "terms") }
-        guard o["domain"] as? String == "NEXUS-SIGN/MANDATE", o["protocol_version"] as? String == "1" else { throw invalid("wrong_domain", "not mandate terms") }
-        guard o["mandate_id"] as? String == mandate.mandateId else { throw invalid("mismatch", "mandate_id") }
-        guard let credentialID = keyManager.effectiveCredentialID, o["credential_id"] as? String == credentialID else { throw invalid("wrong_device", "the mandate is for another device") }
-        func text(_ key: String) throws -> String {
-            guard let v = o[key] as? String, SignedPayload.displayTextViolation(v) == nil || ["valid_from", "valid_until", "offer_expires_at"].contains(key) else { throw invalid("display", key) }
-            return v
+        guard let credentialID = keyManager.effectiveCredentialID else {
+            throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "this device is not enrolled")
         }
-        guard let payee = o["payee"] as? [String: String], !payee.isEmpty, payee.values.allSatisfy({ SignedPayload.displayTextViolation($0) == nil }) else { throw invalid("display", "payee") }
-        // Finding D-02: no second account number outside the account fields.
-        if payee.contains(where: { !SignedPayload.accountKeys.contains($0.key) && SignedPayload.looksLikeIBAN($0.value) }) { throw invalid("display", "payee") }
-        if let iban = payee["iban"], !SignedPayload.isValidIBAN(iban) { throw invalid("iban", "payee.iban") }
-        let total: String?
-        if o["total_limit_minor"] is NSNull { total = nil } else { total = try text("total_limit_minor") }
-        return NexusMandateTerms(
-            mandateId: mandate.mandateId, nexusId: try text("nexus_id"), credentialId: credentialID, mandateReference: try text("mandate_reference"),
-            payee: payee, currency: try text("currency"), perPaymentLimitMinor: try text("per_payment_limit_minor"), totalLimitMinor: total,
-            frequency: try text("frequency"), validFrom: try text("valid_from"), validUntil: try text("valid_until"),
-            termsVersion: try text("terms_version"), offerExpiresAt: try text("offer_expires_at"))
+        do {
+            return try MandateTermsParser.parse(termsBase64: mandate.termsBase64, termsHash: mandate.termsHash,
+                                                mandateId: mandate.mandateId, credentialId: credentialID)
+        } catch let rejected as SignedPayload.Rejected {
+            throw NEXUSSignError.authorizationPayloadInvalid(reason: rejected.reason, detail: rejected.detail)
+        }
     }
 
     /// Signs the mandate after biometric authentication, with the prompt built
