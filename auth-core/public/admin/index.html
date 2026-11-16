@@ -116,6 +116,26 @@
 <main id="app-main">
   <div class="stats" id="stats"></div>
 
+  <section id="conversations-section">
+    <div class="section-header">
+      <h2>Conversations with customers</h2>
+      <button class="ghost" id="conversations-refresh-btn">Refresh</button>
+    </div>
+    <div class="body">
+      <div id="conversations-table"></div>
+      <div id="conversation-active" style="display:none; margin-top:12px;">
+        <div class="muted" id="conversation-title"></div>
+        <div id="conversation-messages" style="max-height:320px; overflow:auto; border:1px solid #ddd; border-radius:6px; padding:8px; margin:8px 0;"></div>
+        <form id="conversation-form" style="display:flex; gap:8px;">
+          <input id="conversation-input" maxlength="4000" placeholder="Answer the customer" style="flex:1" autocomplete="off">
+          <button type="submit">Send</button>
+          <button type="button" class="ghost" id="conversation-release-btn">Back to queue</button>
+          <button type="button" class="ghost" id="conversation-close-btn">Close</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
   <section id="calls-section">
     <div class="section-header">
       <h2>Verification calls</h2>
@@ -199,5 +219,6 @@
 
 <script src="/admin/admin.js"></script>
 <script src="/admin/calls.js"></script>
+<script src="/admin/conversations.js"></script>
 </body>
 </html>

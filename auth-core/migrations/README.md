@@ -38,6 +38,7 @@ Run migrations as the table owner. After `scripts/db/roles.sql` has been applied
 | `026_customer_settings.sql` | Table `customer_settings_versions`: the customer's limits, video-check threshold and channel preferences, versioned and append-only; relaxing changes take effect after a hold |
 | `027_multiple_devices.sql` | `bank_clients.max_devices_per_identity` (1 to 10, default 1); `device_replacements.kind` (`REPLACEMENT`, `ADDITION`); the one-`ACTIVE` index replaced by the trigger `credentials_device_limit`, which counts active devices with the identity row locked |
 | `028_payment_mandates.sql` | Tables `mandates` (signed, immutable terms; lifecycle and insert-state triggers) and `mandate_debits` (append-only; the trigger `mandate_debits_check` allows a debit only inside the signed terms, with the mandate row locked); `evidence_records.mandate_id` and record type `MANDATE` |
+| `029_customer_conversations.sql` | Tables `conversations` (state machine `WITH_BOT` → `WAITING_FOR_AGENT` → `WITH_AGENT` → `CLOSED`, owner immutable) and `conversation_messages` (append-only, hash-chained per conversation; only the delivery and read marks are set, once) |
 
 ## Notes on 009
 

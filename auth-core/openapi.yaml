@@ -45,6 +45,7 @@ tags:
   - { name: Adaptive verification }
   - { name: Bank transaction }
   - { name: Mandates }
+  - { name: Conversations }
   - { name: Evidence }
   - { name: Secure push }
   - { name: Mobile SDK }
@@ -163,6 +164,160 @@ paths:
       responses:
         '200': { description: Active, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [ACTIVE] } } } } } }
         '404': { description: Not found, or not SUSPENDED, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /v1/conversations/{conversationId}:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Conversations]
+      summary: A conversation of this bank client with its messages (for the bank's bot)
+      parameters: [{ in: query, name: after, schema: { type: integer, minimum: 0, default: 0 }, description: Only messages with a higher sequence number }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConversationThread' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/conversations/{conversationId}/bot-messages:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Conversations]
+      summary: The bank's bot answers; handover=true passes the conversation to a person
+      description: >
+        Only while the conversation is WITH_BOT (409 CONVERSATION_NOT_WITH_BOT after a handover). Customer messages reach the bank as the conversation.message webhook.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 4000 }, clientMessageId: { type: string, maxLength: 64, nullable: true }, attachment: { $ref: '#/components/schemas/ConversationAttachment' }, handover: { type: boolean }, handoverReason: { type: string, maxLength: 200 } } } } }
+      responses:
+        '201':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '200':
+          description: Sent earlier with the same clientMessageId (replayed=true)
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/conversations/{conversationId}/close:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Conversations]
+      summary: The bank closes a conversation
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/conversations/{conversationId}/integrity:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Conversations]
+      summary: Recomputes the conversation's hash chain
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [intact, problems], properties: { intact: { type: boolean }, problems: { type: array, items: { type: string } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's conversations with the bank
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [conversations], properties: { conversations: { type: array, items: { $ref: '#/components/schemas/Conversation' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer opens a conversation, optionally about one of their payments
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [topic, body], properties: { topic: { type: string, minLength: 1, maxLength: 200 }, body: { type: string, minLength: 1, maxLength: 4000 }, authorizationId: { type: string, format: uuid, nullable: true }, clientMessageId: { type: string, maxLength: 64, nullable: true }, attachment: { $ref: '#/components/schemas/ConversationAttachment' } } } } }
+      responses:
+        '201':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [conversation, message], properties: { conversation: { $ref: '#/components/schemas/Conversation' }, message: { $ref: '#/components/schemas/ConversationMessage' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/messages:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Messages after a sequence number; the bank's messages are marked delivered
+      parameters: [{ in: query, name: after, schema: { type: integer, minimum: 0, default: 0 }, description: Only messages with a higher sequence number }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConversationThread' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer writes
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 4000 }, clientMessageId: { type: string, maxLength: 64, nullable: true }, attachment: { $ref: '#/components/schemas/ConversationAttachment' } } } } }
+      responses:
+        '201':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '200':
+          description: Sent earlier with the same clientMessageId (replayed=true)
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/read:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer read the bank's messages up to a sequence number
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [upToSequence], properties: { upToSequence: { type: integer, minimum: 1 } } } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [marked], properties: { marked: { type: integer } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/handover:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: 'Talk to a person: the conversation waits for an operator of the bank'
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/close:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer closes a conversation
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /v1/mandates:
     post:
@@ -1536,6 +1691,63 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    ConversationAttachment:
+      type: object
+      nullable: true
+      description: A file the bank stores; the app checks the downloaded content against sha256
+      required: [reference, sha256, mediaType, fileName, sizeBytes]
+      properties:
+        reference: { type: string, pattern: '^[A-Za-z0-9._:/-]{1,256}$' }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        mediaType: { type: string }
+        fileName: { type: string, maxLength: 200 }
+        sizeBytes: { type: integer, minimum: 1, maximum: 52428800 }
+    Conversation:
+      type: object
+      required: [conversationId, nexusId, topic, state, lastSequence, createdAt, updatedAt]
+      properties:
+        conversationId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        topic: { type: string }
+        authorizationId: { type: string, format: uuid, nullable: true, description: The payment the conversation is about }
+        state: { type: string, enum: [WITH_BOT, WAITING_FOR_AGENT, WITH_AGENT, CLOSED] }
+        assignedOperator: { type: string, nullable: true }
+        handoverReason: { type: string, nullable: true }
+        lastSequence: { type: integer }
+        lastMessageHash: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time, nullable: true }
+    ConversationMessage:
+      type: object
+      required: [messageId, conversationId, sequence, senderType, sender, body, messageHash, createdAt]
+      properties:
+        messageId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        sequence: { type: integer, minimum: 1 }
+        senderType: { type: string, enum: [CUSTOMER, BOT, AGENT, SYSTEM] }
+        sender: { type: string, description: 'credential:<id>, bank:<client>, the operator for the bank; "agent" for the customer' }
+        body: { type: string }
+        attachment: { $ref: '#/components/schemas/ConversationAttachment' }
+        clientMessageId: { type: string, nullable: true }
+        previousHash: { type: string, nullable: true }
+        messageHash: { type: string, description: SHA-256 over the canonical message and previousHash }
+        createdAt: { type: string, format: date-time }
+        deliveredAt: { type: string, format: date-time, nullable: true }
+        readAt: { type: string, format: date-time, nullable: true }
+    ConversationThread:
+      type: object
+      required: [conversation, messages]
+      properties:
+        conversation: { $ref: '#/components/schemas/Conversation' }
+        messages: { type: array, items: { $ref: '#/components/schemas/ConversationMessage' } }
+    MessageSent:
+      type: object
+      required: [message, replayed]
+      properties:
+        message: { $ref: '#/components/schemas/ConversationMessage' }
+        conversation: { $ref: '#/components/schemas/Conversation' }
+        replayed: { type: boolean }
     Mandate:
       type: object
       required: [mandateId, nexusId, credentialId, mandateReference, payee, currency, perPaymentLimitMinor, totalLimitMinor, frequency, validFrom, validUntil, termsVersion, termsHash, termsBase64, offerExpiresAt, state, usedTotalMinor, createdAt]

@@ -1,4 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import { operatorClaim as claimConversation, operatorClose as closeConversation, operatorMessages as conversationMessages, operatorQueue as conversationQueue, operatorRelease as releaseConversation, operatorSend as answerConversation } from '../services/conversationService';
 import { z } from 'zod';
 import { login, logout, InvalidAdminCredentialsError } from '../services/adminAuthService';
 import { ADMIN_SESSION_COOKIE, getSessionTokenFromRequest, requireAdminSession, requireRole, type AdminRequest } from '../middleware/adminAuth';
@@ -232,6 +233,36 @@ export function buildAdminRouter(options: { cookieSecure: boolean }): Router {
       }
     });
   }
+
+  // --- Conversations handed over to a person (operators of the bank) ---
+  const conversationOperator = (req: Request) => ({ username: sessionOf(req as AdminRequest).username, clientId: sessionOf(req as AdminRequest).clientId });
+  const conversationParam = z.string().uuid();
+
+  router.get('/admin/api/conversations', requireRole('operator'), async (req, res, next) => {
+    try { res.json({ conversations: await conversationQueue(conversationOperator(req)) }); } catch (error) { next(error); }
+  });
+  router.post('/admin/api/conversations/:conversationId/claim', requireRole('operator'), async (req, res, next) => {
+    try { res.json(await claimConversation(conversationOperator(req), conversationParam.parse(req.params.conversationId))); } catch (error) { next(error); }
+  });
+  router.get('/admin/api/conversations/:conversationId/messages', requireRole('operator'), async (req, res, next) => {
+    try {
+      const after = z.coerce.number().int().min(0).default(0).parse(req.query.after);
+      res.json(await conversationMessages(conversationOperator(req), conversationParam.parse(req.params.conversationId), after));
+    } catch (error) { next(error); }
+  });
+  router.post('/admin/api/conversations/:conversationId/messages', requireRole('operator'), async (req, res, next) => {
+    try {
+      const body = z.object({ body: z.string().min(1).max(4000), clientMessageId: z.string().min(1).max(64).nullable().optional() }).strict().parse(req.body);
+      const sent = await answerConversation(conversationOperator(req), conversationParam.parse(req.params.conversationId), body);
+      res.status(sent.replayed ? 200 : 201).json(sent);
+    } catch (error) { next(error); }
+  });
+  router.post('/admin/api/conversations/:conversationId/release', requireRole('operator'), async (req, res, next) => {
+    try { res.json(await releaseConversation(conversationOperator(req), conversationParam.parse(req.params.conversationId))); } catch (error) { next(error); }
+  });
+  router.post('/admin/api/conversations/:conversationId/close', requireRole('operator'), async (req, res, next) => {
+    try { res.json(await closeConversation(conversationOperator(req), conversationParam.parse(req.params.conversationId))); } catch (error) { next(error); }
+  });
 
   // --- In-app verification calls (ADR 0017) ---
   // An operator of the bank answers the customer's audio or video call in the

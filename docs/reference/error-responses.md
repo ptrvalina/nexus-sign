@@ -75,6 +75,11 @@ A path that matches no route returns 401 without a bank token and the framework'
 | `RECOVERY_SETUP_EXPIRED` | `POST /v1/mobile/recovery/setup` | The salt was not issued to this credential within the last 600 s, or differs | Handled by the SDK: request new parameters |
 | `RECOVERY_INTEGRITY` | `POST /v1/recovery/sessions`, recovery completion | The stored recovery configuration is not the identity's latest sealed `RECOVERY_CONFIGURED` record, or its key (and, at session creation, salt or iteration count) differs from that record (`integrity_violation`) | Security incident; do not retry |
 | `APPROVAL_PENDING` | `POST /admin/api/identities/{nexusId}/revoke`, `/reactivate` | A request for the same identity and action is already waiting for approval | Approve or reject the pending request |
+| `CONVERSATION_CLOSED` | Sending in, or handing over, a conversation | The conversation was closed | Open a new conversation |
+| `CONVERSATION_NOT_WITH_BOT` | `POST /v1/conversations/{id}/bot-messages` | A person has taken over or the conversation waits for one; the bot no longer answers | Do not answer from the bot |
+| `CONVERSATION_NOT_WAITING` | `POST /admin/api/conversations/{id}/claim` | The conversation is not waiting for an operator | Refresh the queue |
+| `CONVERSATION_NOT_ASSIGNED` | Operator answer, release or close | Another operator took the conversation | Refresh the queue |
+| `MESSAGE_ID_REUSED` | Sending a message | The `clientMessageId` was used before for another text | Use a new id for a new message |
 | `MANDATE_REFERENCE_EXISTS` | `POST /v1/mandates` | The bank client already has a mandate with this `mandateReference` | Use a new reference; changed terms are a new mandate |
 | `MANDATE_NOT_PENDING` | `POST /v1/mobile/mandates/{id}/signature` | The mandate is no longer waiting for a signature | Handled by the SDK: refresh the mandate |
 | `MANDATE_OFFER_EXPIRED` | `POST /v1/mobile/mandates/{id}/signature` | The time to sign (`offerExpiresAt`) has passed | The bank proposes the mandate again |

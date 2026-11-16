@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { createNexusIdentity, getNexusIdentityForClient, reactivateNexusIdentity, suspendNexusIdentity } from '../services/nexusIdentityService';
 import { getSettings, listDevices } from '../services/customerAccountService';
+import { bankClose, bankConversation, botSend, verifyConversation } from '../services/conversationService';
 import { createMandate, getMandateForClient, listMandatesForIdentity, requestMandateDebit, withdrawMandate } from '../services/mandateService';
 import { getCredentialForClient, revokeCredentialForClient } from '../services/credentialService';
 import { createAuthorization } from '../services/authorizationService';
@@ -123,6 +124,37 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
         lastUsedAt: identity.lastUsedAt?.toISOString() ?? null,
         evidenceHead: await getChainHead(pool, identity.nexusId),
       });
+    } catch (e) { next(e); }
+  });
+
+  // --- Conversations: the bank's bot answers and hands over ---
+
+  router.get('/v1/conversations/:conversationId', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const after = z.coerce.number().int().min(0).default(0).parse(req.query.after);
+      res.json(await bankConversation(clientIdOf(req), z.string().uuid().parse(req.params.conversationId), after));
+    } catch (e) { next(e); }
+  });
+
+  /** The bank's bot answers; with handover=true it passes the conversation to a person. */
+  router.post('/v1/conversations/:conversationId/bot-messages', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ body: z.string().min(1).max(4000), clientMessageId: z.string().min(1).max(64).nullable().optional(),
+        attachment: z.object({ reference: z.string(), sha256: z.string(), mediaType: z.string(), fileName: z.string(), sizeBytes: z.number().int() }).strict().nullable().optional(), handover: z.boolean().optional(), handoverReason: z.string().min(1).max(200).optional() }).strict().parse(req.body);
+      const sent = await botSend(clientIdOf(req), z.string().uuid().parse(req.params.conversationId), body);
+      res.status(sent.replayed ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/conversations/:conversationId/close', async (req: AuthenticatedRequest, res, next) => {
+    try { res.json(await bankClose(clientIdOf(req), z.string().uuid().parse(req.params.conversationId))); } catch (e) { next(e); }
+  });
+
+  /** Recomputes the conversation's hash chain. */
+  router.get('/v1/conversations/:conversationId/integrity', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const problems = await verifyConversation(clientIdOf(req), z.string().uuid().parse(req.params.conversationId));
+      res.json({ intact: problems.length === 0, problems });
     } catch (e) { next(e); }
   });
 

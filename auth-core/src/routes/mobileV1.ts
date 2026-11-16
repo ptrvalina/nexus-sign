@@ -6,6 +6,7 @@ import { authenticateMobileSession, type MobileAuthenticatedRequest } from '../m
 import { consumeMobileSession, issueBootstrapToken, type ReplacementAuthorization } from '../services/mobileSessionService';
 import { decideDeviceReplacement, listOpenReplacements, requestDeviceReplacement } from '../services/deviceReplacementService';
 import { getNexusIdentityForClient } from '../services/nexusIdentityService';
+import { customerClose, customerMessages, customerRead, customerRequestsAgent, customerSend, listCustomerConversations, openConversation } from '../services/conversationService';
 import { customerMandateAction, getMandateForDevice, listMandatesForIdentity, signMandate, type CustomerMandateAction } from '../services/mandateService';
 import { createCredential, getActiveDeviceCredential, getCredentialForClient, hasEnrolledCredential, hasRevokedCredential, revokeDeviceByCustomer } from '../services/credentialService';
 import { assertCredentialIntegrity } from '../services/credentialIntegrity';
@@ -415,6 +416,59 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const result = await revokeDeviceByCustomer(device.clientId, device.nexusId, device.credentialId, target);
       res.json({ credentialId: target, state: 'REVOKED', remainingActiveDevices: result.remainingActive });
     } catch (e) { next(e); }
+  });
+
+  // --- Conversations with the bank (chat, the bank's bot, handover to a person) ---
+
+  const conversationParam = z.string().uuid();
+  const attachmentSchema = z.object({ reference: z.string(), sha256: z.string(), mediaType: z.string(), fileName: z.string(), sizeBytes: z.number().int() }).strict().nullable().optional();
+
+  router.get('/v1/mobile/conversations', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json({ conversations: await listCustomerConversations((await deviceInScope(req)).nexusId) }); } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ topic: z.string().min(1).max(200), body: z.string().min(1).max(4000), authorizationId: z.string().uuid().nullable().optional(),
+        clientMessageId: z.string().min(1).max(64).nullable().optional(), attachment: attachmentSchema }).strict().parse(req.body);
+      res.status(201).json(await openConversation(device, body));
+    } catch (e) { next(e); }
+  });
+
+  /** Messages after `after` (history and polling); the bank's messages are marked delivered. */
+  router.get('/v1/mobile/conversations/:conversationId/messages', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const after = z.coerce.number().int().min(0).default(0).parse(req.query.after);
+      res.json(await customerMessages(device, conversationParam.parse(req.params.conversationId), after));
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations/:conversationId/messages', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ body: z.string().min(1).max(4000), clientMessageId: z.string().min(1).max(64).nullable().optional(), attachment: attachmentSchema }).strict().parse(req.body);
+      const sent = await customerSend(device, conversationParam.parse(req.params.conversationId), body);
+      res.status(sent.replayed ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations/:conversationId/read', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ upToSequence: z.number().int().min(1) }).strict().parse(req.body);
+      res.json({ marked: await customerRead(device, conversationParam.parse(req.params.conversationId), body.upToSequence) });
+    } catch (e) { next(e); }
+  });
+
+  /** "Talk to a person": the conversation waits for an operator of the bank. */
+  router.post('/v1/mobile/conversations/:conversationId/handover', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerRequestsAgent(await deviceInScope(req), conversationParam.parse(req.params.conversationId))); } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations/:conversationId/close', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerClose(await deviceInScope(req), conversationParam.parse(req.params.conversationId))); } catch (e) { next(e); }
   });
 
   // --- Payment mandates: the customer signs, declines, suspends, resumes, revokes ---
