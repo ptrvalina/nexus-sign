@@ -1,5 +1,7 @@
 # NEXUS-SIGN — Final production readiness package
 
+> **Record of the third cycle.** Superseded for status by [engineering readiness](ENGINEERING_READINESS.md) (fourth cycle), which has the CI results this package could not have. Numbers below are as of the third cycle.
+
 Directive: *Master Engineering Directive — Final Production Readiness Closure, v3.0*. Branch `engineering/production-readiness`, 41 commits on top of `2.0.0-rc.2` (`5999984`), of which 14 in this cycle (`770092f` … the commit of this package). Nothing has been pushed, published or deployed; no real bank data or keys were used.
 
 ---
@@ -21,11 +23,11 @@ What blocks the next status is verification, not code: nothing has run on a phon
 
 ## B. Functional coverage matrix
 
-[`PRODUCT_FEATURE_COMPLIANCE_MATRIX.md`](PRODUCT_FEATURE_COMPLIANCE_MATRIX.md): 44 software functions with backend, API, iOS, Android, UI, security, unit, integration, E2E, evidence and final status; the 5 non-software items listed separately. VERIFIED LOCALLY 7, IMPLEMENTED — NOT VERIFIED 36, PARTIAL 1 (F17 payee check, the bank's), NOT IMPLEMENTED 0. No row reaches VERIFIED ON REAL DEVICE, VERIFIED WITH BANK INFRASTRUCTURE or INDEPENDENTLY AUDITED.
+[`FUNCTIONAL_COMPLETENESS_MATRIX.md`](FUNCTIONAL_COMPLETENESS_MATRIX.md): 44 software functions with backend, API, iOS, Android, UI, security, unit, integration, E2E, evidence and final status; the 5 non-software items listed separately. VERIFIED LOCALLY 7, IMPLEMENTED — NOT VERIFIED 36, PARTIAL 1 (F17 payee check, the bank's), NOT IMPLEMENTED 0. No row reaches VERIFIED ON REAL DEVICE, VERIFIED WITH BANK INFRASTRUCTURE or INDEPENDENTLY AUDITED.
 
 ## C. Security findings register
 
-[`SECURITY_FINDINGS_REGISTER.md`](SECURITY_FINDINGS_REGISTER.md), ASVS 4.0 / MASVS 2.0 groups. Critical 0. High 4, all fixed. Medium 16: 15 fixed, D-01 open with the decision *accepted for a controlled pilot under conditions, not for production* (a captured iOS offline secret yields only `OFFLINE_PROVISIONAL`; protocol fix before production). Low 44 (6 fixed, 38 open), Info 19. This is an internal review, not a penetration test.
+[`SECURITY_FINDINGS.md`](SECURITY_FINDINGS.md), ASVS 4.0 / MASVS 2.0 groups. Critical 0. High 4, all fixed. Medium 16: 15 fixed, D-01 open with the decision *accepted for a controlled pilot under conditions, not for production* (a captured iOS offline secret yields only `OFFLINE_PROVISIONAL`; protocol fix before production). Low 44 (6 fixed, 38 open), Info 19. This is an internal review, not a penetration test.
 
 ## D. Test execution report
 

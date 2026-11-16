@@ -6,8 +6,8 @@ SoftHSM2 is a software token used to test the PKCS#11 code paths. It is **not** 
 
 | Environment | What ran |
 |---|---|
-| Review environment | None of the eight SoftHSM suites: SoftHSM2 cannot be installed there (no package network). The worker-thread host ran against a PKCS#11 double that stalls (`hsm-worker-host.test.mjs`, unit) |
-| CI (`auth-core / integration`) | The eight suites on SoftHSM 2.7 with `REQUIRE_ALL_INTEGRATION_SUITES=1`, so a missing SoftHSM fails the job. Not yet run on this branch (nothing pushed) |
+| Review environment | None of the eight SoftHSM suites (no package network); they run in CI. The worker-thread host ran against a PKCS#11 double that stalls (`hsm-worker-host.test.mjs`, unit) |
+| CI (`auth-core / integration`) | The eight suites on SoftHSM 2.7.0 (built from the pinned upstream tag) with `REQUIRE_ALL_INTEGRATION_SUITES=1`: 8/8 passed, 106 tests (run `43932489275`, 2026-11-16). Details: [HSM validation](../engineering/HSM_VALIDATION.md) |
 | A bank HSM | Never |
 
 ## The eight suites and what they prove

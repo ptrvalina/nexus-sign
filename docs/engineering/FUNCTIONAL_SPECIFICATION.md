@@ -1,6 +1,6 @@
 # Functional specification
 
-What NEXUS-SIGN does, for whom, through which interface, under which rules. It describes the code on branch `engineering/production-readiness`; the API contract is [`auth-core/openapi.yaml`](../../auth-core/openapi.yaml) (92 routes), the protocols are in [docs/protocol](../protocol/README.md), and the status of each function against the product presentation is in the [functional coverage matrix](PRODUCT_FEATURE_COMPLIANCE_MATRIX.md).
+What NEXUS-SIGN does, for whom, through which interface, under which rules. It describes the code on branch `engineering/production-readiness`; the API contract is [`auth-core/openapi.yaml`](../../auth-core/openapi.yaml) (92 routes), the protocols are in [docs/protocol](../protocol/README.md), and the status of each function against the product presentation is in the [functional coverage matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md).
 
 ## 1. Purpose and actors
 

@@ -84,4 +84,4 @@ How NEXUS-SIGN is protected, layer by layer, and which control answers which thr
 
 ## Not covered, or not yet shown
 
-External penetration test, load and resilience tests, a production HSM, devices, and a cryptographic review have not happened. The open findings and their decisions are in the [findings register](SECURITY_FINDINGS_REGISTER.md).
+External penetration test, load and resilience tests, a production HSM, devices, and a cryptographic review have not happened. The open findings and their decisions are in the [findings register](SECURITY_FINDINGS.md).

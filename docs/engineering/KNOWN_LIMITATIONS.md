@@ -1,21 +1,21 @@
 # Known limitations
 
-What NEXUS-SIGN does not do, or has not been shown to do, on branch `engineering/production-readiness` (version `2.0.0-rc.2` plus unreleased changes). Collected from the [threat model](../security/threat-model.md#residual-risks), the [release notes](../operations/release.md), the [security assessment](SECURITY_ASSESSMENT_REPORT.md) and the [feature matrix](PRODUCT_FEATURE_COMPLIANCE_MATRIX.md). A bank reads this before a pilot.
+What NEXUS-SIGN does not do, or has not been shown to do, on branch `engineering/production-readiness` (version `2.0.0-rc.2` plus unreleased changes), updated in the fourth cycle with the CI results. Collected from the [threat model](../security/threat-model.md#residual-risks), the [release notes](../operations/release.md), the [security assessment](SECURITY_ASSESSMENT_REPORT.md) and the [feature matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md). A bank reads this before a pilot.
 
 ## Not yet shown to work
 
 | Limitation | Consequence | What closes it |
 |---|---|---|
-| Nothing has been run on a physical iPhone or Android phone | Key generation in Secure Enclave / StrongBox, biometric binding, the confirmation screen, push handling, offline confirmation and recovery on the phone are code, not demonstrated behaviour | The [device acceptance checklist](DEVICE_ACCEPTANCE_CHECKLIST.md) on real devices |
-| The iOS SDK was never compiled; of the Android SDK only the platform-independent core was compiled and tested on the JVM (39 tests) | SDK changes on this branch outside that core may not compile | CI jobs `ios-sdk` and `android-sdk` green on the branch |
-| No production HSM has been used; SoftHSM 2.7 only, and not in this review | Vendor-specific behaviour of `C_Login`, session limits, failover and key attributes is unknown | Validation on the bank's HSM model |
-| The Auth Core HTTP integration suites did not run in this review (they need `express`, `ioredis`, `prom-client`) | Route-level behaviour of the changes on this branch is covered by service-level PostgreSQL tests only | CI job `auth-core / integration` green on the branch |
+| Nothing has been run on a physical iPhone or Android phone | Key generation in Secure Enclave / StrongBox, biometric binding, the confirmation screen, push handling, offline confirmation and recovery on the phone are code that compiles and passes unit tests, not demonstrated behaviour | The [device acceptance checklist](DEVICE_ACCEPTANCE_CHECKLIST.md) on real devices ([protocol](RELEASE_BLOCKERS.md)) |
+| The SDKs are built and unit-tested in CI only (iOS on a macOS runner, Android with Gradle, Android Lint on the core SDK); no device or emulator ran them | Hardware-backed paths (Secure Enclave, StrongBox, BiometricPrompt, Keychain access control) are not exercised by unit tests | Device acceptance; details in [SDK validation](SDK_VALIDATION.md) |
+| No production HSM has been used; the eight HSM suites pass on SoftHSM 2.7.0 in CI | Vendor-specific behaviour of `C_Login`, session limits, failover, FIPS mode and key attributes is unknown | Validation on the bank's HSM model ([HSM validation](HSM_VALIDATION.md)) |
 | No penetration test, load test or resilience test | Throughput, latency and behaviour under attack are unmeasured | The bank acceptance stage of the [implementation path](../integration/pilot-execution-pack.md) |
 | App Attest and Play Integrity verification are tested with test chains and verdicts made by the tests, not with real device tokens | A device-specific format detail would not be found | Recorded tokens from real devices as test fixtures |
+| Audio and video calls ran between Chromium and Auth Core in CI (WebRTC media tests), not on phones, not through the bank's TURN servers | Mobile network behaviour, audio routing and camera handling on devices are untested | Real audio/video scenarios ([protocol](RELEASE_BLOCKERS.md)) |
 
 ## Functions of the product presentation that are partial
 
-One: checking the payee against the bank's own records (Verification of Payee) is the bank's function; NEXUS-SIGN guarantees that the screen shows exactly the signed payee, labelled, and refuses a second account number in other fields. The bot is the bank's own, connected through webhooks and the bank API. See the [functional coverage matrix](PRODUCT_FEATURE_COMPLIANCE_MATRIX.md).
+One: checking the payee against the bank's own records (Verification of Payee) is the bank's function; NEXUS-SIGN guarantees that the screen shows exactly the signed payee, labelled, and refuses a second account number in other fields. The bot is the bank's own, connected through webhooks and the bank API. See the [functional coverage matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md).
 
 ## Security limits of the current design
 
@@ -28,14 +28,14 @@ One: checking the payee against the bank's own records (Verification of Payee) i
 | Offline confirmation v1 codes are HMACs under a key Auth Core holds | Whoever holds the database and `DEVICE_SECRET_ENCRYPTION_KEY` can compute a valid v1 code. v1 (`OFFLINE_CONFIRMATION_MODE=immediate`) is refused in production; v2 waits for the device signature |
 | Credential rows inserted directly into the database are not refused by the database | They are refused at use by the runtime integrity check against sealed enrolments; authorization inserts are refused by the database since migration 024 |
 | Migrations are forward-only | The ledger and checksums (since `e4d269c`) make installs and upgrades repeatable; there are no down migrations. Restore a backup to roll back |
-| iOS offline secret is usable by the app process once it leaves the Secure Enclave | Finding D-01, open: accepted for a controlled pilot under conditions ([decision](SECURITY_FINDINGS_REGISTER.md#decision-on-d-01-medium-open)); protocol fix before production |
+| iOS offline secret is usable by the app process once it leaves the Secure Enclave | Finding D-01, open: accepted for a controlled pilot under conditions ([decision](SECURITY_FINDINGS.md#decision-on-d-01-medium-open)); protocol fix before production |
 | The labelled confirmation prompt (D-02 fix) has not been seen on a device | Long names, translated labels and system prompt truncation need a device check |
 | DTLS-SRTP for calls is a WebRTC property, not enforced by Auth Core | Finding A2-11 |
 | Audio and video show a person; they do not identify them | No liveness or deepfake detection is claimed |
 | The in-database ECDSA verifier is PL/pgSQL | Tested against OpenSSL on generated valid and corrupted inputs; slower than native code; not reviewed for timing side channels (it handles public data only) |
 | Conversation bodies are stored in the Auth Core database in clear text | Protected like the rest of the database; not end-to-end encrypted; the bank sets retention |
 | No API rate limiting in Auth Core | Expected at the bank's gateway (finding A1-10) |
-| Low and informational review findings | 38 Low and 19 Info findings are open ([findings register](SECURITY_FINDINGS_REGISTER.md)) |
+| Low and informational review findings | 38 Low and 20 Info findings are open ([findings register](SECURITY_FINDINGS.md)) |
 | Customer calls are recorded, not sealed | The call row is immutable once ended; calls authorize nothing |
 | Metrics and the audit export | The confirmation counter counts in the confirming transaction; the audit export needs a lag above the longest transaction |
 

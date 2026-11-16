@@ -62,4 +62,20 @@ if [ -n "$undocumented" ]; then
   printf 'Conflict codes raised by Auth Core but missing from docs/reference/error-responses.md:%s\n' "$undocumented" >&2
   exit 1
 fi
+# Relative links between Markdown documents must point at existing files
+# (documents are renamed and merged; a dangling link hides evidence).
+broken=$(printf '%s\n' "$files" | grep -E '\.md$' | python3 -c '
+import os, re, sys
+for f in sys.stdin.read().split():
+    if not os.path.isfile(f): continue
+    text = re.sub(r"```.*?```", "", open(f, encoding="utf8").read(), flags=re.S)
+    for m in re.finditer(r"\]\(([^)\s]+)\)", text):
+        target = m.group(1).split("#")[0]
+        if target and not re.match(r"^[a-z]+:", target) and not os.path.exists(os.path.normpath(os.path.join(os.path.dirname(f), target))):
+            print(f"{f}: {m.group(1)}")
+')
+if [ -n "$broken" ]; then
+  printf 'Broken relative links in Markdown:\n%s\n' "$broken" >&2
+  exit 1
+fi
 echo 'ok: repository hygiene'

@@ -4,7 +4,7 @@ What was verified for release 2.0.0-rc.2, what CI checks once it can run, and wh
 
 ## Verified for 2.0.0-rc.2 in the build environment
 
-Historical record of 2.0.0-rc.2, run on 2026-10-07 with Node.js 22 in the environment that produced the release candidate. The counts below are for that tree and are out of date (the current tree has more routes, tests and migrations; for example `check:openapi` now checks 49 routes); no logs were kept. Results for the current branch are in the [production readiness report](../engineering/PRODUCTION_READINESS_REPORT.md). That environment had no access to the npm registry, Gradle and Maven repositories, container registries or GitHub Actions, and no Swift toolchain.
+Historical record of 2.0.0-rc.2, run on 2026-10-07 with Node.js 22 in the environment that produced the release candidate. The counts below are for that tree and are out of date (the current tree has more routes, tests and migrations; for example `check:openapi` now checks 49 routes); no logs were kept. Results for the current branch are in the [engineering readiness report](../engineering/ENGINEERING_READINESS.md) and [CI validation](../engineering/CI_VALIDATION.md). That environment had no access to the npm registry, Gradle and Maven repositories, container registries or GitHub Actions, and no Swift toolchain.
 
 | Check | Command | Result |
 |---|---|---|

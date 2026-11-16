@@ -67,16 +67,30 @@
 
 ## Engineering status and reports
 
-- [Final engineering report](engineering/FINAL_ENGINEERING_REPORT.md): initial state, every change, test results with commands, gates and what blocks the pilot
-- [Final readiness package (A–J)](engineering/FINAL_READINESS_PACKAGE.md)
+Current status (fourth cycle, from CI runs):
+
+- [Engineering readiness](engineering/ENGINEERING_READINESS.md): final report A–O and the decision
+- [Release blockers](engineering/RELEASE_BLOCKERS.md), with the test protocol for each external check
+- [CI validation](engineering/CI_VALIDATION.md): every CI job, run IDs, commands
+- [SDK validation](engineering/SDK_VALIDATION.md): iOS and Android builds and tests
+- [HSM validation](engineering/HSM_VALIDATION.md): the eight HSM suites on SoftHSM 2.7.0
+- [Security findings](engineering/SECURITY_FINDINGS.md): findings register and threat model of ten scenarios
+- [Functional completeness matrix](engineering/FUNCTIONAL_COMPLETENESS_MATRIX.md): the 44 software functions (49 items) against code and tests
+- [Pilot readiness matrix](engineering/PILOT_READINESS_MATRIX.md): the 20 pilot conditions
+- [Technical debt](engineering/TECHNICAL_DEBT.md)
+- [Known limitations](engineering/KNOWN_LIMITATIONS.md)
+
+Architecture and method:
+
 - [Functional specification](engineering/FUNCTIONAL_SPECIFICATION.md)
 - [Cryptographic architecture](engineering/CRYPTOGRAPHIC_ARCHITECTURE.md)
 - [Security architecture](engineering/SECURITY_ARCHITECTURE.md)
 - [Security testing guide](engineering/SECURITY_TESTING_GUIDE.md)
-- [Security findings register](engineering/SECURITY_FINDINGS_REGISTER.md)
-- [Production readiness report](engineering/PRODUCTION_READINESS_REPORT.md): status per area, with the evidence and what blocks each step
 - [Security assessment report](engineering/SECURITY_ASSESSMENT_REPORT.md): findings of the internal review and how each was handled
-- [Product feature compliance matrix](engineering/PRODUCT_FEATURE_COMPLIANCE_MATRIX.md): every function of the product description against the code
 - [Engineering quality review](engineering/ENGINEERING_QUALITY_REVIEW.md)
-- [Known limitations](engineering/KNOWN_LIMITATIONS.md)
 - [Decision log](engineering/DECISION_LOG.md), [key management](engineering/KEY_MANAGEMENT.md), [native build guide](engineering/NATIVE_BUILD_GUIDE.md), [device acceptance checklist](engineering/DEVICE_ACCEPTANCE_CHECKLIST.md), [third-party media](engineering/THIRD_PARTY_MEDIA.md)
+
+Records of earlier cycles (numbers as of their date):
+
+- [Final readiness package (A–J), third cycle](engineering/FINAL_READINESS_PACKAGE.md)
+- [Final engineering report, first and second cycles](engineering/FINAL_ENGINEERING_REPORT.md)

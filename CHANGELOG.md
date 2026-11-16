@@ -6,6 +6,15 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ### Security
 
+- Dependencies: zod 4.6.7 (GHSA-mrhx-c7xc-m3w5, memory exhaustion on oversized constrained collections) and body-parser 1.20.9 (GHSA-27r3-jxmh-p828 / CVE-2026-111181, denial of service with a compressed body). Validation behaviour is unchanged except that `uuid()` now also checks the RFC 9562 version and variant; every identifier the system issues is a version-4 UUID.
+- iOS SDK: mandate terms are checked like on Android (finding N-13): canonical bytes, exactly the protocol's fields, frequency, integer limits, total not below the per-payment limit, validity in order. Before, the iOS SDK accepted 7 of the 17 invalid shared vectors, among them terms with a field it would sign without showing.
+- CI runs the eight HSM suites on SoftHSM 2.7.0 built from the pinned upstream tag; Ubuntu's SoftHSM 2.6.1 lacks `CKM_ECDSA_SHA256`, so the suites had not run.
+
+### Fixed
+
+- iOS SDK did not compile: `NexusCustomerCall.operator` used a Swift keyword (the JSON key stays `operator`).
+- Verification calls: the side that closes the call (operator decision, release, device cancel) sends the only `bye`; before, the server's state watcher could close the call first with its own reason.
+
 - CI: with `REQUIRE_ALL_INTEGRATION_SUITES=1` (set in the integration job) an integration suite that cannot run for lack of PostgreSQL, Redis or SoftHSM fails instead of skipping. Release: the workflow builds only when the tag equals `v` + `VERSION` and the `ci.yml` and `security.yml` runs for the tagged commit succeeded.
 - Evidence for every outcome (audit finding B-04): declined, rejected, expired, cancelled and unsigned authorizations and revoked credentials are sealed into the NEXUS ID's evidence chain (record types `AUTHORIZATION_OUTCOME` and `CREDENTIAL_REVOKED`). A database trigger records each outcome with its reason in the transaction of the state change (migration 025), so no code path can end an authorization without it; the expiry worker seals it. `verify-evidence.mjs` checks and prints the new records. **Integration impact:** chains contain the new record types; a bank verifier built on an older `scripts/lib/evidence.mjs` reports them as unknown and must be updated. Test on PostgreSQL (`evidence-outcomes.test.mjs`, 4 cases).
 - The HSM evidence key must have been generated in the HSM and never been extractable or non-sensitive (`CKA_LOCAL`, `CKA_NEVER_EXTRACTABLE`, `CKA_ALWAYS_SENSITIVE`), as the master-key KEK already must (audit finding B-02). An imported evidence key, of which a copy may exist outside the HSM, is refused at startup. **Operations impact:** a deployment whose evidence key was imported must generate a new one in the HSM and rotate ([key rotation](docs/operations/runbooks/key-rotation.md)). Tested with a PKCS#11 module double; the SoftHSM suite was not run here.

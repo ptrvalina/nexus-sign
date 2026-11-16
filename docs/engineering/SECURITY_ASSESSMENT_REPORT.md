@@ -13,7 +13,7 @@ Internal security review of NEXUS-SIGN at `2.0.0-rc.2` plus the unreleased chang
 | D Mobile SDKs | iOS and Android key handling, parsing and display of signed bytes, offline confirmation, push, pinning |
 | E Documentation, CI, tests | Claims against evidence, CI jobs, dependency hygiene, test classification |
 
-Each area was reviewed by reading the code and, where the environment allowed, by running attacks: SQL sessions with the application's and the gateway's database roles against PostgreSQL 16, forged and malformed signatures against the in-database verifier and OpenSSL, and generated display-text cases across the JavaScript, Python and Java rule implementations. The environment had no SoftHSM, no npm, Gradle or Swift toolchains and no phones ([what was run](PRODUCTION_READINESS_REPORT.md#what-was-run)).
+Each area was reviewed by reading the code and, where the environment allowed, by running attacks: SQL sessions with the application's and the gateway's database roles against PostgreSQL 16, forged and malformed signatures against the in-database verifier and OpenSSL, and generated display-text cases across the JavaScript, Python and Java rule implementations. The environment had no SoftHSM, no npm, Gradle or Swift toolchains and no phones (CI results since the fourth cycle: [CI validation](CI_VALIDATION.md)).
 
 ## Results
 
@@ -53,7 +53,7 @@ Low and Info findings are listed in the [area reports](security-review/README.md
 | C-04 | The registry role could block credentials permanently with unsigned statements | Fixed | `8f33d81`: statements verified with the bank's trust key in the database |
 | C-05 | The lifecycle trigger checked updates only; inserts could create a verified, committed row | Fixed for authorizations | `5ba29ec`, migration 024. Credential inserts still unchecked by the database (caught by the runtime integrity check) |
 | C-06 | Migrations do not apply to an empty database; upgrade integrity cannot be shown | Fixed | `e4d269c`: baseline, migration ledger with SHA-256 checksums, sequence check, a lock against parallel runs, failure leaves no partial change; fresh install equals `schema.sql`, upgrade from rc.2 tested (`migrations`, 7 tests, rerun with 025–029) |
-| D-01 | iOS: the offline secret is usable by the app once it leaves the Secure Enclave | Open — accepted for a controlled pilot with conditions | [Decision](SECURITY_FINDINGS_REGISTER.md#decision-on-d-01-medium-open); protocol fix before production |
+| D-01 | iOS: the offline secret is usable by the app once it leaves the Secure Enclave | Open — accepted for a controlled pilot with conditions | [Decision](SECURITY_FINDINGS.md#decision-on-d-01-medium-open); protocol fix before production |
 | D-02 | Both SDKs: the prompt layout can be ambiguous | Fixed in code (third cycle); device check pending | Labelled prompt, reserved separators, IBAN look-alikes refused in Auth Core, both SDKs and the sandbox; shared vectors |
 
 ### Fixed Low findings
@@ -91,7 +91,7 @@ The [threat model](../security/threat-model.md) describes release 2.0.0-rc.2. Ch
 
 ## Third cycle (final production readiness closure)
 
-D-02 and D-07 fixed in code; D-01 decided (accepted for a controlled pilot with conditions, not for production); six new items N-01 to N-06. All findings with their ASVS/MASVS group and decision: [findings register](SECURITY_FINDINGS_REGISTER.md).
+D-02 and D-07 fixed in code; D-01 decided (accepted for a controlled pilot with conditions, not for production); six new items N-01 to N-06. All findings with their ASVS/MASVS group and decision: [findings register](SECURITY_FINDINGS.md).
 
 ## What this report does not cover
 
