@@ -14,6 +14,8 @@ export type AuditEventType =
   | 'authorization_consumed'
   | 'authorization_expired'
   | 'authorization_rejected'
+  | 'authorization_declined'
+  | 'authorization_cancelled'
   | 'evidence_sealed'
   | 'recovery_configured'
   | 'recovery_started'

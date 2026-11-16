@@ -281,6 +281,8 @@ Webhooks report the outcome of each authorization, bank transaction state change
 | `push.failed` | `messageId`, `nexusId`, `category`, `authorizationId`, `reason` (`NO_PUSH_REGISTRATION`, `NO_ACTIVE_REGISTRATION`, `PUSH_KEY_REPLACED`, `PUSH_KEY_UNAVAILABLE`, `PUSH_DELIVERY_DISABLED`, `DEVICE_TOKEN_INVALID`, `REJECTED`, `RETRIES_EXHAUSTED`, `PROVIDER_NOT_CONFIGURED`, `EXPIRED`) |
 | `push.timeout` | `messageId`, `nexusId`, `authorizationId`, `sentAt` |
 | `credential.replaced` | `nexusId`, `newCredentialId`, `replacedCredentialIds`, `method`, `reference`, `enrolmentEvidenceHash` |
+| `authorization.declined` | `authorizationId`, `nexusId`, `transactionReference`, `credentialId`, `reason` (`NOT_ME`, `WRONG_DETAILS`, `OTHER`). The customer refused the payment on the enrolled device; treat `NOT_ME` as a fraud signal (block the order, contact the customer) |
+| `authorization.cancelled` | `authorizationId`, `nexusId`, `transactionReference`, `reason`. The bank withdrew the authorization (`POST /v1/authorizations/{id}/cancel` with `ORDER_CHANGED`, `FRAUD_SUSPECTED`, `CUSTOMER_REQUEST` or `OTHER`) |
 | `credential.replacement_requested` | `nexusId`, `replacementId`, `method`, `reference`, `notBefore`, `expiresAt` |
 | `credential.replacement_approved` | `nexusId`, `replacementId` |
 | `credential.replacement_cancelled` | `nexusId`, `replacementId` |

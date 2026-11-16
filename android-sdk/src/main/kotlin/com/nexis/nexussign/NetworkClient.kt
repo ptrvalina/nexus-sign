@@ -187,6 +187,10 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
         send("/v1/mobile/verification-sessions/$sessionId/cancel", JsonObject(emptyMap()), TokenSource.Device) // 204
     }
 
+    suspend fun declineAuthorization(authorizationId: String, reason: NexusDeclineReason) {
+        send("/v1/mobile/authorizations/$authorizationId/decline", buildJsonObject { put("reason", reason.name) }, TokenSource.Device)
+    }
+
     // Device replacement hold (A2-01)
 
     suspend fun deviceReplacements(): List<NexusDeviceReplacement> =

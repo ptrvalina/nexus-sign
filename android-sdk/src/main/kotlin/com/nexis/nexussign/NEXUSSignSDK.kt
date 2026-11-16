@@ -487,6 +487,16 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         networkClient.sendPushReceipt(message.messageId, message.credentialId, PushProtocol.receipt(macKey, message.messageId, message.credentialId))
     }
 
+    /**
+     * The customer refuses the payment instead of confirming it. The bank
+     * receives `authorization.declined` with the reason; the authorization can
+     * no longer be confirmed.
+     */
+    suspend fun decline(authorization: NexusAuthorization, reason: NexusDeclineReason) {
+        if (!UUID_PATTERN.matches(authorization.authorizationId)) throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_id", "authorization ID is not a UUID")
+        networkClient.declineAuthorization(authorization.authorizationId, reason)
+    }
+
     /** Open device replacements the bank requested for this NEXUS ID; show them on this (enrolled) device. */
     suspend fun pendingDeviceReplacements(): List<NexusDeviceReplacement> = networkClient.deviceReplacements()
 

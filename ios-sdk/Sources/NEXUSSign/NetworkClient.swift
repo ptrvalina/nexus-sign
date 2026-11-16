@@ -149,6 +149,10 @@ final class NetworkClient {
         _ = try await perform("POST", "/v1/mobile/verification-sessions/\(sessionID)/cancel", body: [:], token: .device)
     }
 
+    func declineAuthorization(authorizationID: String, reason: NexusDeclineReason) async throws {
+        _ = try await perform("POST", "/v1/mobile/authorizations/\(authorizationID)/decline", body: ["reason": reason.rawValue], token: .device)
+    }
+
     // MARK: Device replacement hold (A2-01)
 
     func deviceReplacements() async throws -> [NexusDeviceReplacement] {

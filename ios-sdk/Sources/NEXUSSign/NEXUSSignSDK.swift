@@ -425,6 +425,15 @@ public final class NEXUSSignSDK {
             .sendReceipt(for: message, baseURL: config.baseURL, timeout: config.requestTimeout)
     }
 
+    // MARK: - Decline
+
+    /// The customer refuses the payment instead of confirming it. The bank
+    /// receives `authorization.declined` with the reason; the authorization
+    /// can no longer be confirmed.
+    public func decline(authorization: NexusAuthorization, reason: NexusDeclineReason) async throws {
+        try await networkClient.declineAuthorization(authorizationID: authorization.authorizationId, reason: reason)
+    }
+
     // MARK: - Device replacement
 
     /// Open device replacements the bank requested for this NEXUS ID. Show

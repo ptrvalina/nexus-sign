@@ -136,6 +136,10 @@ public struct NexusDeviceReplacement: Decodable, Equatable {
 
 struct DeviceReplacementList: Decodable { let replacements: [NexusDeviceReplacement] }
 
+/// Why the customer declined a payment. `notMe` ("it wasn't me") is reported
+/// to the bank as a fraud signal.
+public enum NexusDeclineReason: String { case notMe = "NOT_ME", wrongDetails = "WRONG_DETAILS", other = "OTHER" }
+
 struct VerifyResponse: Decodable { let status: NEXUSVerificationOutcome; let reason: String? }
 struct ErrorResponse: Decodable { let error: String?; let serverTime: Int64? }
 

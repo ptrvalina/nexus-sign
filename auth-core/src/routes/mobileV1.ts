@@ -23,6 +23,7 @@ import { getPushEnvelopeForDevice, recordPushReceipt } from '../services/pushSer
 import { deviceCancel, deviceJoin, deviceSignal, deviceSignals } from '../services/verificationCall';
 import { byIp, loginThrottle } from '../middleware/bruteForceProtection';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../services/errors';
+import { declineAuthorization } from '../services/authorizationDecline';
 
 const bootstrapSchema = z.object({
   publicKeyPem: z.string().min(1).max(4096),
@@ -417,6 +418,17 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
    * credential the authorization names. 200 VERIFIED or ALREADY_RECORDED,
    * 202 RECEIVED (the code has not arrived yet), 409 NOT_AWAITING_SIGNATURE,
    * 422 INVALID_DEFERRED_SIGNATURE. */
+  /** The customer declines the payment on the enrolled device ("it wasn't me"). */
+  router.post('/v1/mobile/authorizations/:authorizationId/decline', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const auth = await authorizationInScope(req.params.authorizationId, device);
+      const body = z.object({ reason: z.enum(['NOT_ME', 'WRONG_DETAILS', 'OTHER']) }).parse(req.body);
+      res.json(await declineAuthorization(auth.authorizationId, device.clientId, device.credentialId, body.reason,
+        { ipAddress: req.ip, userAgent: req.header('user-agent') }));
+    } catch (e) { next(e); }
+  });
+
   router.post('/v1/mobile/authorizations/:authorizationId/deferred-signature', async (req: MobileAuthenticatedRequest, res, next) => {
     try {
       const device = await deviceInScope(req);

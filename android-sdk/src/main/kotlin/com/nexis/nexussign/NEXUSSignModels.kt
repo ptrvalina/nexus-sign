@@ -133,6 +133,9 @@ data class NexusDeviceReplacement(
     val usable: Boolean,
 )
 
+/** Why the customer declined a payment. [NOT_ME] ("it wasn't me") is reported to the bank as a fraud signal. */
+enum class NexusDeclineReason { NOT_ME, WRONG_DETAILS, OTHER }
+
 @Serializable
 internal data class DeviceReplacementList(val replacements: List<NexusDeviceReplacement>)
 

@@ -17,6 +17,8 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ### Added
 
+- The customer can decline a payment on the enrolled device (`POST /v1/mobile/authorizations/{id}/decline`, reason `NOT_ME`, `WRONG_DETAILS` or `OTHER`; SDK `decline(authorization:reason:)`), and the bank can withdraw a pending one (`POST /v1/authorizations/{id}/cancel`). The authorization becomes `REJECTED` or `CANCELLED` under its row lock, open verification plans and calls end, and webhooks `authorization.declined` / `authorization.cancelled` tell the bank; a signature arriving afterwards fails (audit finding A1-03). SDK methods not compiled in this change.
+
 - `demo/`: demo host apps for iPhone (`demo/ios`, Xcode project; CI job `ios-demo` builds it) and Android (`demo/android`; CI job `android-demo` builds the `nexus-sign-demo-apk` artifact), and a demo bank backend (`demo/bank-backend/demo-bank.mjs`) with an operator page and a device port that forwards only the device endpoints of Auth Core, for trying enrolment and payment signing on a real phone ([demo/README.md](demo/README.md)).
 - `auth-core/scripts/run-local.sh`: runs Auth Core with PostgreSQL and Redis from `docker-compose.yml` on one machine in development mode (fresh database, schema and roles, bank client, admin account with TOTP, service on port 8080).
 - Auth Core: webhooks `authorization.verified` (with the evidence position and the chain head the bank keeps for truncation checks), `authorization.rejected` and `authorization.expired`.

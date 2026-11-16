@@ -418,6 +418,40 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '410': { $ref: '#/components/responses/Gone' }
 
+  /v1/authorizations/{authorizationId}/cancel:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Authorizations]
+      summary: Withdraw an authorization the customer has not confirmed
+      description: >-
+        Only while it is PENDING_USER. The authorization becomes CANCELLED, open verification plans and calls end, and
+        the bank receives authorization.cancelled. A signature arriving afterwards fails. Audit finding A1-03.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [ORDER_CHANGED, FRAUD_SUSPECTED, CUSTOMER_REQUEST, OTHER] }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizationId, state, reason]
+                properties:
+                  authorizationId: { type: string, format: uuid }
+                  state: { type: string, enum: [CANCELLED] }
+                  reason: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: AUTHORIZATION_NOT_PENDING (already confirmed, expired or ended)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
   /v1/authorizations/{authorizationId}/bank-commit-request:
     parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
     post:
@@ -861,6 +895,43 @@ paths:
           description: Authorization expired
           content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/authorizations/{authorizationId}/decline:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer declines a payment on the enrolled device ("it wasn't me")
+      description: >-
+        Only from the credential the authorization is bound to, and only while it is PENDING_USER. The authorization
+        becomes REJECTED, open verification plans and calls end, and the bank receives authorization.declined with the
+        reason; NOT_ME is a fraud signal. A signature arriving afterwards fails. Audit finding A1-03.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [NOT_ME, WRONG_DETAILS, OTHER] }
+      responses:
+        '200':
+          description: Declined
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizationId, state, reason]
+                properties:
+                  authorizationId: { type: string, format: uuid }
+                  state: { type: string, enum: [REJECTED] }
+                  reason: { type: string, enum: [NOT_ME, WRONG_DETAILS, OTHER] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: AUTHORIZATION_NOT_PENDING (already confirmed, expired or ended) or CREDENTIAL_MISMATCH
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   /v1/mobile/authorizations/{authorizationId}/deferred-signature:
     parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]

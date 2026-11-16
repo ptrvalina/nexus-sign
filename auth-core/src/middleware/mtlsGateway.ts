@@ -23,6 +23,7 @@ const DEVICE_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/verification-sessions\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/signature\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/deferred-signature\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/decline\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/call\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/signals\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/signals\/?$/i },

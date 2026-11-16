@@ -9,6 +9,7 @@ import { reportedState } from '../services/authorizationExpiry';
 import { confirmationView } from '../services/authorizationEvidenceCheck';
 import { confirmAuthorizationOffline, getOfflineChallenge, verifyAuthorization } from '../services/authorizationConfirmation';
 import { finalizeBankTransaction, getBankTransactionState, requestCommit } from '../services/bankTransactionService';
+import { cancelAuthorizationByBank } from '../services/authorizationDecline';
 import { completeVerificationSession, escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
 import { getAuthorizationEvidencePosition, getChainHead, getEvidenceChain, getEvidenceForAuthorization } from '../services/evidenceService';
 import { evidencePublicKeys } from '../services/credentialIntegrity';
@@ -304,6 +305,15 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
   });
 
   // --- Bank transaction ---
+
+  /** The bank withdraws an authorization the customer has not confirmed. */
+  router.post('/v1/authorizations/:authorizationId/cancel', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ reason: z.enum(['ORDER_CHANGED', 'FRAUD_SUSPECTED', 'CUSTOMER_REQUEST', 'OTHER']) }).parse(req.body);
+      res.json(await cancelAuthorizationByBank(uuidSchema.parse(req.params.authorizationId), clientIdOf(req), body.reason,
+        { actor: `bank:${clientIdOf(req)}`, ipAddress: req.ip, userAgent: req.header('user-agent') }));
+    } catch (e) { next(e); }
+  });
 
   router.post('/v1/authorizations/:authorizationId/bank-commit-request', async (req: AuthenticatedRequest, res, next) => {
     try {
