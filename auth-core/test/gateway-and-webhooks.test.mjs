@@ -113,6 +113,19 @@ test('IPv6 classification handles every textual form', () => {
   }
 });
 
+test('IPv6 transition ranges cannot reach internal hosts (finding A2-05)', () => {
+  const { isPrivateIpv6 } = loadTs('services/webhookUrlPolicy.ts');
+  // 6to4 with a private or loopback IPv4 inside; Teredo; local-use NAT64; discard; benchmarking; ORCHIDv2.
+  for (const ip of ['2002:7f00:1::1', '2002:a00:1::', '2002:c0a8:101::1', '2002:a9fe:a9fe::', '2001:0:4136:e378:8000:63bf:3fff:fdd2',
+    '2001::1', '64:ff9b:1::a00:1', '100::1', '2001:2::1', '2001:20::1', '2001:2f::1']) {
+    assert.equal(isPrivateIpv6(ip), true, ip);
+  }
+  // 6to4 of a public IPv4 address stays allowed; ordinary 2001: unicast too.
+  for (const ip of ['2002:5db8:d822::1', '2001:4860:4860::8888', '2001:30::1']) {
+    assert.equal(isPrivateIpv6(ip), false, ip);
+  }
+});
+
 test('webhook delivery connects to the vetted address when Node asks for every address (Node 20+ autoSelectFamily)', async () => {
   const http = await import('node:http');
   const { pinnedLookup } = loadTs('services/webhookService.ts', { stubs: { '../db/pool': { pool: {} }, '../observability/metrics': { webhookDeliveryOutcomes: { inc() {} } } } });
