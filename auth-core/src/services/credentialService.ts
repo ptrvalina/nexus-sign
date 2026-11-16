@@ -29,7 +29,7 @@ export interface CreateCredentialInput {
    * Without it, enrolment is refused while a credential is not revoked: one
    * NEXUS ID has one active signing key, and a new device must not displace
    * the customer's device silently (the customer uses recovery instead). */
-  replacement?: { method: string; reference: string; replacementId?: string } | null;
+  replacement?: { method: string; reference: string; replacementId?: string; kind?: 'REPLACEMENT' | 'ADDITION' } | null;
   /** Device authentication and offline keys enrolled with the signing key. */
   deviceKeys?: DeviceKeysInput;
   /** Seals the enrolment (keys and attestation) into the identity's evidence chain. */
@@ -93,8 +93,15 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
     // decided one after the other.
     const current = await client.query<{ credential_id: string }>(
       `SELECT credential_id FROM credentials WHERE nexus_id = $1 AND state = 'ACTIVE'`, [input.nexusId]);
-    const replacedCredentialIds = current.rows.map((r) => r.credential_id);
-    if (replacedCredentialIds.length > 0 && !input.replacement) {
+    const activeCredentialIds = current.rows.map((r) => r.credential_id);
+    // An addition (migration 027) keeps the active devices; a replacement
+    // revokes them.
+    const addition = input.replacement?.kind === 'ADDITION';
+    const replacedCredentialIds = addition ? [] : activeCredentialIds;
+    if (addition && activeCredentialIds.length === 0) {
+      throw new ConflictError('A device can be added only next to an active one; enrol or replace instead', 'NO_ACTIVE_DEVICE');
+    }
+    if (activeCredentialIds.length > 0 && !input.replacement) {
       throw new ConflictError(
         'The customer already has an enrolled device. Use recovery with the recovery phrase, or issue a replacement token after re-identifying the customer',
         'ACTIVE_CREDENTIAL_EXISTS');
@@ -103,12 +110,14 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
     // An identity that had a device before (revoked by the bank, for example)
     // gets a new one only through recovery or a replacement request with its
     // hold; otherwise "revoke, then enrol" would bypass the hold (A2-01).
-    const hadDevice = replacedCredentialIds.length === 0 && (await client.query(
+    const hadDevice = activeCredentialIds.length === 0 && (await client.query(
       `SELECT 1 FROM credentials WHERE nexus_id = $1 AND state = 'REVOKED' LIMIT 1`, [input.nexusId])).rowCount !== 0;
-    if (replacedCredentialIds.length > 0 || hadDevice) {
-      // The replacement request must have been approved on the enrolled device
-      // or have passed its hold, and is used once (audit finding A2-01).
-      await consumeDeviceReplacement(client, input.nexusId, input.replacement?.replacementId, credentialId);
+    if (activeCredentialIds.length > 0 || hadDevice) {
+      // The request must have been approved on an enrolled device or have
+      // passed its hold, and is used once (audit finding A2-01); an addition
+      // token uses only an addition request, a replacement token only a
+      // replacement request.
+      await consumeDeviceReplacement(client, input.nexusId, input.replacement?.replacementId, credentialId, addition ? 'ADDITION' : 'REPLACEMENT');
     }
     if (replacedCredentialIds.length > 0) {
       // Announced on the replaced device while it can still be reached.
@@ -142,7 +151,7 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
       offlinePublicKeyPem: keys.offlinePublicKeyPem,
       attestation: input.enrolment.attestation,
       replacedCredentialIds,
-      replacementAuthorization: (replacedCredentialIds.length > 0 || hadDevice) && input.replacement
+      replacementAuthorization: (activeCredentialIds.length > 0 || hadDevice) && input.replacement
         ? { method: input.replacement.method, reference: input.replacement.reference, clientId: input.clientId }
         : null,
     });
@@ -151,6 +160,15 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
         { newCredentialId: credentialId, replacedCredentialIds, method: input.replacement.method, reference: input.replacement.reference }, client);
       await enqueueWebhook(input.clientId, 'credential.replaced', {
         nexusId: input.nexusId, newCredentialId: credentialId, replacedCredentialIds,
+        method: input.replacement.method, reference: input.replacement.reference, enrolmentEvidenceHash: enrolment.evidenceHash,
+      }, client);
+    }
+    if (addition && input.replacement) {
+      // The customer's other devices and the bank learn that a device joined.
+      await recordAuditEvent('credential_added', { nexusId: input.nexusId, actor: `bank:${input.clientId}` },
+        { newCredentialId: credentialId, activeCredentialIds, method: input.replacement.method, reference: input.replacement.reference }, client);
+      await enqueueWebhook(input.clientId, 'credential.added', {
+        nexusId: input.nexusId, newCredentialId: credentialId, activeCredentialIds,
         method: input.replacement.method, reference: input.replacement.reference, enrolmentEvidenceHash: enrolment.evidenceHash,
       }, client);
     }
@@ -196,6 +214,38 @@ export async function revokeCredentialForClient(credentialId: string, clientId: 
     await recordAuditEvent('credential_revoked', { nexusId: identity.rows[0]?.nexus_id ?? null },
       { credentialId, reason, cancelledAuthorizations: cancelled.rowCount ?? 0 }, client);
     if (identity.rows[0]?.nexus_id) await forgetInactivePushRegistrations(client, identity.rows[0].nexus_id);
+  });
+}
+
+/**
+ * The customer removes one of their devices from another enrolled device (or
+ * from itself), for example a lost tablet. Both must be ACTIVE credentials of
+ * the same NEXUS ID; the request is signed by the requesting device. Open
+ * payments addressed to the removed device are cancelled with a sealed
+ * outcome, and the bank is told.
+ */
+export async function revokeDeviceByCustomer(clientId: string, nexusId: string, requestingCredentialId: string, targetCredentialId: string): Promise<{ remainingActive: number }> {
+  return withTransaction(async (client) => {
+    await client.query(`SELECT 1 FROM nexus_identities WHERE nexus_id = $1 FOR UPDATE`, [nexusId]);
+    const rows = await client.query<{ credential_id: string; state: string }>(
+      `SELECT credential_id, state FROM credentials WHERE nexus_id = $1 AND credential_id = ANY($2::uuid[]) FOR UPDATE`,
+      [nexusId, [requestingCredentialId, targetCredentialId]]);
+    const byId = new Map(rows.rows.map((r) => [r.credential_id, r.state]));
+    if (byId.get(requestingCredentialId) !== 'ACTIVE') throw new ConflictError('Only an active device of this NEXUS ID removes a device', 'CREDENTIAL_NOT_ACTIVE');
+    if (!byId.has(targetCredentialId)) throw new CredentialNotFoundError(targetCredentialId);
+    if (byId.get(targetCredentialId) !== 'ACTIVE') throw new ConflictError('The device is already removed', 'CREDENTIAL_NOT_ACTIVE');
+    const self = requestingCredentialId === targetCredentialId;
+    await setOutcomeReason(client, self ? 'REVOKED_BY_CUSTOMER:SELF' : `REVOKED_BY_CUSTOMER:FROM_${requestingCredentialId}`);
+    await client.query(`UPDATE credentials SET state = 'REVOKED', revoked_at = now() WHERE credential_id = $1`, [targetCredentialId]);
+    await setOutcomeReason(client, 'CREDENTIAL_REVOKED');
+    const cancelled = await client.query(
+      `UPDATE authorization_requests SET state = 'CANCELLED' WHERE credential_id = $1 AND state = 'PENDING_USER'`, [targetCredentialId]);
+    await recordAuditEvent('credential_revoked', { nexusId, actor: `credential:${requestingCredentialId}` },
+      { credentialId: targetCredentialId, reason: 'REVOKED_BY_CUSTOMER', cancelledAuthorizations: cancelled.rowCount ?? 0 }, client);
+    await enqueueWebhook(clientId, 'credential.revoked', { nexusId, credentialId: targetCredentialId, reason: 'REVOKED_BY_CUSTOMER', byCredentialId: requestingCredentialId }, client);
+    await forgetInactivePushRegistrations(client, nexusId);
+    const remaining = await client.query<{ n: number }>(`SELECT count(*)::int AS n FROM credentials WHERE nexus_id = $1 AND state = 'ACTIVE'`, [nexusId]);
+    return { remainingActive: remaining.rows[0].n };
   });
 }
 

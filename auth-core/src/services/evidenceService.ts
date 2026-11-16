@@ -90,7 +90,7 @@ export interface AuthorizationEvidenceInput {
 /** Reasons sealed by this version. Chains written by 1.x and 2.0.0-rc.1 can
  * also hold `ROTATION` and `BANK_PROVISIONED`, from the removed bank-side
  * provisioning endpoints; verifiers accept any reason string. */
-export type EnrolmentReason = 'ENROLMENT' | 'REPLACEMENT' | 'RECOVERY' | 'BASELINE';
+export type EnrolmentReason = 'ENROLMENT' | 'REPLACEMENT' | 'ADDITION' | 'RECOVERY' | 'BASELINE';
 
 /** The attestation material that admitted a credential, as stored in the
  * sealed record. `material` holds what a third party can re-check (the App

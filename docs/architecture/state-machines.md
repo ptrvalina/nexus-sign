@@ -72,7 +72,7 @@ Suspension is a state of the NEXUS identity ([below](#identity)), not of a crede
 | Never change | `credential_id`, `nexus_id`, `key_algorithm`, `public_key_pem`, `auth_public_key_pem`, `offline_public_key_pem`, `offline_server_public_key_pem`, `offline_secret_encrypted`, `platform`, `key_version` |
 | Set once (from `NULL`), then never change | `enrolment_evidence_id` |
 
-A unique index (`idx_credentials_one_active`) allows at most one `ACTIVE` credential per NEXUS ID. Migration 017 stops, naming up to 20 identities, if existing data has more; the extra credentials are revoked before the migration is applied again.
+The number of `ACTIVE` credentials per NEXUS ID is limited by the bank client's `max_devices_per_identity` (1 to 10, default 1). The trigger `credentials_device_limit` (migration 027) counts them with the identity row locked, so concurrent enrolments cannot exceed the limit; it replaced the unique index `idx_credentials_one_active` of migration 017.
 
 `security_level`, `attestation_status`, `last_used_at` and the timestamps are not covered by the trigger.
 

@@ -9,6 +9,8 @@ export type AuditEventType =
   | 'credential_created'
   | 'credential_revoked'
   | 'credential_replacement_requested'
+  | 'credential_added'
+  | 'device_policy_changed'
   | 'credential_replacement_approved'
   | 'credential_replacement_cancelled'
   | 'authorization_created'

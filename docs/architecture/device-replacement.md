@@ -151,3 +151,16 @@ A token issued with `replacement` for an identity whose device was revoked enrol
 
 - `auth-core/test/integration/device-replacement.test.mjs` (HTTP): a `BOOTSTRAP` token is refused without a replacement authorization; two concurrent first enrolments enrol exactly one device; a replacement is held (202), approved on the old device, then revokes the old device and is audited, sealed, reported and announced on it; a replacement token cannot be used for another identity.
 - `auth-core/test/integration/device-replacement-hold.test.mjs` (services on PostgreSQL): no replacement before the hold; cancel; approve and single use; maturing without a decision; revoke-then-enrol needs a matured request; only an active device of the same customer decides; the request history cannot be deleted or rewritten.
+
+## Adding a device (several devices per NEXUS ID)
+
+Since migration 027 a bank client can allow up to 10 active devices per NEXUS ID (`max_devices_per_identity`, set with `node dist/cli/setDevicePolicy.js <clientId> <n>`; default 1). A further device is enrolled with an **addition** request, which follows the same rules as a replacement and revokes nothing:
+
+1. The bank calls `POST /v1/mobile/sessions` with `addition: {method, reference}`. Auth Core answers 202 `ADDITION_PENDING` and sends `credential.addition_requested`. A request is refused with 409 `DEVICE_LIMIT_REACHED` at the limit, `NO_ACTIVE_DEVICE` when the customer has no active device (enrol or replace instead), and `DEVICE_REQUEST_OPEN` while a request of the other kind is open.
+2. Any active device of the customer approves or cancels it (`/v1/mobile/device-replacements/{id}/approve|cancel`); without a decision it matures after `DEVICE_REPLACEMENT_HOLD_SECONDS`.
+3. The same call then returns the BOOTSTRAP token. The enrolment uses the addition request once (a replacement token cannot use it, nor the reverse), seals `CREDENTIAL_ENROLLED` with reason `ADDITION`, and sends `credential.added`.
+
+The customer removes a device from any active device, including the device itself (`POST /v1/mobile/devices/{credentialId}/revoke`); the bank receives `credential.revoked` with reason `REVOKED_BY_CUSTOMER`. A replacement still revokes every active device. Each authorization is addressed to one device, the one the bank names in `credentialId`.
+
+Tests: `auth-core/test/integration/multiple-devices.test.mjs` (PostgreSQL).
+

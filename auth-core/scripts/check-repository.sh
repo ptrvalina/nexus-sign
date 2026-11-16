@@ -53,4 +53,13 @@ if [ "$latest" != "$stated" ]; then
   printf 'auth-core/src/db/schema.sql states schema-version %s, the last migration is %s: append the migration to schema.sql and update the line\n' "$stated" "$latest" >&2
   exit 1
 fi
+codes=$(grep -rhoE "ConflictError\([^;]*'[A-Z][A-Z0-9_]{3,}'\)" auth-core/src | grep -oE "'[A-Z][A-Z0-9_]{3,}'\)$" | tr -d "')" | sort -u)
+undocumented=""
+for code in $codes; do
+  grep -q "\`$code\`" docs/reference/error-responses.md || undocumented="$undocumented $code"
+done
+if [ -n "$undocumented" ]; then
+  printf 'Conflict codes raised by Auth Core but missing from docs/reference/error-responses.md:%s\n' "$undocumented" >&2
+  exit 1
+fi
 echo 'ok: repository hygiene'

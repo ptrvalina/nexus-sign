@@ -603,6 +603,19 @@ paths:
                   properties:
                     method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
                     reference: { type: string, minLength: 1, maxLength: 128 }
+                addition:
+                  type: object
+                  description: |
+                    Enrols a further device next to the customer's active ones (a tablet next to a
+                    phone), up to the bank client's `max_devices_per_identity` (default 1; then
+                    refused with 409 `DEVICE_LIMIT_REACHED`). Exclusive with `replacement`. Works
+                    like a replacement: 202 `ADDITION_PENDING` and the `credential.addition_requested`
+                    webhook until an enrolled device approves or the hold passes, then 201 with the
+                    token. The enrolment revokes nothing and sends the `credential.added` webhook.
+                  required: [method, reference]
+                  properties:
+                    method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
+                    reference: { type: string, minLength: 1, maxLength: 128 }
       responses:
         '201':
           description: Token issued
@@ -615,7 +628,8 @@ paths:
                 type: object
                 required: [status, replacementId, state, notBefore, expiresAt]
                 properties:
-                  status: { type: string, enum: [REPLACEMENT_PENDING] }
+                  status: { type: string, enum: [REPLACEMENT_PENDING, ADDITION_PENDING] }
+                  kind: { type: string, enum: [ADDITION], description: Present for an addition }
                   replacementId: { type: string, format: uuid }
                   state: { type: string, enum: [PENDING] }
                   notBefore: { type: string, format: date-time }
@@ -835,6 +849,33 @@ paths:
           description: Devices
           content: { application/json: { schema: { type: object, required: [devices], properties: { devices: { type: array, items: { $ref: '#/components/schemas/DeviceSummary' } } } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/devices/{credentialId}/revoke:
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer removes one of their devices (another one, or the signing device itself)
+      description: >
+        Signed by an ACTIVE device of the same NEXUS ID. Open payments addressed to the removed
+        device are cancelled with a sealed outcome; the bank receives `credential.revoked` with
+        reason REVOKED_BY_CUSTOMER. Removing the last device leaves the identity without a device:
+        the bank then enrols one through recovery or a replacement.
+      parameters:
+        - { in: path, name: credentialId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentialId, state, remainingActiveDevices]
+                properties:
+                  credentialId: { type: string, format: uuid }
+                  state: { type: string, enum: [REVOKED] }
+                  remainingActiveDevices: { type: integer, minimum: 0 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   /v1/mobile/history:
     get:
@@ -1346,9 +1387,10 @@ components:
         replayed: { type: boolean, description: True when the identity already existed for this customer reference }
     DeviceReplacement:
       type: object
-      required: [replacementId, nexusId, method, reference, state, requestedAt, notBefore, expiresAt, usable]
+      required: [replacementId, kind, nexusId, method, reference, state, requestedAt, notBefore, expiresAt, usable]
       properties:
         replacementId: { type: string, format: uuid }
+        kind: { type: string, enum: [REPLACEMENT, ADDITION], description: REPLACEMENT revokes the active devices at enrolment; ADDITION keeps them }
         nexusId: { $ref: '#/components/schemas/NexusId' }
         method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
         reference: { type: string }

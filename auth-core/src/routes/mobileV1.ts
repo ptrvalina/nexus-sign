@@ -6,7 +6,7 @@ import { authenticateMobileSession, type MobileAuthenticatedRequest } from '../m
 import { consumeMobileSession, issueBootstrapToken, type ReplacementAuthorization } from '../services/mobileSessionService';
 import { decideDeviceReplacement, listOpenReplacements, requestDeviceReplacement } from '../services/deviceReplacementService';
 import { getNexusIdentityForClient } from '../services/nexusIdentityService';
-import { createCredential, getActiveDeviceCredential, getCredentialForClient, hasEnrolledCredential, hasRevokedCredential } from '../services/credentialService';
+import { createCredential, getActiveDeviceCredential, getCredentialForClient, hasEnrolledCredential, hasRevokedCredential, revokeDeviceByCustomer } from '../services/credentialService';
 import { assertCredentialIntegrity } from '../services/credentialIntegrity';
 import { recordAuditEvent } from '../services/auditService';
 import { enrolmentAttestation, platformMatches, verifyDeviceAttestation } from '../services/attestationVerificationService';
@@ -116,11 +116,17 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
           method: z.enum(['BRANCH_VISIT', 'VIDEO_IDENTIFICATION', 'IN_APP_STRONG_AUTHENTICATION', 'OTHER']),
           reference: z.string().min(1).max(128),
         }).optional(),
-      }).parse(req.body);
+        /** Enrols a further device next to the active ones (migration 027),
+         * up to the bank client's max_devices_per_identity. */
+        addition: z.object({
+          method: z.enum(['BRANCH_VISIT', 'VIDEO_IDENTIFICATION', 'IN_APP_STRONG_AUTHENTICATION', 'OTHER']),
+          reference: z.string().min(1).max(128),
+        }).optional(),
+      }).refine((b) => !(b.replacement && b.addition), { message: 'replacement and addition are exclusive' }).parse(req.body);
       const identity = await getNexusIdentityForClient(body.nexusId, req.bankClientId);
       if (identity.status !== 'ACTIVE') throw new ConflictError(`NEXUS ID is ${identity.status}`);
       const enrolled = await hasEnrolledCredential(body.nexusId);
-      if (!body.replacement && enrolled) {
+      if (!body.replacement && !body.addition && enrolled) {
         throw new ConflictError(
           'The customer already has an enrolled device. Use recovery with the recovery phrase, or issue a replacement token after re-identifying the customer',
           'ACTIVE_CREDENTIAL_EXISTS');
@@ -128,14 +134,23 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       // A device that was revoked is replaced like an enrolled one, with the
       // hold, so "revoke, then enrol" is not a way around it (A2-01).
       const hadDevice = !enrolled && await hasRevokedCredential(body.nexusId);
-      if (!body.replacement && hadDevice) {
+      if (!body.replacement && !body.addition && hadDevice) {
         throw new ConflictError(
           'This NEXUS ID had a device before. Use recovery with the recovery phrase, or request a replacement after re-identifying the customer',
           'REPLACEMENT_REQUIRED');
       }
       const actor = { nexusId: body.nexusId, actor: `bank:${req.bankClientId}`, ipAddress: req.ip, userAgent: req.header('user-agent') };
       let replacement: ReplacementAuthorization | undefined;
-      if (body.replacement && (enrolled || hadDevice)) {
+      if (body.addition) {
+        // A further device waits for an enrolled device's approval, or for
+        // the hold, exactly like a replacement; it revokes nothing.
+        const { replacement: request } = await requestDeviceReplacement(req.bankClientId, body.nexusId, body.addition.method, body.addition.reference, 'ADDITION');
+        if (!request.usable) {
+          res.status(202).json({ status: 'ADDITION_PENDING', replacementId: request.replacementId, kind: request.kind, state: request.state, notBefore: request.notBefore, expiresAt: request.expiresAt });
+          return;
+        }
+        replacement = { method: request.method, reference: request.reference, replacementId: request.replacementId, kind: 'ADDITION' };
+      } else if (body.replacement && (enrolled || hadDevice)) {
         // A replacement waits for the customer's approval on the enrolled
         // device, or for the hold to pass (deviceReplacementService).
         const { replacement: request } = await requestDeviceReplacement(req.bankClientId, body.nexusId, body.replacement.method, body.replacement.reference);
@@ -143,7 +158,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
           res.status(202).json({ status: 'REPLACEMENT_PENDING', replacementId: request.replacementId, state: request.state, notBefore: request.notBefore, expiresAt: request.expiresAt });
           return;
         }
-        replacement = { method: request.method, reference: request.reference, replacementId: request.replacementId };
+        replacement = { method: request.method, reference: request.reference, replacementId: request.replacementId, kind: 'REPLACEMENT' };
       }
       const session = await issueBootstrapToken(req.bankClientId, body.nexusId, replacement);
       await recordAuditEvent('mobile_session_issued', actor, { purpose: body.purpose, expiresIn: session.expiresIn });
@@ -248,7 +263,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
         replacement: req.mobileReplacement ?? null,
         deviceKeys,
         hsm: hsmAdapter,
-        enrolment: { reason: req.mobileReplacement ? 'REPLACEMENT' : 'ENROLMENT', attestation: enrolmentAttestation(body.deviceAttestation, binding, verdict) },
+        enrolment: { reason: req.mobileReplacement ? (req.mobileReplacement.kind === 'ADDITION' ? 'ADDITION' : 'REPLACEMENT') : 'ENROLMENT', attestation: enrolmentAttestation(body.deviceAttestation, binding, verdict) },
       });
       // The device signs its own requests from now on: no token is issued.
       res.status(201).json({
@@ -388,6 +403,16 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
     try {
       const device = await deviceInScope(req);
       res.json({ devices: await listDevices(device.nexusId, device.credentialId) });
+    } catch (e) { next(e); }
+  });
+
+  /** The customer removes one of their devices (itself or another one). */
+  router.post('/v1/mobile/devices/:credentialId/revoke', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const target = z.string().uuid().parse(req.params.credentialId).toLowerCase();
+      const result = await revokeDeviceByCustomer(device.clientId, device.nexusId, device.credentialId, target);
+      res.json({ credentialId: target, state: 'REVOKED', remainingActiveDevices: result.remainingActive });
     } catch (e) { next(e); }
   });
 

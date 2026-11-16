@@ -5,6 +5,7 @@ import { env } from '../config/env';
 import { recordAuditEvent } from './auditService';
 import { enqueueWebhook } from './webhookService';
 import { ConflictError, NotFoundError } from './errors';
+import type { DeviceRequestKind } from './mobileSessionService';
 
 /**
  * Device replacement hold (audit finding A2-01).
@@ -29,6 +30,8 @@ export type ReplacementState = 'PENDING' | 'APPROVED' | 'CANCELLED' | 'USED' | '
 
 export interface DeviceReplacement {
   replacementId: string;
+  /** REPLACEMENT: the new device takes over. ADDITION: it joins the active ones. */
+  kind: DeviceRequestKind;
   nexusId: string;
   method: ReplacementMethod;
   reference: string;
@@ -44,15 +47,15 @@ export interface DeviceReplacement {
 const REQUEST_VALIDITY_AFTER_HOLD_SECONDS = 7 * 24 * 3600;
 
 interface ReplacementRow {
-  replacement_id: string; nexus_id: string; method: ReplacementMethod; reference: string; state: ReplacementState;
+  replacement_id: string; kind: DeviceRequestKind; nexus_id: string; method: ReplacementMethod; reference: string; state: ReplacementState;
   requested_at: Date; not_before: Date; expires_at: Date; usable: boolean;
 }
 
-const COLUMNS = `replacement_id, nexus_id, method, reference, state, requested_at, not_before, expires_at,
+const COLUMNS = `replacement_id, kind, nexus_id, method, reference, state, requested_at, not_before, expires_at,
   (state = 'APPROVED' OR (state = 'PENDING' AND not_before <= now())) AND expires_at > now() AS usable`;
 
 const toReplacement = (r: ReplacementRow): DeviceReplacement => ({
-  replacementId: r.replacement_id, nexusId: r.nexus_id, method: r.method, reference: r.reference, state: r.state,
+  replacementId: r.replacement_id, kind: r.kind, nexusId: r.nexus_id, method: r.method, reference: r.reference, state: r.state,
   requestedAt: new Date(r.requested_at).toISOString(), notBefore: new Date(r.not_before).toISOString(),
   expiresAt: new Date(r.expires_at).toISOString(), usable: Boolean(r.usable),
 });
@@ -68,26 +71,40 @@ async function expireOpenRequests(client: PoolClient, nexusId: string): Promise<
  * this identity (creating it, with its hold, if there is none). The caller
  * issues a BOOTSTRAP token only when `usable` is true.
  */
-export async function requestDeviceReplacement(clientId: string, nexusId: string, method: ReplacementMethod, reference: string): Promise<{ replacement: DeviceReplacement; created: boolean }> {
+export async function requestDeviceReplacement(clientId: string, nexusId: string, method: ReplacementMethod, reference: string, kind: DeviceRequestKind = 'REPLACEMENT'): Promise<{ replacement: DeviceReplacement; created: boolean }> {
   return withTransaction(async (client) => {
     // The identity row serializes requests, approvals and enrolments.
-    const identity = await client.query(`SELECT 1 FROM nexus_identities WHERE nexus_id = $1 AND client_id = $2 FOR UPDATE`, [nexusId, clientId]);
+    const identity = await client.query<{ max_devices_per_identity: number }>(
+      `SELECT b.max_devices_per_identity FROM nexus_identities n JOIN bank_clients b ON b.client_id = n.client_id
+        WHERE n.nexus_id = $1 AND n.client_id = $2 FOR UPDATE OF n`, [nexusId, clientId]);
     if (identity.rowCount === 0) throw new NotFoundError(`NEXUS ID ${nexusId} was not found`);
     await expireOpenRequests(client, nexusId);
     const open = await client.query<ReplacementRow>(
       `SELECT ${COLUMNS} FROM device_replacements WHERE nexus_id = $1 AND state IN ('PENDING', 'APPROVED')`, [nexusId]);
-    if (open.rows[0]) return { replacement: toReplacement(open.rows[0]), created: false };
+    if (open.rows[0]) {
+      if (open.rows[0].kind !== kind) {
+        throw new ConflictError(`A device ${open.rows[0].kind.toLowerCase()} request is already open for this NEXUS ID`, 'DEVICE_REQUEST_OPEN');
+      }
+      return { replacement: toReplacement(open.rows[0]), created: false };
+    }
+    if (kind === 'ADDITION') {
+      const active = await client.query<{ n: number }>(`SELECT count(*)::int AS n FROM credentials WHERE nexus_id = $1 AND state = 'ACTIVE'`, [nexusId]);
+      if (active.rows[0].n === 0) throw new ConflictError('A device can be added only next to an active one; enrol or replace instead', 'NO_ACTIVE_DEVICE');
+      if (active.rows[0].n >= identity.rows[0].max_devices_per_identity) {
+        throw new ConflictError(`The NEXUS ID already has ${active.rows[0].n} active device(s), the bank's limit`, 'DEVICE_LIMIT_REACHED');
+      }
+    }
     const hold = env.DEVICE_REPLACEMENT_HOLD_SECONDS;
     const created = await client.query<ReplacementRow>(
-      `INSERT INTO device_replacements (replacement_id, nexus_id, client_id, method, reference, state, not_before, expires_at)
-       VALUES ($1, $2, $3, $4, $5, 'PENDING', now() + $6::integer * interval '1 second', now() + ($6::integer + $7::integer) * interval '1 second')
+      `INSERT INTO device_replacements (replacement_id, nexus_id, client_id, method, reference, state, not_before, expires_at, kind)
+       VALUES ($1, $2, $3, $4, $5, 'PENDING', now() + $6::integer * interval '1 second', now() + ($6::integer + $7::integer) * interval '1 second', $8)
        RETURNING ${COLUMNS}`,
-      [randomUUID(), nexusId, clientId, method, reference, hold, REQUEST_VALIDITY_AFTER_HOLD_SECONDS]);
+      [randomUUID(), nexusId, clientId, method, reference, hold, REQUEST_VALIDITY_AFTER_HOLD_SECONDS, kind]);
     const replacement = toReplacement(created.rows[0]);
     await recordAuditEvent('credential_replacement_requested', { nexusId, actor: `bank:${clientId}` },
-      { replacementId: replacement.replacementId, method, reference, notBefore: replacement.notBefore }, client);
-    await enqueueWebhook(clientId, 'credential.replacement_requested', {
-      nexusId, replacementId: replacement.replacementId, method, reference, notBefore: replacement.notBefore, expiresAt: replacement.expiresAt,
+      { replacementId: replacement.replacementId, kind, method, reference, notBefore: replacement.notBefore }, client);
+    await enqueueWebhook(clientId, kind === 'ADDITION' ? 'credential.addition_requested' : 'credential.replacement_requested', {
+      nexusId, replacementId: replacement.replacementId, kind, method, reference, notBefore: replacement.notBefore, expiresAt: replacement.expiresAt,
     }, client);
     return { replacement, created: true };
   });
@@ -132,13 +149,13 @@ export async function decideDeviceReplacement(credentialId: string, nexusId: str
  * replacement must still be usable, and is used once. Throws otherwise, so
  * the old device is not revoked.
  */
-export async function consumeDeviceReplacement(client: PoolClient, nexusId: string, replacementId: string | undefined, newCredentialId: string): Promise<void> {
+export async function consumeDeviceReplacement(client: PoolClient, nexusId: string, replacementId: string | undefined, newCredentialId: string, kind: DeviceRequestKind = 'REPLACEMENT'): Promise<void> {
   if (!replacementId) throw new ConflictError('A device replacement needs an approved or matured replacement request', 'REPLACEMENT_REQUIRED');
   const used = await client.query(
     `UPDATE device_replacements SET state = 'USED', used_by_credential_id = $3, decided_at = coalesce(decided_at, now())
-      WHERE replacement_id = $1 AND nexus_id = $2 AND expires_at > now()
+      WHERE replacement_id = $1 AND nexus_id = $2 AND kind = $4 AND expires_at > now()
         AND (state = 'APPROVED' OR (state = 'PENDING' AND not_before <= now()))`,
-    [replacementId, nexusId, newCredentialId]);
+    [replacementId, nexusId, newCredentialId, kind]);
   if (used.rowCount !== 1) {
     throw new ConflictError('The replacement request was cancelled, has expired, was already used or is still on hold', 'REPLACEMENT_NOT_USABLE');
   }

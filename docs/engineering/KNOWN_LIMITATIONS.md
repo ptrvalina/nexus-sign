@@ -21,7 +21,7 @@ Chat with the bank, bot assistant and handover; customer-initiated calls to the 
 
 | Limitation | Detail |
 |---|---|
-| One active device per NEXUS ID | A second device replaces the first (with the replacement hold). A phone and a tablet cannot both confirm |
+| Several devices: each payment is addressed to one device | The bank chooses the device when it creates an authorization (`credentialId`); the push goes to that device only. A bank that wants any of the customer's devices to answer creates the authorization for the one the customer is using |
 | Device replacement hold delays a legitimate replacement | A customer who lost the phone waits up to `DEVICE_REPLACEMENT_HOLD_SECONDS` (default 24 h, minimum 1 h in production) unless the enrolled device approves; the bank's replacement process must plan for this |
 | A stalled network HSM can freeze Auth Core | Session open, login, object search and `C_SignInit`/`C_VerifyInit` are synchronous in pkcs11js; set the vendor client's network timeout ([HSM runbook](../operations/runbooks/hsm-unavailable.md)). Finding B-01, partly open |
 | Evidence is sealed only for verified authorizations | Declined, rejected and expired outcomes are in the audit log and webhooks, not in the sealed chain (finding B-04) |

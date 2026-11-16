@@ -16,7 +16,12 @@ export interface ReplacementAuthorization {
   reference: string;
   /** The approved or matured request (deviceReplacementService) the enrolment uses. */
   replacementId: string;
+  /** REPLACEMENT revokes the identity's active devices; ADDITION keeps them
+   * (several devices, migration 027). Absent in tokens issued before 027. */
+  kind?: DeviceRequestKind;
 }
+
+export type DeviceRequestKind = 'REPLACEMENT' | 'ADDITION';
 
 export interface MobileSession {
   token: string;

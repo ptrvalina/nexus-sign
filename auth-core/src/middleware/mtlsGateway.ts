@@ -31,6 +31,7 @@ const DEVICE_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: 'GET', pattern: /^\/v1\/mobile\/device-replacements\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/device-replacements\/[^/]+\/(approve|cancel)\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/devices\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/devices\/[^/]+\/revoke\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/history\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/evidence\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/security-events\/?$/i },

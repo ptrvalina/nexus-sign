@@ -102,7 +102,7 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
     await assert.rejects(q("UPDATE credentials SET nexus_id = $2 WHERE credential_id = $1", [other.credentialId, device.nexusId]), refused);
     const copy = (state) => q(`INSERT INTO credentials (credential_id, nexus_id, key_algorithm, public_key_pem, platform, security_level, state)
       SELECT $1, nexus_id, key_algorithm, public_key_pem, platform, security_level, $3 FROM credentials WHERE credential_id = $2`, [randomUUID(), other.credentialId, state]);
-    await assert.rejects(copy('ACTIVE'), /idx_credentials_one_active/);
+    await assert.rejects(copy('ACTIVE'), /limit of its bank/); // default limit: one active device (migration 027)
     await q("UPDATE credentials SET state = 'REVOKED' WHERE credential_id = $1", [other.credentialId]);
     await assert.rejects(q("UPDATE credentials SET state = 'ACTIVE' WHERE credential_id = $1", [other.credentialId]), refused, 'REVOKED -> ACTIVE');
     for (const state of REMOVED_CREDENTIAL_STATES) {
