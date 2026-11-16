@@ -386,12 +386,15 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2, also validates the wrapper checksum
-      # No Android Lint here: AGP 8.5 cannot build the lint model of a module that
-      # takes the core SDK from an included build ("unable to find project
-      # exploded aar for :android-sdk", job 133530585047). The core SDK is linted
-      # in its own job; this module's one API>28 call is behind an SDK_INT check.
       - name: Build against io.github.webrtc-sdk:android (pinned version)
         run: sh ./gradlew --no-daemon assembleRelease
+      # AGP 8.5 cannot build the lint model when the core SDK comes from the
+      # included build (job 133530585047), so Lint runs against the core SDK
+      # published to Maven Local from this checkout.
+      - name: Android Lint (API calls against minSdk 28)
+        run: |
+          (cd ../android-sdk && sh ./gradlew --no-daemon publishReleasePublicationToMavenLocal)
+          sh ./gradlew --no-daemon -Pnexus.coreSdkFromMavenLocal lintRelease
       - name: Record the resolved WebRTC artifact and its SHA-256 (provenance evidence, D-015)
         run: |
           find ~/.gradle/caches/modules-2/files-2.1/io.github.webrtc-sdk -type f \( -name '*.aar' -o -name '*.pom' \) -exec sha256sum {} + | tee webrtc-artifacts.sha256

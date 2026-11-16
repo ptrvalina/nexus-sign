@@ -44,7 +44,8 @@ afterEvaluate {
 }
 
 dependencies {
-    api("com.nexis:nexus-sign-android")
+    // Same version as this module (VERSION); the included build substitutes it.
+    api("com.nexis:nexus-sign-android:$version")
     // libwebrtc for Android, prebuilt by the webrtc-sdk project (Maven Central,
     // io.github.webrtc-sdk:android). Exact version; DEVELOPMENT APPROVAL ONLY:
     // provenance, checksum and licence review are open release blockers, see

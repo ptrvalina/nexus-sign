@@ -9,9 +9,18 @@ pluginManagement {
     }
 }
 
+// -Pnexus.coreSdkFromMavenLocal takes the core SDK from Maven Local (published
+// first with publishReleasePublicationToMavenLocal) instead of the included
+// build. Only for Android Lint: AGP 8.5 cannot build the lint model of a module
+// whose dependency comes from an included build.
+val coreSdkFromMavenLocal = providers.gradleProperty("nexus.coreSdkFromMavenLocal").isPresent
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        if (coreSdkFromMavenLocal) {
+            mavenLocal { content { includeModule("com.nexis", "nexus-sign-android") } }
+        }
         google()
         mavenCentral()
     }
@@ -19,8 +28,10 @@ dependencyResolutionManagement {
 
 rootProject.name = "nexus-sign-android-calls"
 
-includeBuild("../android-sdk") {
-    dependencySubstitution {
-        substitute(module("com.nexis:nexus-sign-android")).using(project(":"))
+if (!coreSdkFromMavenLocal) {
+    includeBuild("../android-sdk") {
+        dependencySubstitution {
+            substitute(module("com.nexis:nexus-sign-android")).using(project(":"))
+        }
     }
 }
