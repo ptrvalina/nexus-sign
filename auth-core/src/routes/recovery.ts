@@ -23,7 +23,7 @@ const completeSchema = z.object({
   securityLevel: z.string().min(1).max(32),
   authPublicKeyPem: z.string().min(1).max(4096),
   offlinePublicKeyPem: z.string().min(1).max(4096).optional(),
-  deviceAttestation: z.record(z.unknown()).default({}),
+  deviceAttestation: z.record(z.string(), z.unknown()).default({}),
 });
 
 export function buildRecoveryRouter(hsmAdapter: HsmAdapter): Router {

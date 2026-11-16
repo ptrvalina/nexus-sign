@@ -1,6 +1,6 @@
 import { z } from 'zod';
 /** An optional setting where an empty value (`APNS_TEAM_ID=` in an env file) means unset. */
-const optional = <T extends z.ZodTypeAny>(schema: T) => z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
+const optional = <T extends z.ZodType>(schema: T) => z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
 
 /**
  * All configuration the service needs, validated once at startup, so a
@@ -10,7 +10,7 @@ const envSchema = z.object({
   /** Deployment mode, with no default: a missing value must not silently
    * select development, which skips the production posture checks. */
   NODE_ENV: z.enum(['development', 'test', 'production'], {
-    required_error: 'NODE_ENV is required: development, test or production',
+    message: 'NODE_ENV is required: development, test or production',
   }),
   /** Outside production, running with the software HSM, without attestation
    * or without the mTLS gateway check needs this explicit opt-in, so a

@@ -171,7 +171,7 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
     try {
       const body = z.object({
         nexusId: nexusIdSchema, credentialId: z.string().uuid(), mandateReference: z.string().min(1).max(128),
-        payee: z.record(z.string()), currency: z.string().regex(/^[A-Z]{3}$/), perPaymentLimitMinor: minor, totalLimitMinor: minor.nullable().default(null),
+        payee: z.record(z.string(), z.string()), currency: z.string().regex(/^[A-Z]{3}$/), perPaymentLimitMinor: minor, totalLimitMinor: minor.nullable().default(null),
         frequency: z.enum(['WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY']), validFrom: z.string().datetime(), validUntil: z.string().datetime(),
         termsVersion: z.string().min(1).max(64), offerExpiresInSeconds: z.number().int().min(60).max(7 * 24 * 3600).optional(),
       }).strict().parse(req.body);

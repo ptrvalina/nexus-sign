@@ -39,7 +39,7 @@ const bootstrapSchema = z.object({
   authPublicKeyPem: z.string().min(1).max(4096),
   /** Biometric-protected key agreement key for offline confirmation. */
   offlinePublicKeyPem: z.string().min(1).max(4096).optional(),
-  deviceAttestation: z.record(z.unknown()).default({}),
+  deviceAttestation: z.record(z.string(), z.unknown()).default({}),
 });
 
 const signatureSchema = z.object({
@@ -112,7 +112,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       if (!req.bankClientId) throw new UnauthorizedError('Missing authenticated bank client');
       const body = z.object({
         nexusId: z.string().regex(/^\d{9}$/),
-        purpose: z.literal('BOOTSTRAP', { errorMap: () => ({ message: 'Only BOOTSTRAP tokens exist; enrolled devices sign their requests' }) }).default('BOOTSTRAP'),
+        purpose: z.literal('BOOTSTRAP', { message: 'Only BOOTSTRAP tokens exist; enrolled devices sign their requests' }).default('BOOTSTRAP'),
         /** Required to enrol a device for an identity that already has one:
          * how the bank re-identified the customer, and its case reference. */
         replacement: z.object({
