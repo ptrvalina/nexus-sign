@@ -2,7 +2,9 @@
 
 NEXUS-SIGN, branch `engineering/production-readiness`, base `2.0.0-rc.2` (commit `5999984`), November 2026. Written for the bank's CTO, information security, bank architects and external auditors. Every statement of readiness below names the test, file or commit behind it; where a check could not run, the report says so.
 
-**Final status: NOT COMPLETE — REMAINING BLOCKERS LISTED** ([section 17](#17-what-still-blocks-the-pilot-and-production)).
+> **Superseded for status by the [final readiness package](FINAL_READINESS_PACKAGE.md) (third cycle, sections A–J): NOT COMPLETE — BLOCKERS REMAIN.** This report records the first two cycles; numbers below are as of the end of the second cycle.
+
+**Status at the end of the second cycle: NOT COMPLETE — REMAINING BLOCKERS LISTED** ([section 17](#17-what-still-blocks-the-pilot-and-production)).
 
 ## 1. Initial state
 

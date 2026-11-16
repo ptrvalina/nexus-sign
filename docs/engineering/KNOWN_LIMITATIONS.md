@@ -7,15 +7,15 @@ What NEXUS-SIGN does not do, or has not been shown to do, on branch `engineering
 | Limitation | Consequence | What closes it |
 |---|---|---|
 | Nothing has been run on a physical iPhone or Android phone | Key generation in Secure Enclave / StrongBox, biometric binding, the confirmation screen, push handling, offline confirmation and recovery on the phone are code, not demonstrated behaviour | The [device acceptance checklist](DEVICE_ACCEPTANCE_CHECKLIST.md) on real devices |
-| The SDKs were not compiled in the review environment | Changes to the SDKs on this branch (display rules, decline, device replacement approve and cancel) may not compile | CI jobs `ios-sdk` and `android-sdk` green on the branch |
+| The iOS SDK was never compiled; of the Android SDK only the platform-independent core was compiled and tested on the JVM (39 tests) | SDK changes on this branch outside that core may not compile | CI jobs `ios-sdk` and `android-sdk` green on the branch |
 | No production HSM has been used; SoftHSM 2.7 only, and not in this review | Vendor-specific behaviour of `C_Login`, session limits, failover and key attributes is unknown | Validation on the bank's HSM model |
 | The Auth Core HTTP integration suites did not run in this review (they need `express`, `ioredis`, `prom-client`) | Route-level behaviour of the changes on this branch is covered by service-level PostgreSQL tests only | CI job `auth-core / integration` green on the branch |
 | No penetration test, load test or resilience test | Throughput, latency and behaviour under attack are unmeasured | The bank acceptance stage of the [implementation path](../integration/pilot-execution-pack.md) |
-| App Attest and Play Integrity verification have no tests with real or recorded tokens | A defect in those parsers would not be found by the test suite | Recorded tokens from real devices as test fixtures |
+| App Attest and Play Integrity verification are tested with test chains and verdicts made by the tests, not with real device tokens | A device-specific format detail would not be found | Recorded tokens from real devices as test fixtures |
 
 ## Functions of the product presentation that are partial
 
-Since the second cycle every function has code (see the [feature matrix](PRODUCT_FEATURE_COMPLIANCE_MATRIX.md#remaining-gaps)). Still partial: a customer-initiated call to the bank outside a payment check; a payee check against the bank's own data (the bank's anti-fraud); one biometric-change behaviour on both platforms; console screens for mandates, devices and authorizations; SIEM and anti-fraud connectors; Kubernetes manifests; confirmation-success and HSM-availability metrics. The bot is the bank's own, connected through webhooks and the bank API.
+One: checking the payee against the bank's own records (Verification of Payee) is the bank's function; NEXUS-SIGN guarantees that the screen shows exactly the signed payee, labelled, and refuses a second account number in other fields. The bot is the bank's own, connected through webhooks and the bank API. See the [functional coverage matrix](PRODUCT_FEATURE_COMPLIANCE_MATRIX.md).
 
 ## Security limits of the current design
 
@@ -28,15 +28,17 @@ Since the second cycle every function has code (see the [feature matrix](PRODUCT
 | Offline confirmation v1 codes are HMACs under a key Auth Core holds | Whoever holds the database and `DEVICE_SECRET_ENCRYPTION_KEY` can compute a valid v1 code. v1 (`OFFLINE_CONFIRMATION_MODE=immediate`) is refused in production; v2 waits for the device signature |
 | Credential rows inserted directly into the database are not refused by the database | They are refused at use by the runtime integrity check against sealed enrolments; authorization inserts are refused by the database since migration 024 |
 | Migrations are forward-only | The ledger and checksums (since `e4d269c`) make installs and upgrades repeatable; there are no down migrations. Restore a backup to roll back |
-| iOS offline secret is usable by the app process once it leaves the Secure Enclave | Finding D-01; needs a device to change and verify |
-| The confirmation prompt layout can be ambiguous for some field combinations | Finding D-02; needs a device to change and verify |
+| iOS offline secret is usable by the app process once it leaves the Secure Enclave | Finding D-01, open: accepted for a controlled pilot under conditions ([decision](SECURITY_FINDINGS_REGISTER.md#decision-on-d-01-medium-open)); protocol fix before production |
+| The labelled confirmation prompt (D-02 fix) has not been seen on a device | Long names, translated labels and system prompt truncation need a device check |
 | DTLS-SRTP for calls is a WebRTC property, not enforced by Auth Core | Finding A2-11 |
 | Audio and video show a person; they do not identify them | No liveness or deepfake detection is claimed |
 | The in-database ECDSA verifier is PL/pgSQL | Tested against OpenSSL on generated valid and corrupted inputs; slower than native code; not reviewed for timing side channels (it handles public data only) |
 | Conversation bodies are stored in the Auth Core database in clear text | Protected like the rest of the database; not end-to-end encrypted; the bank sets retention |
 | No API rate limiting in Auth Core | Expected at the bank's gateway (finding A1-10) |
-| Low and informational review findings | 39 Low and 16 Info findings are open ([area reports](security-review/README.md)) |
+| Low and informational review findings | 38 Low and 19 Info findings are open ([findings register](SECURITY_FINDINGS_REGISTER.md)) |
+| Customer calls are recorded, not sealed | The call row is immutable once ended; calls authorize nothing |
+| Metrics and the audit export | The confirmation counter counts in the confirming transaction; the audit export needs a lag above the longest transaction |
 
 ## Documentation gaps
 
-No NEXUS ID specification (allocation, uniqueness scope, reuse after revocation), no single cryptographic design document, no production configuration template with every variable, no deployment manifests or Helm chart, no regulatory mapping (PSD2/RTS SCA).
+No NEXUS ID specification (allocation, uniqueness scope, reuse after revocation) and no regulatory mapping (PSD2/RTS SCA). Kubernetes manifests exist ([deploy/kubernetes](../../deploy/kubernetes/README.md)) but no Helm chart.

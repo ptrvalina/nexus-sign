@@ -20,9 +20,9 @@ Each area was reviewed by reading the code and, where the environment allowed, b
 | Severity | Found | Fixed | Partly fixed | Open |
 |---|---|---|---|---|
 | High | 4 | 4 | 0 | 0 |
-| Medium | 16 | 14 | 0 | 2 |
-| Low | 41 | 2 | 0 | 39 |
-| Info | 16 | 0 | 0 | 16 |
+| Medium | 16 | 15 | 0 | 1 |
+| Low | 44 | 6 | 0 | 38 |
+| Info | 19 | 0 | 0 | 19 |
 
 Low and Info findings are listed in the [area reports](security-review/README.md); the open ones that matter for a pilot are in the [known limitations](KNOWN_LIMITATIONS.md).
 
@@ -53,8 +53,8 @@ Low and Info findings are listed in the [area reports](security-review/README.md
 | C-04 | The registry role could block credentials permanently with unsigned statements | Fixed | `8f33d81`: statements verified with the bank's trust key in the database |
 | C-05 | The lifecycle trigger checked updates only; inserts could create a verified, committed row | Fixed for authorizations | `5ba29ec`, migration 024. Credential inserts still unchecked by the database (caught by the runtime integrity check) |
 | C-06 | Migrations do not apply to an empty database; upgrade integrity cannot be shown | Fixed | `e4d269c`: baseline, migration ledger with SHA-256 checksums, sequence check, a lock against parallel runs, failure leaves no partial change; fresh install equals `schema.sql`, upgrade from rc.2 tested (`migrations`, 7 tests, rerun with 025–029) |
-| D-01 | iOS: the offline secret is usable by the app once it leaves the Secure Enclave | Open | Needs a device to verify any change |
-| D-02 | Both SDKs: the prompt layout can be ambiguous | Open | Needs a device to verify any change |
+| D-01 | iOS: the offline secret is usable by the app once it leaves the Secure Enclave | Open — accepted for a controlled pilot with conditions | [Decision](SECURITY_FINDINGS_REGISTER.md#decision-on-d-01-medium-open); protocol fix before production |
+| D-02 | Both SDKs: the prompt layout can be ambiguous | Fixed in code (third cycle); device check pending | Labelled prompt, reserved separators, IBAN look-alikes refused in Auth Core, both SDKs and the sandbox; shared vectors |
 
 ### Fixed Low findings
 
@@ -88,6 +88,10 @@ The [threat model](../security/threat-model.md) describes release 2.0.0-rc.2. Ch
 - Gateway compromise no longer lets a forged signature, an unapproved key or an expired authorization through the bank database (C-02, C-03, C-04).
 - Restoring the bank database is no longer a path to double execution (C-01).
 - New residual risks, recorded in [known limitations](KNOWN_LIMITATIONS.md): a stalled network HSM can block the Auth Core process (B-01, open part); the hold delays legitimate lost-phone replacement by up to `DEVICE_REPLACEMENT_HOLD_SECONDS` unless the bank's process approves it another way; the in-database ECDSA verifier is PL/pgSQL code that has been tested against OpenSSL but not reviewed for side channels (verification uses public data only).
+
+## Third cycle (final production readiness closure)
+
+D-02 and D-07 fixed in code; D-01 decided (accepted for a controlled pilot with conditions, not for production); six new items N-01 to N-06. All findings with their ASVS/MASVS group and decision: [findings register](SECURITY_FINDINGS_REGISTER.md).
 
 ## What this report does not cover
 
