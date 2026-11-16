@@ -80,7 +80,7 @@ A plain `BOOTSTRAP` request for an identity whose device was revoked is refused 
 
 - Its credential is `REVOKED` (final). Device-signed requests of the old device are refused with 401 from then on, and offline codes it computes are refused at confirmation.
 - Authorizations waiting for its signature are `CANCELLED`. The bank creates them again for the new device if needed.
-- The identity's recovery configuration is not changed: the existing recovery phrase still recovers the identity until the new device sets up a new one.
+- The identity's recovery configuration is not changed by a replacement: the existing recovery phrase still recovers the identity until the new device sets up a new one. (A recovery, unlike a replacement, uses the phrase up: [recovery protocol 2](../protocol/recovery-protocol-v2.md#4-completion).)
 
 ## Push notice
 

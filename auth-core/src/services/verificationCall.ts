@@ -135,7 +135,9 @@ async function deviceCall(sessionId: string, device: DeviceContextForCall): Prom
 /** The operator may join only after claiming the call; one operator per call. */
 async function operatorCall(sessionId: string, operator: OperatorIdentity): Promise<CallRow> {
   const row = await loadCall(sessionId);
-  if (operator.clientId !== null && operator.clientId !== row.client_id) throw new NotFoundError('Verification session not found');
+  // Only operators of the customer's bank (audit finding A2-03): a platform
+  // operator (clientId null) is not the bank and cannot verify its customers.
+  if (operator.clientId === null || operator.clientId !== row.client_id) throw new NotFoundError('Verification session not found');
   return row;
 }
 
@@ -163,7 +165,7 @@ export async function listCalls(operator: OperatorIdentity): Promise<Record<stri
      JOIN bank_clients c ON c.client_id = s.client_id
      WHERE s.status = 'IN_PROGRESS' AND s.expires_at > now() AND a.state = 'PENDING_USER'
        AND s.channel = ANY(c.operator_verification_channels)
-       AND ($1::text IS NULL OR s.client_id = $1)
+       AND s.client_id = $1
      ORDER BY s.created_at
      LIMIT 100`, [operator.clientId]);
   const calls: Record<string, unknown>[] = [];

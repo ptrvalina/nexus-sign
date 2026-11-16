@@ -239,7 +239,8 @@ export async function recordOperatorDecision(sessionId: string, operator: Operat
   const located = await pool.query<{ authorization_id: string; client_id: string }>(
     `SELECT authorization_id, client_id FROM verification_sessions WHERE session_id = $1`, [sessionId]);
   const row = located.rows[0];
-  if (!row || (operator.clientId !== null && operator.clientId !== row.client_id)) throw new NotFoundError('Verification session not found');
+  // Only operators of the customer's bank (audit finding A2-03).
+  if (!row || operator.clientId === null || operator.clientId !== row.client_id) throw new NotFoundError('Verification session not found');
   return closeSession(row.authorization_id, row.client_id, sessionId, async (tx, session) => {
     const channels = await tx.query<{ operator_verification_channels: string[] }>(
       `SELECT operator_verification_channels FROM bank_clients WHERE client_id = $1`, [row.client_id]);

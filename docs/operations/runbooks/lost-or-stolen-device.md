@@ -122,4 +122,4 @@ When the old credential was revoked first, the enrolment replaces nothing: there
 
 - Review authorizations verified between the reported loss and the revocation with the customer. Their evidence shows which credential signed (`GET /v1/authorizations/{authorizationId}/evidence`).
 - An unexpected `credential.replaced` webhook or replacement notice: check the `credential_replacement_authorized` event (`actor`, `method`, `reference`, `ip_address`) against the bank's case records; an unknown case is a security incident ([incident response](../incident-response.md#unauthorized-device-replacement)).
-- The recovery key configured on the old device stays on the identity after replacement. The new device replaces it when it sets up recovery (`POST /v1/mobile/recovery/setup`).
+- The recovery key configured on the old device stays on the identity after a replacement. The new device replaces it when it sets up recovery (`POST /v1/mobile/recovery/setup`). After a recovery the phrase cannot be used again (409 `RECOVERY_PHRASE_USED`) until the recovered device sets up a new one; make sure the bank's app asks for it.

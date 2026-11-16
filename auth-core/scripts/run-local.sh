@@ -87,7 +87,7 @@ ADMIN_COOKIE_SECURE=false
 ADMIN_MFA_REQUIRED=true
 EOF
 
-step "Registering the bank client 'local-bank', its audio/video verifiers and the admin account 'admin'"
+step "Registering the bank client 'local-bank', its audio/video verifiers and the admin accounts 'admin' and 'operator'"
 client_output=$(node --env-file="$ENV_FILE" dist/cli/registerClient.js local-bank)
 client_secret=$(printf '%s\n' "$client_output" | awk '/client_secret:/ {print $2}')
 [ -n "$client_secret" ] || { printf '%s\n' "$client_output"; fail "no client_secret in the output"; }
@@ -95,6 +95,11 @@ admin_output=$(node --env-file="$ENV_FILE" dist/cli/createAdminUser.js admin adm
 admin_password=$(printf '%s\n' "$admin_output" | awk '/ password:/ {print $2}')
 totp_secret=$(printf '%s\n' "$admin_output" | awk '/ totp_secret:/ {print $2}')
 [ -n "$admin_password" ] && [ -n "$totp_secret" ] || { printf '%s\n' "$admin_output"; fail "no admin password or TOTP secret in the output"; }
+# Verification calls are answered only by operators of the customer's bank.
+operator_output=$(node --env-file="$ENV_FILE" dist/cli/createAdminUser.js operator operator --client=local-bank)
+operator_password=$(printf '%s\n' "$operator_output" | awk '/ password:/ {print $2}')
+operator_totp=$(printf '%s\n' "$operator_output" | awk '/ totp_secret:/ {print $2}')
+[ -n "$operator_password" ] && [ -n "$operator_totp" ] || { printf '%s\n' "$operator_output"; fail "no operator password or TOTP secret in the output"; }
 
 # Audio/video results: a throwaway provider key for the end-to-end script,
 # and operator verification (calls answered in the admin console).
@@ -115,6 +120,10 @@ Admin console:  http://localhost:$PORT/admin/
                 (add it to an authenticator app as a time-based key, or print
                 the current one-time code from auth-core/ with:
                 node -e "const t=require('./dist/crypto/totp');console.log(t.totpCode(t.base32Decode('$totp_secret'),t.currentStep()))")
+  Verification calls (bank operator of local-bank):
+  username:     operator
+  password:     $operator_password
+  TOTP key:     $operator_totp
 Bank client:    local-bank
   client_secret: $client_secret
 

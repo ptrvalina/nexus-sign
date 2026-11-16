@@ -9,6 +9,7 @@ import { parseP256PublicKey } from '../crypto/p256PublicKey';
 import { ConflictError, ValidationError } from './errors';
 import { prepareDeviceKeys, type DeviceKeysInput } from './deviceKeysService';
 import { forgetInactivePushRegistrations } from './pushRegistrationService';
+import { queueReplacementNotice } from './pushService';
 import { getEvidenceRecord, sealCredentialEnrolment, sealRecoveryConfiguration, type EnrolmentAttestation } from './evidenceService';
 import { sealProblem } from './credentialIntegrity';
 import { enqueueWebhook } from './webhookService';
@@ -53,6 +54,21 @@ export const RECOVERY_WRAP_SALT = 'NEXUS-SIGN/RECOVERY-WRAP/v2';
 export class RecoveryNotConfiguredError extends Error {
   constructor() { super('Recovery has not been configured for this NEXUS ID'); this.name = 'RecoveryNotConfiguredError'; }
 }
+/**
+ * A recovery phrase recovers the identity once (audit finding A2-02): after a
+ * completed recovery the recovered device must set up a new phrase, so a
+ * phished phrase cannot take the identity back after the owner recovered it.
+ * Used means a completed recovery at or after the configuration was stored.
+ */
+async function assertPhraseNotUsed(runner: Pick<import('pg').PoolClient, 'query'>, nexusId: string): Promise<void> {
+  const used = await runner.query(
+    `SELECT 1 FROM recovery_sessions r JOIN nexus_identities i ON i.nexus_id = r.nexus_id
+      WHERE r.nexus_id = $1 AND r.used_at IS NOT NULL AND r.used_at >= coalesce(i.recovery_updated_at, '-infinity'::timestamptz) LIMIT 1`, [nexusId]);
+  if ((used.rowCount ?? 0) > 0) {
+    throw new ConflictError('This recovery phrase was already used; the customer must set up a new recovery phrase on the recovered device', 'RECOVERY_PHRASE_USED');
+  }
+}
+
 export class RecoverySessionNotFoundError extends Error {
   constructor() { super('Recovery session not found or expired'); this.name = 'RecoverySessionNotFoundError'; }
 }
@@ -184,6 +200,7 @@ export async function createRecoverySession(bankCustomerRef: string, clientId: s
   if (row.recovery_protocol !== RECOVERY_PROTOCOL) {
     throw new ConflictError('The recovery phrase uses retired protocol 1; the customer must set up a new recovery phrase', 'RECOVERY_PROTOCOL_RETIRED');
   }
+  await assertPhraseNotUsed(pool, row.nexus_id);
   const failures = await pool.query<{ failures: string }>(
     `SELECT COALESCE(SUM(failed_attempt_count), 0) AS failures FROM recovery_sessions
      WHERE nexus_id = $1 AND created_at > now() - interval '${RECOVERY_FAILURE_WINDOW}'`, [row.nexus_id]);
@@ -270,6 +287,7 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
       throw new ConflictError('The recovery phrase uses retired protocol 1; the customer must set up a new recovery phrase', 'RECOVERY_PROTOCOL_RETIRED');
     }
     if (!i.recovery_public_key_pem || !i.recovery_wrapped_key) throw new RecoveryNotConfiguredError();
+    await assertPhraseNotUsed(tx, s.nexus_id);
     await assertRecoveryKeyIntegrity(tx, s.nexus_id, i.recovery_evidence_id, i.recovery_public_key_pem, i.recovery_wrapped_key);
     const proof = decodeBase64(input.proofB64);
     const signed = recoveryProofSigningInput({ sessionId: s.recovery_session_id, nonceB64: s.nonce.toString('base64'), nexusId: s.nexus_id, newSigningKeySpki: spkiOf(newPublicKey.pem) });
@@ -284,6 +302,10 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     const oldCredentials = await tx.query<{ credential_id: string; key_version: number }>(
       `SELECT credential_id,key_version FROM credentials WHERE nexus_id=$1 AND state = 'ACTIVE' FOR UPDATE`, [s.nexus_id]);
     const revokedIds = oldCredentials.rows.map((c) => c.credential_id);
+    // Announced on the old device while it can still be reached, as for a
+    // device replacement (audit finding A2-02): the owner learns that the
+    // identity moved, also when someone else recovered it with a phished phrase.
+    for (const credentialId of revokedIds) await queueReplacementNotice(tx, s.client_id, s.nexus_id, credentialId);
     if (revokedIds.length > 0) await tx.query(`UPDATE credentials SET state='REVOKED',revoked_at=now() WHERE credential_id = ANY($1::uuid[])`, [revokedIds]);
     await tx.query(`UPDATE authorization_requests SET state='CANCELLED' WHERE nexus_id=$1 AND state='PENDING_USER'`, [s.nexus_id]);
     await forgetInactivePushRegistrations(tx, s.nexus_id);

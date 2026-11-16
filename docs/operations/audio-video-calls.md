@@ -38,7 +38,7 @@ A channel with neither is not offered in verification plans.
 
 ### Operator accounts
 
-Operators are admin accounts with role `operator` scoped to the bank (`createAdminUser.js <name> operator --client=<clientId>`), with TOTP. They see and answer only that bank's calls. A call is claimed by one operator (`verification_call_claimed` in the audit log). The decision is recorded with the operator's username in the evidence.
+Operators are admin accounts with role `operator` scoped to the bank (`createAdminUser.js <name> operator --client=<clientId>`), with TOTP. They see and answer only that bank's calls. Platform accounts without `--client` (the vendor's staff) see no calls and cannot claim or decide one (audit finding A2-03). A call is claimed by one operator (`verification_call_claimed` in the audit log). The decision is recorded with the operator's username in the evidence.
 
 ### coturn (reference)
 

@@ -66,6 +66,10 @@ describe('recovery protocol 2', { skip: skipWithoutServices }, () => {
     const recovered = { nexusId, credentialId: completed.json.credentialId, signingKey: newSigning, authKey: auth };
 
     assert.equal((await call(server.baseUrl, 'GET', '/v1/mobile/recovery/setup', { device })).status, 401, 'the old device is revoked');
+    // The phrase is used up (audit finding A2-02) until the recovered device sets up a new one.
+    const reuse = await bank.call('POST', '/v1/recovery/sessions', { body: { bankCustomerRef } });
+    assert.equal(reuse.status, 409, reuse.text);
+    assert.equal(reuse.json.code, 'RECOVERY_PHRASE_USED');
     const authorization = await bank.createAuthorization(recovered);
     const { signature } = await deviceSignature(server, recovered, authorization.authorizationId);
     assert.equal((await submitSignature(server, recovered, authorization.authorizationId, signature)).json.status, 'VERIFIED');

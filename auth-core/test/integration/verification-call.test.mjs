@@ -12,7 +12,7 @@ import { adminSession, bankSession, call, deviceHeaders, deviceSignature, submit
 const TURN_SECRET = 'turn-shared-secret-for-tests';
 
 describe('verification calls', { skip: skipWithoutServices }, () => {
-  let server; let bank; let device; let otherDevice; let operator; let operator2; let otherBankOperator; let auditor;
+  let server; let bank; let device; let otherDevice; let operator; let operator2; let otherBankOperator; let platformOperator; let auditor;
 
   before(async () => {
     server = await startAuthCore({ env: {
@@ -31,6 +31,7 @@ describe('verification calls', { skip: skipWithoutServices }, () => {
     operator2 = await adminSession(server, await server.createAdmin('calls-op-2', 'operator', { clientId: 'bank-calls' }));
     otherBankOperator = await adminSession(server, await server.createAdmin('calls-op-other', 'operator', { clientId: 'bank-calls-other' }));
     auditor = await adminSession(server, await server.createAdmin('calls-auditor', 'auditor', { clientId: 'bank-calls' }));
+    platformOperator = await adminSession(server, await server.createAdmin('calls-op-platform', 'operator'));
   });
   after(async () => { await server?.stop(); });
 
@@ -66,6 +67,10 @@ describe('verification calls', { skip: skipWithoutServices }, () => {
     assert.equal(listed.authorizationId, auth.authorizationId);
     assert.ok(!(await op(otherBankOperator, 'GET', '')).json.some((c) => c.sessionId === sessionId), 'not listed for another bank');
     assert.equal((await op(otherBankOperator, 'POST', `/${sessionId}/claim`, {})).status, 404);
+    // A platform (vendor) operator is not the bank either (audit finding A2-03).
+    assert.ok(!(await op(platformOperator, 'GET', '')).json.some((c) => c.sessionId === sessionId), 'not listed for a platform operator');
+    assert.equal((await op(platformOperator, 'POST', `/${sessionId}/claim`, {})).status, 404);
+    assert.equal((await op(platformOperator, 'POST', `/${sessionId}/decision`, { result: 'VERIFIED' })).status, 404);
     assert.equal((await op(auditor, 'POST', `/${sessionId}/claim`, {})).status, 403, 'auditors are read-only');
   });
 
