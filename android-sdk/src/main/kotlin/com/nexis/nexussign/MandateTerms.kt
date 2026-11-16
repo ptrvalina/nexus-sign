@@ -74,6 +74,7 @@ internal object MandateTermsParser {
             val key = k as String
             val value = v as? String ?: throw SignedPayload.Rejected("invalid_value", "payee.$key must be a string")
             if (SignedPayload.displayTextViolation(value) != null) throw SignedPayload.Rejected("display", "payee.$key")
+            if (key !in SignedPayload.ACCOUNT_KEYS && SignedPayload.looksLikeIban(value)) throw SignedPayload.Rejected("display", "payee.$key looks like an account number")
             key to value
         }
         payee["iban"]?.let { if (!SignedPayload.isValidIban(it)) throw SignedPayload.Rejected("iban", "payee.iban") }

@@ -141,7 +141,7 @@ public final class NEXUSSignSDK {
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else {
             throw Self.biometryError(policyError)
         }
-        context.localizedReason = signed.confirmationText
+        context.localizedReason = signed.confirmationText(labels: config.promptLabels)
         // The key reference must be fetched with this context for the system
         // prompt to use it (and its localizedReason).
         let signature = try withBiometryCheck {
@@ -285,7 +285,7 @@ public final class NEXUSSignSDK {
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else {
             throw Self.biometryError(policyError)
         }
-        context.localizedReason = challenge.transaction.confirmationText
+        context.localizedReason = challenge.transaction.confirmationText(labels: config.promptLabels)
         if challenge.requiresDeviceSignature {
             guard UUID(uuidString: challenge.transaction.authorizationId) != nil else {
                 throw NEXUSSignError.authorizationPayloadInvalid(reason: "invalid_qr", detail: "authorization ID is not a UUID")
@@ -293,7 +293,7 @@ public final class NEXUSSignSDK {
             // Evaluate once; both Secure Enclave keys are then used with this
             // already-evaluated context, without a second prompt.
             do {
-                _ = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: challenge.transaction.confirmationText)
+                _ = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: challenge.transaction.confirmationText(labels: config.promptLabels))
             } catch {
                 throw NEXUSSignError.authenticationDenied
             }
@@ -460,16 +460,27 @@ public final class NEXUSSignSDK {
     /// Runs a biometry-bound key operation; when it fails because the
     /// biometric enrolment changed since the device was enrolled, reports
     /// `.credentialInvalidated` instead of a missing key or a denied prompt.
+    /// Maps a failure caused by changed biometrics to `.credentialInvalidated`
+    /// and, as Android does, deletes the dead keys and the registration
+    /// (finding D-07).
     private func withBiometryCheck<T>(_ operation: () throws -> T) throws -> T {
         do {
             return try operation()
         } catch NEXUSSignError.notRegistered where keyManager.effectiveCredentialID != nil && keyManager.biometryChangedSinceEnrolment {
-            throw NEXUSSignError.credentialInvalidated
+            throw forgetInvalidatedCredential()
         } catch NEXUSSignError.offlineConfirmationUnavailable where keyManager.effectiveCredentialID != nil && keyManager.biometryChangedSinceEnrolment {
-            throw NEXUSSignError.credentialInvalidated
+            throw forgetInvalidatedCredential()
         } catch NEXUSSignError.authenticationDenied where keyManager.biometryChangedSinceEnrolment {
-            throw NEXUSSignError.credentialInvalidated
+            throw forgetInvalidatedCredential()
+        } catch NEXUSSignError.credentialInvalidated {
+            throw forgetInvalidatedCredential()
         }
+    }
+
+    private func forgetInvalidatedCredential() -> NEXUSSignError {
+        keyManager.forgetInvalidatedCredential()
+        networkClient.deviceIdentity = nil
+        return .credentialInvalidated
     }
 
     /// Refuses parameters that would weaken the wrapping key (a malicious or
@@ -699,6 +710,8 @@ extension NEXUSSignSDK {
             return v
         }
         guard let payee = o["payee"] as? [String: String], !payee.isEmpty, payee.values.allSatisfy({ SignedPayload.displayTextViolation($0) == nil }) else { throw invalid("display", "payee") }
+        // Finding D-02: no second account number outside the account fields.
+        if payee.contains(where: { !SignedPayload.accountKeys.contains($0.key) && SignedPayload.looksLikeIBAN($0.value) }) { throw invalid("display", "payee") }
         if let iban = payee["iban"], !SignedPayload.isValidIBAN(iban) { throw invalid("iban", "payee.iban") }
         let total: String?
         if o["total_limit_minor"] is NSNull { total = nil } else { total = try text("total_limit_minor") }

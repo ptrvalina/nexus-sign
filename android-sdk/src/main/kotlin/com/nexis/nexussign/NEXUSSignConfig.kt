@@ -57,6 +57,8 @@ data class NEXUSSignConfig(
     val recoverySetupPromptText: String = "Confirm your new recovery phrase",
     val allowEmulatorHostHttp: Boolean = false,
     val certificatePins: List<String> = emptyList(),
+    /** Labels of the confirmation prompt, translated by the bank app if it wants (finding D-02). */
+    val promptLabels: NexusPromptLabels = NexusPromptLabels.ENGLISH,
 ) {
     init {
         require(bankId.isNotBlank()) { "bankId must not be blank" }

@@ -106,7 +106,10 @@ class SignedTransactionTest {
         }
         val block = vectors["response_mismatch"] as Map<*, *>
         val signed = SignedPayload.parse(b64(block["base_canonical_base64"] as String))
-        assertEquals("1250.00 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001", signed.confirmationText())
+        assertEquals("1250.00 PLN\nIBAN: PL61109010140000071219812874\nName: Jan Kowalski\ntransfer • BANK-2026-000001", signed.confirmationText())
+        // Translated labels label the same values in the same order.
+        assertEquals("1250.00 PLN\nRachunek: PL61109010140000071219812874\nOdbiorca: Jan Kowalski\ntransfer • BANK-2026-000001",
+            signed.confirmationText(NexusPromptLabels(iban = "Rachunek", name = "Odbiorca")))
     }
 
     private fun envelopeFor(s: NexusSignedTransaction, b64: String, sha: String) = AuthorizationEnvelope(

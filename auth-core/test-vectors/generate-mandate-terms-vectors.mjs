@@ -50,6 +50,8 @@ const invalid = [
   { ...entry('hash does not match the bytes', terms(base)), termsHash: 'f'.repeat(64), reason: 'hash_mismatch' },
   entry('bytes not in canonical form', Buffer.from(JSON.stringify(base, null, 1)), { reason: 'not_canonical' }),
   entry('mixed-script payee name', terms({ ...base, payee: { name: 'Еnergy Co' } }), { reason: 'display' }),
+  entry('payee name that is an IBAN (finding D-02)', terms({ ...base, payee: { iban: 'DE89370400440532013000', name: 'PL61 1090 1014 0000 0712 1981 2874' } }), { reason: 'display' }),
+  entry('prompt separator in the payee name (finding D-02)', terms({ ...base, payee: { name: 'Energy \u2022 Co' } }), { reason: 'display' }),
   entry('bidi override in the reference', terms({ ...base, mandate_reference: 'REF‮gnp.exe' }), { reason: 'display' }),
   entry('IBAN with wrong check digits', terms({ ...base, payee: { iban: 'PL62109010140000071219812874', name: 'Energy Co' } }), { reason: 'iban' }),
   entry('missing field', terms(Object.fromEntries(Object.entries(base).filter(([k]) => k !== 'frequency'))), { reason: 'missing_field' }),

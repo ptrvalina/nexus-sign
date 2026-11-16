@@ -147,6 +147,22 @@
       "reason": "display"
     },
     {
+      "name": "payee name that is an IBAN (finding D-02)",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiREU4OTM3MDQwMDQ0MDUzMjAxMzAwMCIsIm5hbWUiOiJQTDYxIDEwOTAgMTAxNCAwMDAwIDA3MTIgMTk4MSAyODc0In0sInBlcl9wYXltZW50X2xpbWl0X21pbm9yIjoiMTUwMDAiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRlcm1zX3ZlcnNpb24iOiIyMDI2LTExIiwidG90YWxfbGltaXRfbWlub3IiOm51bGwsInZhbGlkX2Zyb20iOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjctMTEtMDFUMDA6MDA6MDAuMDAwWiJ9",
+      "termsHash": "91f5902ab463d02520d9cd46410b92540a095412cac24ad523152a8be5029ae1",
+      "reason": "display"
+    },
+    {
+      "name": "prompt separator in the payee name (finding D-02)",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJuYW1lIjoiRW5lcmd5IOKAoiBDbyJ9LCJwZXJfcGF5bWVudF9saW1pdF9taW5vciI6IjE1MDAwIiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0ZXJtc192ZXJzaW9uIjoiMjAyNi0xMSIsInRvdGFsX2xpbWl0X21pbm9yIjpudWxsLCJ2YWxpZF9mcm9tIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI3LTExLTAxVDAwOjAwOjAwLjAwMFoifQ==",
+      "termsHash": "6b163f9eea6c374aaf27f223124950637974e953c78cee21ffab9c814ab2e64f",
+      "reason": "display"
+    },
+    {
       "name": "bidi override in the reference",
       "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
       "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",

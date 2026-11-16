@@ -45,6 +45,10 @@ describe('beneficiary display rules', { skip: skipWithoutServices }, () => {
     ['a leading space', { name: ' Jan Kowalski', iban: IBAN }],
     ['a trailing no-break space', { name: 'Jan Kowalski ', iban: IBAN }],
     ['a padded IBAN', { name: 'Jan Kowalski', iban: `${IBAN} ` }],
+    // Finding D-02: a second account number in another field, and the separators of the prompt.
+    ['a payee name that is an IBAN', { name: 'DE89 3704 0044 0532 0130 00', iban: IBAN }],
+    ['a note that is an IBAN', { name: 'Jan Kowalski', iban: IBAN, note: 'de89-3704-0044-0532-0130-00' }],
+    ['a prompt separator', { name: 'Jan \u2192 Kowalski', iban: IBAN }],
   ]) {
     test(`a beneficiary value with ${what} is refused with 400`, async () => {
       const r = await create(beneficiary);

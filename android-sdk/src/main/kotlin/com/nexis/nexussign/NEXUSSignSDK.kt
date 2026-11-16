@@ -169,7 +169,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             forgetRegistration()
             throw e
         }
-        val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), signed.confirmationText())
+        val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), signed.confirmationText(config.promptLabels))
             .cryptoObject?.signature ?: signature
         val signatureDer = try {
             authorized.update(canonicalBytes)
@@ -340,7 +340,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
                 forgetRegistration()
                 throw e
             }
-            val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), challenge.transaction.confirmationText())
+            val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), challenge.transaction.confirmationText(config.promptLabels))
                 .cryptoObject?.signature ?: signature
             val signatureDer = try {
                 authorized.update(challenge.canonicalPayload)
@@ -359,7 +359,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw e
         }
         // The key can be used only through this prompt, which shows the transaction.
-        val unlocked = authenticate(activity, BiometricPrompt.CryptoObject(mac), challenge.transaction.confirmationText())
+        val unlocked = authenticate(activity, BiometricPrompt.CryptoObject(mac), challenge.transaction.confirmationText(config.promptLabels))
             .cryptoObject?.mac ?: mac
         val tag = try {
             unlocked.doFinal(DeviceProtocol.offlineTagInput(challenge.canonicalPayload))

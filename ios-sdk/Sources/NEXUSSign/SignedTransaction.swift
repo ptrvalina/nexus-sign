@@ -36,16 +36,19 @@ public struct NexusSignedTransaction: Equatable {
     /// or account_number), then name and bic, then the other fields by key.
     public var beneficiaryDisplay: String { SignedPayload.beneficiaryDisplay(beneficiary) }
 
-    /// Text of the Face ID / Touch ID prompt. The first line carries
-    /// the amount and the account identifier, so a long payee name cannot push
-    /// the account out of the visible part of the prompt; the second line names
-    /// the operation and the reference. Shared vectors fix the exact text.
-    public var confirmationText: String {
-        var text = "\(formattedAmount) \(currency)"
-        let who = beneficiaryDisplay
-        if !who.isEmpty { text += " → \(who)" }
-        text += "\n\(operationType) • \(transactionReference)"
-        return text
+    /// Text of the Face ID / Touch ID prompt (finding D-02): the amount,
+    /// then one labelled line per beneficiary field (the account first, so a
+    /// long payee name cannot push it out of the visible part of the prompt;
+    /// then name, BIC and the other fields by key), last the operation and the
+    /// reference. Each value is on its own line after its own label. Shared
+    /// vectors fix the exact text with `NexusPromptLabels.english`.
+    public var confirmationText: String { confirmationText(labels: .english) }
+
+    public func confirmationText(labels: NexusPromptLabels) -> String {
+        var lines = ["\(formattedAmount) \(currency)"]
+        for key in SignedPayload.beneficiaryOrder(beneficiary) { lines.append("\(labels.label(for: key)): \(beneficiary[key]!)") }
+        lines.append("\(operationType) • \(transactionReference)")
+        return lines.joined(separator: "\n")
     }
 
     /// Expiry as a `Date`, parsed from the signed timestamp.
@@ -193,6 +196,9 @@ enum SignedPayload {
             if let violation = displayTextViolation(value) {
                 throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key): \(violation)")
             }
+            if !accountKeys.contains(key), looksLikeIBAN(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) looks like an account number")
+            }
             if key == "iban", !isValidIBAN(value) {
                 throw Rejected(reason: "invalid_value", detail: "beneficiary.iban is not a valid IBAN")
             }
@@ -310,6 +316,7 @@ enum SignedPayload {
     static func displayTextViolation(_ value: String) -> String? {
         let scalars = value.unicodeScalars
         if !isDisplaySafe(value) { return "control, format or separator character" }
+        if scalars.contains(where: { [0x2192, 0x00B7, 0x2022].contains($0.value) }) { return "the characters \u{2192} \u{00B7} \u{2022} are reserved for the confirmation prompt" }
         // String equality in Swift is canonical equivalence, so compare scalars.
         if !value.precomposedStringWithCanonicalMapping.unicodeScalars.elementsEqual(scalars) {
             return "not in Unicode Normalization Form C"
@@ -376,16 +383,25 @@ enum SignedPayload {
     static let beneficiaryMaxValueLength = 140
     static let beneficiaryMaxFields = 16
 
-    private static let accountKeys = ["iban", "account", "account_number"]
+    static let accountKeys = ["iban", "account", "account_number"]
 
-    static func beneficiaryDisplay(_ beneficiary: [String: String]) -> String {
+    /// True when the value, without spaces and hyphens and in upper case, is a valid IBAN (finding D-02).
+    static func looksLikeIBAN(_ value: String) -> Bool {
+        isValidIBAN(String(value.unicodeScalars.filter { $0 != " " && $0 != "-" }).uppercased())
+    }
+
+    /// Keys in prompt order: the account, name, bic, then the others sorted.
+    static func beneficiaryOrder(_ beneficiary: [String: String]) -> [String] {
         let account = accountKeys.first { beneficiary[$0] != nil }
         let ordered = [account, "name", "bic"].compactMap { $0 }.filter { beneficiary[$0] != nil }
         // Array.sorted on String compares Unicode scalars; keys are [a-z0-9_]
         // (checked above), where that equals the UTF-16 order the other
         // implementations use.
-        let rest = beneficiary.keys.filter { !ordered.contains($0) }.sorted()
-        return (ordered + rest).compactMap { beneficiary[$0] }.joined(separator: " · ")
+        return ordered + beneficiary.keys.filter { !ordered.contains($0) }.sorted()
+    }
+
+    static func beneficiaryDisplay(_ beneficiary: [String: String]) -> String {
+        beneficiaryOrder(beneficiary).compactMap { beneficiary[$0] }.joined(separator: " · ")
     }
 
     static func parseTimestamp(_ value: String) -> Date? {
@@ -569,6 +585,38 @@ enum SignedPayload {
 
         private mutating func skipWhitespace() {
             while let c = peek(), c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D { i += 1 }
+        }
+    }
+}
+
+/// Labels of the confirmation prompt. A bank app passes translated labels
+/// through `NEXUSSignConfig.promptLabels`; they label values, they never
+/// replace them. Fields without a label of their own show their key.
+public struct NexusPromptLabels: Equatable, Sendable {
+    public let iban: String
+    public let account: String
+    public let accountNumber: String
+    public let name: String
+    public let bic: String
+
+    public init(iban: String = "IBAN", account: String = "Account", accountNumber: String = "Account number", name: String = "Name", bic: String = "BIC") {
+        for label in [iban, account, accountNumber, name, bic] {
+            precondition(!label.isEmpty && label.utf16.count <= 40 && SignedPayload.displayTextViolation(label) == nil && !label.contains(":"),
+                         "prompt labels are 1 to 40 display-safe characters without a colon")
+        }
+        self.iban = iban; self.account = account; self.accountNumber = accountNumber; self.name = name; self.bic = bic
+    }
+
+    public static let english = NexusPromptLabels()
+
+    func label(for key: String) -> String {
+        switch key {
+        case "iban": return iban
+        case "account": return account
+        case "account_number": return accountNumber
+        case "name": return name
+        case "bic": return bic
+        default: return key
         }
     }
 }

@@ -38,7 +38,7 @@ class MandateTermsVectorsTest {
     @Test
     fun `invalid terms are refused with the expected reason`() {
         val invalid = vectors["invalid"] as List<*>
-        assertEquals(15, invalid.size)
+        assertEquals(17, invalid.size)
         for (item in invalid) {
             val v = item as Map<*, *>
             try {

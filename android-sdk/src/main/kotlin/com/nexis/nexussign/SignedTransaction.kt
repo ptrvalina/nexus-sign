@@ -41,17 +41,19 @@ data class NexusSignedTransaction(
     fun beneficiaryDisplay(): String = SignedPayload.beneficiaryDisplay(beneficiary)
 
     /**
-     * Text of the biometric prompt. The first line carries the amount
-     * and the account identifier, so a long payee name cannot push the account
-     * out of the visible part of the prompt; the second line names the
-     * operation and the reference. Shared vectors fix the exact text.
+     * Text of the biometric prompt (finding D-02): the amount, then one
+     * labelled line per beneficiary field (the account first, so a long payee
+     * name cannot push it out of the visible part of the prompt; then name,
+     * BIC and the other fields by key), last the operation and the reference.
+     * Each value is on its own line after its own label, so a name cannot be
+     * read as the account. Shared vectors fix the exact text with
+     * [NexusPromptLabels.ENGLISH].
      */
-    fun confirmationText(): String = buildString {
-        append(formattedAmount()).append(' ').append(currency)
-        val who = beneficiaryDisplay()
-        if (who.isNotEmpty()) append(" → ").append(who)
-        append('\n').append(operationType).append(" • ").append(transactionReference)
-    }
+    fun confirmationText(labels: NexusPromptLabels = NexusPromptLabels.ENGLISH): String =
+        (listOf("${formattedAmount()} $currency") +
+            SignedPayload.beneficiaryOrder(beneficiary).map { "${labels.labelFor(it)}: ${beneficiary.getValue(it)}" } +
+            "$operationType • $transactionReference").joinToString("\n")
+
 }
 
 /**
@@ -155,6 +157,7 @@ internal object SignedPayload {
         for ((key, value) in beneficiary) {
             if (value.isEmpty() || value.length > BENEFICIARY_MAX_VALUE_LENGTH) throw Rejected("invalid_value", "beneficiary.$key must be 1 to $BENEFICIARY_MAX_VALUE_LENGTH characters")
             displayTextViolation(value)?.let { throw Rejected("invalid_value", "beneficiary.$key: $it") }
+            if (key !in ACCOUNT_KEYS && looksLikeIban(value)) throw Rejected("invalid_value", "beneficiary.$key looks like an account number")
             if (key == "iban" && !isValidIban(value)) throw Rejected("invalid_value", "beneficiary.iban is not a valid IBAN")
             if (key == "bic" && !BIC.matches(value)) throw Rejected("invalid_value", "beneficiary.bic is not a valid BIC")
         }
@@ -270,6 +273,7 @@ internal object SignedPayload {
      */
     fun displayTextViolation(value: String): String? {
         if (!isDisplaySafe(value)) return "control, format or separator character"
+        if (value.any { it == '\u2192' || it == '\u00B7' || it == '\u2022' }) return "the characters \u2192 \u00B7 \u2022 are reserved for the confirmation prompt"
         if (!Normalizer.isNormalized(value, Normalizer.Form.NFC)) return "not in Unicode Normalization Form C"
         if (!Normalizer.isNormalized(value, Normalizer.Form.NFKC)) return "compatibility characters are not allowed"
         if (value.codePoints().anyMatch { Character.getType(it) == Character.SPACE_SEPARATOR.toInt() && it != 0x20 }) return "only the ASCII space is allowed"
@@ -290,16 +294,22 @@ internal object SignedPayload {
         return remainder == 1
     }
 
-    private val ACCOUNT_KEYS = listOf("iban", "account", "account_number")
+    val ACCOUNT_KEYS = listOf("iban", "account", "account_number")
+
+    /** True when the value, without spaces and hyphens and in upper case, is a valid IBAN (finding D-02). */
+    fun looksLikeIban(value: String): Boolean = isValidIban(value.filter { it != ' ' && it != '-' }.uppercase(java.util.Locale.ROOT))
+
+    /** Keys in prompt order: the account, name, bic, then the others sorted. */
+    fun beneficiaryOrder(beneficiary: Map<String, String>): List<String> {
+        val account = ACCOUNT_KEYS.firstOrNull { it in beneficiary }
+        val ordered = listOfNotNull(account, "name", "bic").filter { it in beneficiary }
+        return ordered + beneficiary.keys.filter { it !in ordered }.sorted()
+    }
 
     /** Account identifier first (the first of iban, account, account_number),
      * then name and bic, then the other fields by key. */
-    fun beneficiaryDisplay(beneficiary: Map<String, String>): String {
-        val account = ACCOUNT_KEYS.firstOrNull { it in beneficiary }
-        val ordered = listOfNotNull(account, "name", "bic").filter { it in beneficiary }
-        val rest = beneficiary.keys.filter { it !in ordered }.sorted()
-        return (ordered + rest).map { beneficiary.getValue(it) }.joinToString(" · ")
-    }
+    fun beneficiaryDisplay(beneficiary: Map<String, String>): String =
+        beneficiaryOrder(beneficiary).map { beneficiary.getValue(it) }.joinToString(" · ")
 
     // --- Canonical encoding ---
     // Mirrors JSON.stringify over recursively sorted keys.
@@ -441,4 +451,31 @@ internal object SignedPayload {
 
         private fun skipWs() { while (i < s.length && s[i] in " \t\r\n") i++ }
     }
+}
+
+/**
+ * Labels of the confirmation prompt. A bank app passes translated labels
+ * through [NEXUSSignConfig.promptLabels]; they label values, they never
+ * replace them. Fields without a label of their own show their key.
+ */
+data class NexusPromptLabels(
+    val iban: String = "IBAN",
+    val account: String = "Account",
+    val accountNumber: String = "Account number",
+    val name: String = "Name",
+    val bic: String = "BIC",
+) {
+    init {
+        for (label in listOf(iban, account, accountNumber, name, bic)) {
+            require(label.isNotBlank() && label.length <= 40 && SignedPayload.displayTextViolation(label) == null && ':' !in label) {
+                "prompt labels are 1 to 40 display-safe characters without a colon"
+            }
+        }
+    }
+
+    fun labelFor(key: String): String = when (key) {
+        "iban" -> iban; "account" -> account; "account_number" -> accountNumber; "name" -> name; "bic" -> bic; else -> key
+    }
+
+    companion object { val ENGLISH = NexusPromptLabels() }
 }

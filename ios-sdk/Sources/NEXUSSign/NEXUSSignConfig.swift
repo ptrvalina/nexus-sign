@@ -44,6 +44,8 @@ public struct NEXUSSignConfig {
     /// current key and a backup); a connection whose chain matches none of
     /// them fails. The system validation still runs first.
     public let certificatePins: Set<String>
+    /// Labels of the confirmation prompt, translated by the bank app if it wants (finding D-02).
+    public let promptLabels: NexusPromptLabels
 
     public init(
         bankID: String,
@@ -53,7 +55,8 @@ public struct NEXUSSignConfig {
         pushKeychainAccessGroup: String? = nil,
         requestTimeout: TimeInterval = 10,
         recoverySetupPromptText: String = "Confirm to set up your recovery phrase",
-        certificatePins: Set<String> = []
+        certificatePins: Set<String> = [],
+        promptLabels: NexusPromptLabels = .english
     ) {
         // Enrolment tokens and signed requests travel to this URL. Plain HTTP is
         // accepted only for a server on this machine (simulator testing).
@@ -69,6 +72,7 @@ public struct NEXUSSignConfig {
         precondition(certificatePins.isEmpty || (certificatePins.count >= 2 && certificatePins.allSatisfy(CertificatePinning.isWellFormedPin) && baseURL.scheme == "https"),
                      "NEXUSSignConfig.certificatePins must be empty or at least two sha256/<base64> pins for an https baseURL")
         self.certificatePins = certificatePins
+        self.promptLabels = promptLabels
     }
 }
 

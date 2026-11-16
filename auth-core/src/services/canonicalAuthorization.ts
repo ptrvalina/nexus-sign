@@ -65,6 +65,12 @@ export const BENEFICIARY_MAX_VALUE_LENGTH = 140;
  * - A beneficiary "iban" is an ISO 13616 IBAN in electronic format (no
  *   spaces) with check digits 02 to 98 that verify, and a "bic" is an ISO
  *   9362 BIC.
+ * - The characters → (U+2192), · (U+00B7) and • (U+2022) are reserved for
+ *   the layout of the confirmation prompt (finding D-02).
+ * - A beneficiary value outside the account fields (iban, account,
+ *   account_number) must not itself be a valid IBAN once spaces and hyphens
+ *   are removed: the prompt would offer the customer a second account
+ *   number to check (finding D-02).
  * The rules apply to every beneficiary value, transaction_reference and
  * operation_type: all three are shown in the confirmation prompt.
  */
@@ -73,6 +79,8 @@ const NON_ASCII_SPACE = /(?! )\p{Zs}/u;
 const SPACE_RUN = / {2}/;
 const PADDED = /^\p{Zs}|\p{Zs}$/u;
 const NON_ASCII_DIGIT = /(?![0-9])\p{Nd}/u;
+const PROMPT_SEPARATOR = /[\u2192\u00B7\u2022]/;
+export const ACCOUNT_KEYS: readonly string[] = ['iban', 'account', 'account_number'];
 const CONFUSABLE_SCRIPTS = [
   /[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]/, // Basic Latin letters, Latin-1 letters, Latin Extended-A/B, Latin Extended Additional
   /[\u0400-\u052F]/, // Cyrillic, Cyrillic Supplement
@@ -96,6 +104,11 @@ export function isValidIban(value: string): boolean {
   return remainder === 1;
 }
 
+/** True when the value, without spaces and hyphens and in upper case, is a valid IBAN. */
+export function looksLikeIban(value: string): boolean {
+  return isValidIban(value.replace(/[ -]/g, '').toUpperCase());
+}
+
 function mixesConfusableScripts(value: string): boolean {
   return CONFUSABLE_SCRIPTS.filter((script) => script.test(value)).length > 1;
 }
@@ -103,6 +116,7 @@ function mixesConfusableScripts(value: string): boolean {
 /** Returns why a displayed value breaks the display text rules, or null. */
 export function displayTextViolation(value: string): string | null {
   if (DISPLAY_UNSAFE_CHARACTER.test(value)) return 'control, format or separator characters are not allowed';
+  if (PROMPT_SEPARATOR.test(value)) return 'the characters \u2192 \u00B7 \u2022 are reserved for the confirmation prompt';
   if (value !== value.normalize('NFC')) return 'text must be in Unicode Normalization Form C';
   if (value !== value.normalize('NFKC')) return 'compatibility characters (full-width, mathematical, superscript, ligature) are not allowed';
   if (NON_ASCII_SPACE.test(value)) return 'only the ASCII space U+0020 is allowed';
@@ -124,6 +138,9 @@ export function assertValidBeneficiary(beneficiary: unknown): asserts beneficiar
     }
     const violation = displayTextViolation(value);
     if (violation) throw new ValidationError(`Invalid beneficiary value for "${key}": ${violation}`);
+    if (!ACCOUNT_KEYS.includes(key) && looksLikeIban(value)) {
+      throw new ValidationError(`Invalid beneficiary value for "${key}": looks like an account number; put the account in iban, account or account_number`);
+    }
     if (key === 'iban' && !isValidIban(value)) throw new ValidationError('Invalid beneficiary value for "iban": not a valid IBAN in electronic format');
     if (key === 'bic' && !BIC.test(value)) throw new ValidationError('Invalid beneficiary value for "bic": not a valid BIC');
   }

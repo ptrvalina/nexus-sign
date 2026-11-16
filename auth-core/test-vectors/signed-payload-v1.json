@@ -26,7 +26,7 @@
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       },
       "beneficiary_display": "PL61109010140000071219812874 · Jan Kowalski",
-      "confirmation_text": "1250.00 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001"
+      "confirmation_text": "1250.00 PLN\nIBAN: PL61109010140000071219812874\nName: Jan Kowalski\ntransfer • BANK-2026-000001"
     },
     {
       "name": "unicode, quotes, backslash and slash in beneficiary",
@@ -55,7 +55,7 @@
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       },
       "beneficiary_display": "PL61109010140000071219812874 · Zażółć gęślą jaźń \"Sp. z o.o.\" \\ ✓ 😀 · ul. Marszałkowska 1/2 · Faktura 2026/09 <ref> & é",
-      "confirmation_text": "1250.00 PLN → PL61109010140000071219812874 · Zażółć gęślą jaźń \"Sp. z o.o.\" \\ ✓ 😀 · ul. Marszałkowska 1/2 · Faktura 2026/09 <ref> & é\ntransfer • BANK-2026-000001"
+      "confirmation_text": "1250.00 PLN\nIBAN: PL61109010140000071219812874\nName: Zażółć gęślą jaźń \"Sp. z o.o.\" \\ ✓ 😀\naddress_line_1: ul. Marszałkowska 1/2\nnote: Faktura 2026/09 <ref> & é\ntransfer • BANK-2026-000001"
     },
     {
       "name": "zero amount and a currency without minor units",
@@ -82,7 +82,7 @@
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       },
       "beneficiary_display": "1234567 · Tanaka",
-      "confirmation_text": "0 JPY → 1234567 · Tanaka\ntransfer • BANK-2026-000001"
+      "confirmation_text": "0 JPY\nAccount: 1234567\nName: Tanaka\ntransfer • BANK-2026-000001"
     },
     {
       "name": "large amount (30 digits)",
@@ -109,7 +109,7 @@
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       },
       "beneficiary_display": "PL61109010140000071219812874 · Jan Kowalski",
-      "confirmation_text": "1234567890123456789012345678.90 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001"
+      "confirmation_text": "1234567890123456789012345678.90 PLN\nIBAN: PL61109010140000071219812874\nName: Jan Kowalski\ntransfer • BANK-2026-000001"
     },
     {
       "name": "empty beneficiary",
@@ -161,7 +161,7 @@
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       },
       "beneficiary_display": "DE89370400440532013000 · ACME NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN GmbH · COBADEFFXXX",
-      "confirmation_text": "1250.00 PLN → DE89370400440532013000 · ACME NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN GmbH · COBADEFFXXX\ntransfer • BANK-2026-000001"
+      "confirmation_text": "1250.00 PLN\nIBAN: DE89370400440532013000\nName: ACME NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN GmbH\nBIC: COBADEFFXXX\ntransfer • BANK-2026-000001"
     },
     {
       "name": "payee name in Cyrillic script is signed and shown as is",
@@ -188,7 +188,7 @@
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       },
       "beneficiary_display": "PL61109010140000071219812874 · Анна Новак",
-      "confirmation_text": "1250.00 PLN → PL61109010140000071219812874 · Анна Новак\ntransfer • BANK-2026-000001"
+      "confirmation_text": "1250.00 PLN\nIBAN: PL61109010140000071219812874\nName: Анна Новак\ntransfer • BANK-2026-000001"
     },
     {
       "name": "smallest non-zero amount",
@@ -215,7 +215,7 @@
         "nonce": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       },
       "beneficiary_display": "PL61109010140000071219812874 · Jan Kowalski",
-      "confirmation_text": "0.01 EUR → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001"
+      "confirmation_text": "0.01 EUR\nIBAN: PL61109010140000071219812874\nName: Jan Kowalski\ntransfer • BANK-2026-000001"
     }
   ],
   "invalid": [
@@ -488,6 +488,31 @@
       "name": "invalid UTF-8 byte",
       "reason": "invalid_json",
       "canonical_base64": "eyJhbW91bnRfbf9pbm9yIjoiMTI1MDAwIiwiYXV0aG9yaXphdGlvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsImJlbmVmaWNpYXJ5Ijp7ImliYW4iOiJQTDYxMTA5MDEwMTQwMDAwMDcxMjE5ODEyODc0IiwibmFtZSI6IkphbiBLb3dhbHNraSJ9LCJjcmVkZW50aWFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY3VycmVuY3kiOiJQTE4iLCJkb21haW4iOiJORVhVUy1TSUdOL1RSQU5TQUNUSU9OLUFVVEgiLCJleHBpcmVzX2F0IjoiMjAyNi0wOS0yNlQxMDowMjowMC4wMDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0wOS0yNlQxMDowMDowMC4wMDBaIiwibmV4dXNfaWQiOiIxMjM0NTY3ODkiLCJub25jZSI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYiLCJvcGVyYXRpb25fdHlwZSI6InRyYW5zZmVyIiwicG9saWN5X3JlZmVyZW5jZSI6IlRSQU5TRkVSLURFRkFVTFQiLCJwb2xpY3lfdmVyc2lvbiI6IjIwMjYtMDkiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRyYW5zYWN0aW9uX3JlZmVyZW5jZSI6IkJBTkstMjAyNi0wMDAwMDEifQ=="
+    },
+    {
+      "name": "payee name that is an IBAN with spaces",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IkRFODkzNzA0MDA0NDA1MzIwMTMwMDAiLCJuYW1lIjoiUEw2MSAxMDkwIDEwMTQgMDAwMCAwNzEyIDE5ODEgMjg3NCJ9LCJjcmVkZW50aWFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwiY3VycmVuY3kiOiJQTE4iLCJkb21haW4iOiJORVhVUy1TSUdOL1RSQU5TQUNUSU9OLUFVVEgiLCJleHBpcmVzX2F0IjoiMjAyNi0wOS0yNlQxMDowMjowMC4wMDBaIiwiaXNzdWVkX2F0IjoiMjAyNi0wOS0yNlQxMDowMDowMC4wMDBaIiwibmV4dXNfaWQiOiIxMjM0NTY3ODkiLCJub25jZSI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYiLCJvcGVyYXRpb25fdHlwZSI6InRyYW5zZmVyIiwicG9saWN5X3JlZmVyZW5jZSI6IlRSQU5TRkVSLURFRkFVTFQiLCJwb2xpY3lfdmVyc2lvbiI6IjIwMjYtMDkiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRyYW5zYWN0aW9uX3JlZmVyZW5jZSI6IkJBTkstMjAyNi0wMDAwMDEifQ=="
+    },
+    {
+      "name": "note that is an IBAN",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IkRFODkzNzA0MDA0NDA1MzIwMTMwMDAiLCJuYW1lIjoiSmFuIEtvd2Fsc2tpIiwibm90ZSI6InBsNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQifSwiY3JlZGVudGlhbF9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsImN1cnJlbmN5IjoiUExOIiwiZG9tYWluIjoiTkVYVVMtU0lHTi9UUkFOU0FDVElPTi1BVVRIIiwiZXhwaXJlc19hdCI6IjIwMjYtMDktMjZUMTA6MDI6MDAuMDAwWiIsImlzc3VlZF9hdCI6IjIwMjYtMDktMjZUMTA6MDA6MDAuMDAwWiIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwib3BlcmF0aW9uX3R5cGUiOiJ0cmFuc2ZlciIsInBvbGljeV9yZWZlcmVuY2UiOiJUUkFOU0ZFUi1ERUZBVUxUIiwicG9saWN5X3ZlcnNpb24iOiIyMDI2LTA5IiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0cmFuc2FjdGlvbl9yZWZlcmVuY2UiOiJCQU5LLTIwMjYtMDAwMDAxIn0="
+    },
+    {
+      "name": "prompt separator in payee name",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiSmFuIEtvd2Fsc2tpIOKGkiBQTDYxIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI2LTAwMDAwMSJ9"
+    },
+    {
+      "name": "middle dot in payee name",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiSmFuIMK3IEtvd2Fsc2tpIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSy0yMDI2LTAwMDAwMSJ9"
+    },
+    {
+      "name": "bullet in transaction reference",
+      "reason": "invalid_value",
+      "canonical_base64": "eyJhbW91bnRfbWlub3IiOiIxMjUwMDAiLCJhdXRob3JpemF0aW9uX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiYmVuZWZpY2lhcnkiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiSmFuIEtvd2Fsc2tpIn0sImNyZWRlbnRpYWxfaWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJjdXJyZW5jeSI6IlBMTiIsImRvbWFpbiI6Ik5FWFVTLVNJR04vVFJBTlNBQ1RJT04tQVVUSCIsImV4cGlyZXNfYXQiOiIyMDI2LTA5LTI2VDEwOjAyOjAwLjAwMFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI2VDEwOjAwOjAwLjAwMFoiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsIm9wZXJhdGlvbl90eXBlIjoidHJhbnNmZXIiLCJwb2xpY3lfcmVmZXJlbmNlIjoiVFJBTlNGRVItREVGQVVMVCIsInBvbGljeV92ZXJzaW9uIjoiMjAyNi0wOSIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidHJhbnNhY3Rpb25fcmVmZXJlbmNlIjoiQkFOSyDigKIgMjAyNiJ9"
     }
   ],
   "response_mismatch": {

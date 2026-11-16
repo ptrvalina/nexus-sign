@@ -107,7 +107,10 @@ final class SignedTransactionTests: XCTestCase {
         }
         let block = try XCTUnwrap(try loadVectors()["response_mismatch"] as? [String: Any])
         let signed = try SignedPayload.parse(try bytes(block["base_canonical_base64"]))
-        XCTAssertEqual(signed.confirmationText, "1250.00 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001")
+        XCTAssertEqual(signed.confirmationText, "1250.00 PLN\nIBAN: PL61109010140000071219812874\nName: Jan Kowalski\ntransfer • BANK-2026-000001")
+        // Translated labels label the same values in the same order.
+        XCTAssertEqual(signed.confirmationText(labels: NexusPromptLabels(iban: "Rachunek", name: "Odbiorca")),
+                       "1250.00 PLN\nRachunek: PL61109010140000071219812874\nOdbiorca: Jan Kowalski\ntransfer • BANK-2026-000001")
     }
 
     /// Auth Core sends timestamps with milliseconds, which JSONDecoder's default

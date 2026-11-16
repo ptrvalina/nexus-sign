@@ -38,7 +38,8 @@ for (const v of vectors.valid) {
 }
 
 for (const bad of [{ 0: 'x', name: 'Jan' }, { Name: 'Jan' }, { name: { first: 'Jan' } }, { name: 1 }, { name: 'Jan\nPL61' }, { name: 'Jan \u202eKowalski' },
-  { name: 'N'.repeat(141) }, { name: '' }, { name: '   ' }, { name: ' Jan' }, { name: 'Jan\u00a0' }, Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`f${i}`, 'x']))]) {
+  { name: 'N'.repeat(141) }, { name: '' }, { name: '   ' }, { name: ' Jan' }, { name: 'Jan\u00a0' },
+  { name: 'PL61 1090 1014 0000 0712 1981 2874', iban: 'DE89370400440532013000' }, { note: 'pl61-1090-1014-0000-0712-1981-2874' }, { name: 'Jan \u2192 PL61' }, { name: 'Jan \u00b7 K' }, Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`f${i}`, 'x']))]) {
   let rejected = false;
   try { assertValidBeneficiary(bad); } catch { rejected = true; }
   if (!rejected) fail(`server accepted beneficiary ${JSON.stringify(bad)}`);

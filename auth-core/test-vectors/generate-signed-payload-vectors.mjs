@@ -48,10 +48,14 @@ const base = {
   nonce: '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff',
 };
 
-// What the SDKs show in the system confirmation prompt: amount and
-// the account identifier first, so a long payee name cannot push the account
-// out of the visible part of the prompt; then the payee name, the BIC, any
-// other fields by key; on a second line the operation type and the reference.
+// What the SDKs show in the system confirmation prompt (finding D-02): the
+// amount, then one labelled line per beneficiary field, the account first so
+// a long payee name cannot push it out of the visible part of the prompt,
+// then the name, the BIC and the other fields by key; last the operation type
+// and the reference. Every value sits after its own label on its own line, so
+// a payee name that looks like an account number is read as a name. The
+// labels are the SDKs' default English ones; a bank app may pass translated
+// labels, never other values.
 const ACCOUNT_KEYS = ['iban', 'account', 'account_number'];
 const MINOR_UNITS = Object.fromEntries([
   ...['BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW', 'PYG', 'RWF', 'UGX', 'UYI', 'VND', 'VUV', 'XAF', 'XOF', 'XPF'].map((c) => [c, 0]),
@@ -71,9 +75,16 @@ function beneficiaryDisplay(beneficiary) {
   const rest = keys.filter((k) => !ordered.includes(k)).sort();
   return [...ordered, ...rest].map((k) => beneficiary[k]).join(' · ');
 }
+const LABELS = { iban: 'IBAN', account: 'Account', account_number: 'Account number', name: 'Name', bic: 'BIC' };
 function confirmationText(f) {
-  const who = beneficiaryDisplay(f.beneficiary);
-  return `${formatAmount(f.amount_minor, f.currency)} ${f.currency}${who ? ` → ${who}` : ''}\n${f.operation_type} • ${f.transaction_reference}`;
+  const keys = Object.keys(f.beneficiary);
+  const account = ACCOUNT_KEYS.find((k) => k in f.beneficiary);
+  const ordered = [account, 'name', 'bic'].filter((k) => k && k in f.beneficiary);
+  const rest = keys.filter((k) => !ordered.includes(k)).sort();
+  const lines = [`${formatAmount(f.amount_minor, f.currency)} ${f.currency}`];
+  for (const k of [...ordered, ...rest]) lines.push(`${LABELS[k] ?? k}: ${f.beneficiary[k]}`);
+  lines.push(`${f.operation_type} • ${f.transaction_reference}`);
+  return lines.join('\n');
 }
 
 const valid = [];
@@ -206,6 +217,15 @@ addInvalid('credential_id in uppercase', JSON.stringify(normalize({ ...base, cre
 addInvalid('nexus_id of 8 digits', JSON.stringify(normalize({ ...base, nexus_id: '12345678' })), 'invalid_value');
 addInvalid('top level is an array', `[${baseText}]`, 'invalid_json');
 invalid.push({ name: 'invalid UTF-8 byte', reason: 'invalid_json', canonical_base64: b64(Buffer.concat([baseBytes.subarray(0, 10), Buffer.from([0xff]), baseBytes.subarray(10)])) });
+// Appended (indexes above stay).
+// Finding D-02: a value outside the account fields that is itself a valid
+// IBAN (spaces and hyphens aside) would offer the customer a second account
+// number to check; the separators of the prompt are reserved.
+addInvalid('payee name that is an IBAN with spaces', JSON.stringify(normalize({ ...base, beneficiary: { name: 'PL61 1090 1014 0000 0712 1981 2874', iban: 'DE89370400440532013000' } })), 'invalid_value');
+addInvalid('note that is an IBAN', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski', iban: 'DE89370400440532013000', note: 'pl61109010140000071219812874' } })), 'invalid_value');
+addInvalid('prompt separator in payee name', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan Kowalski \u2192 PL61', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('middle dot in payee name', JSON.stringify(normalize({ ...base, beneficiary: { name: 'Jan \u00b7 Kowalski', iban: 'PL61109010140000071219812874' } })), 'invalid_value');
+addInvalid('bullet in transaction reference', JSON.stringify(normalize({ ...base, transaction_reference: 'BANK \u2022 2026' })), 'invalid_value');
 
 // Response JSON fields that disagree with the signed bytes. The SDK must
 // refuse these even though the bytes themselves are valid and canonical.

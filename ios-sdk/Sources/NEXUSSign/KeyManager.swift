@@ -172,6 +172,28 @@ final class KeyManager {
         state.replacementCommitPending && state.pendingCredentialID != nil ? state.pendingDeviceSignatures : state.deviceSignatures
     }
 
+    /// The enrolled biometrics changed and `.biometryCurrentSet` made the
+    /// keys unusable (finding D-07). As on Android: the dead key set and the
+    /// registration are deleted, so `isRegistered()` is false and the app
+    /// offers re-enrolment (device replacement or recovery) instead of a Face
+    /// ID prompt that cannot succeed. Auth Core still holds the credential
+    /// until the bank revokes or replaces it.
+    func forgetInvalidatedCredential() {
+        commitLock.lock()
+        defer { commitLock.unlock() }
+        for kind in Kind.allCases {
+            SecItemDelete(keyQuery(tag: activeTag(kind)) as CFDictionary)
+            if state.replacementCommitPending { SecItemDelete(keyQuery(tag: replacementTag(kind)) as CFDictionary) }
+        }
+        state.registeredCredentialID = nil
+        state.offlineServerPublicKeyPEM = nil
+        state.deviceSignatures = false
+        state.pendingCredentialID = nil
+        state.pendingOfflineServerPublicKeyPEM = nil
+        state.replacementCommitPending = false
+        state.biometryDomainState = nil
+    }
+
     /// Step 2b (attempt failed): discard the new set.
     func discardReplacementKeys() {
         for kind in Kind.allCases {

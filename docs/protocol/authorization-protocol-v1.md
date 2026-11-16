@@ -37,6 +37,8 @@ The customer decides on a payment by reading the beneficiary and the transaction
 | One value does not contain letters from more than one of these sets: Latin `A-Z a-z U+00C0–U+00D6 U+00D8–U+00F6 U+00F8–U+024F U+1E00–U+1EFF`; Cyrillic `U+0400–U+052F`; Greek `U+0370–U+03FF U+1F00–U+1FFF`; Armenian `U+0530–U+058F`; Cherokee `U+13A0–U+13FF U+AB70–U+ABBF` | `PаyPal` with a Cyrillic `а` is the usual look-alike payee. The sets are fixed ranges, not the Unicode Script property, so that every implementation decides the same way whatever Unicode version its runtime has |
 | A beneficiary `iban` is an IBAN in electronic format (`^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$`) with ISO 13616 check digits from 02 to 98 that verify (mod 97) | a typo or a substituted digit is caught before the customer sees it |
 | A beneficiary `bic` matches `^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$` (ISO 9362) | |
+| No `→` (U+2192), `·` (U+00B7) or `•` (U+2022) in any displayed value | they are the separators of the prompt and of the beneficiary display; a value must not imitate the layout (finding D-02) |
+| A beneficiary value under a key other than `iban`, `account` or `account_number` is not itself a valid IBAN once spaces and hyphens are removed and letters are upper-cased | a payee name or note such as `PL61 1090 1014 …` offers the customer a second account number to check (finding D-02) |
 
 These rules do not detect every confusable: `1` for `l` within Latin, or a name written entirely in Cyrillic letters that look like Latin ones (`РАУРАЛ`), passes. A bank that compares the payee with the customer's saved payees catches those; NEXUS-SIGN binds and shows what the bank sent. The invalid vectors named "payee name mixing…", "…not in NFC", "no-break space…", "repeated spaces…", "full-width digit…", "iban…", "malformed bic", "padded transaction reference", "full-width…", "mathematical bold…", "superscript digit…", "…Armenian…", "…Cherokee…", "iban with check digits 99" and "look-alike letter in operation type" pin the rules in all four implementations. Introduced in 2.0.0-rc.3; earlier versions refused only leading and trailing Zs in beneficiary values.
 
@@ -76,11 +78,23 @@ Before displaying or signing, the SDK:
 Both SDKs build the same text from the signed bytes (checked against `confirmation_text` in `test-vectors/signed-payload-v1.json`):
 
 ```
-<amount> <currency> → <beneficiary display>
+<amount> <currency>
+<label>: <value>          one line per beneficiary field
 <operation_type> • <transaction_reference>
 ```
 
-The beneficiary display joins values with ` · ` in this order: the account identifier first (the first present of `iban`, `account`, `account_number`), then `name`, then `bic`, then the remaining keys in sorted order. The account comes first because the system biometric prompt has limited room and may truncate the end of the text; a name must not push the account out of view. With values limited to 140 characters, the account is always in the first line. Whether the whole text is visible depends on the platform prompt and is checked on devices (`docs/engineering/DEVICE_ACCEPTANCE_CHECKLIST.md`); the host app's own confirmation screen must show every field in full.
+Example:
+
+```
+1250.00 PLN
+IBAN: PL61109010140000071219812874
+Name: Jan Kowalski
+transfer • BANK-2026-000001
+```
+
+Beneficiary lines come in this order: the account identifier first (the first present of `iban`, `account`, `account_number`), then `name`, then `bic`, then the remaining keys in sorted order. The labels are `IBAN`, `Account`, `Account number`, `Name` and `BIC`; other fields show their key. A bank app may pass translated labels (`NEXUSSignConfig.promptLabels`, `NexusPromptLabels`): 1 to 40 display-safe characters without a colon; they label the values and cannot replace them. Each value stands after its own label on its own line, so a payee name is read as a name (finding D-02; before, the values were joined on one line with ` · ` and no labels). The account comes first because the system biometric prompt has limited room and may truncate the end of the text; a name must not push the account out of view.
+
+`beneficiaryDisplay` (values joined with ` · ` in the same order) is still provided for the host app's own screens. Whether the whole text is visible depends on the platform prompt and is checked on devices (`docs/engineering/DEVICE_ACCEPTANCE_CHECKLIST.md`); the host app's own confirmation screen must show every field in full.
 
 Any mismatch refuses signing with a reason code: `invalid_json`, `duplicate_key`, `not_canonical`, `missing_field`, `unexpected_field`, `invalid_value`, `wrong_protocol` or `response_mismatch`. `approve()` also refuses an authorization whose `credential_id` is not the device's own (`wrong_device`).
 
