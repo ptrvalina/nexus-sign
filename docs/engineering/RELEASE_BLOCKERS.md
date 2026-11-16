@@ -1,6 +1,6 @@
 # Release blockers
 
-What still stands between branch `engineering/production-readiness` and a controlled bank pilot, after the fourth cycle. Every engineering blocker that could be closed with the available tools (CI, SoftHSM, the code) has been closed except B0, which waits for a macOS runner; see [engineering readiness](ENGINEERING_READINESS.md). What is left needs infrastructure, devices or people that NEXUS-SIGN engineering does not have. None of the checks below may be replaced by a simulation: SoftHSM is not the bank's HSM, a Chromium WebRTC test is not a phone call, a unit test is not a device.
+What still stands between branch `engineering/production-readiness` and a controlled bank pilot, after the fourth cycle. Every engineering blocker that could be closed with the available tools (CI, SoftHSM, the code) has been closed; see [engineering readiness](ENGINEERING_READINESS.md). What is left needs infrastructure, devices or people that NEXUS-SIGN engineering does not have. None of the checks below may be replaced by a simulation: SoftHSM is not the bank's HSM, a Chromium WebRTC test is not a phone call, a unit test is not a device.
 
 Status of each: **BLOCKED** (needs access that is not available) unless stated.
 
@@ -8,7 +8,6 @@ Status of each: **BLOCKED** (needs access that is not available) unless stated.
 
 | # | Blocker | Owner | Status | Blocks pilot conditions |
 |---|---|---|---|---|
-| B0 | iOS CI run of the last Swift change (`f8cbc11`): GitHub assigned no macOS runner (two attempts cancelled after 15 minutes) | Repository owner (Actions minutes or runner availability), then a re-run | NOT RUN | 5 |
 | B1 | Real iPhones | Bank QA (devices), NEXUS-SIGN engineering (build) | BLOCKED | 7, 8, 15, 16 |
 | B2 | Real Android phones | Bank QA | BLOCKED | 7, 8, 15, 16 |
 | B3 | The bank's HSM | Bank HSM team | BLOCKED | 10, 17 |

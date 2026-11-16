@@ -6,7 +6,9 @@ Statuses: PASS (passed in CI), FAIL, PARTIAL, NOT RUN, BLOCKED.
 
 ## Reference run
 
-Commit `f8cbc11` (code state of the fourth cycle), 2026-11-16, workflows `CI` (run `43936067310`) and `Security` (run `43936067272`). Every job passed except the iOS jobs, which never got a macOS runner (item 12); the iOS results are from the run of the previous commit `8de9d41`. Logs: the GitHub Actions page of each run (`https://github.com/ptrvalina/nexus-sign/actions/runs/<run id>`). Later commits change only documents; their runs are listed in [engineering readiness, section M](ENGINEERING_READINESS.md#m-commits-and-ci-runs).
+Final run: commit `689c876` (the code of `f8cbc11` plus the documents of this cycle), 2026-11-16, workflows `CI` (run `43941741958`) and `Security` (run `43941742021`): **every job of both workflows passed**, the three iOS jobs included. The table below gives the job IDs of the code commit `f8cbc11` (runs `43936067310` / `43936067272`), where every job except iOS passed with the same results; its iOS jobs got no macOS runner (twice cancelled after 15 minutes in the queue) and ran in the final run. Logs: `https://github.com/ptrvalina/nexus-sign/actions/runs/<run id>`.
+
+Final-run job IDs: unit `133560765398` (Node 22) and `133560765607` (Node 24), integration `133561373435` (349/349), end-to-end `133561373808` (80/80), media `133561373709` (6/6), `ios-sdk` `133560765523` (41/41), `ios demo app` `133561361078`, `ios-sdk-calls` `133561359963`, `android-sdk` `133560764907`, `android-sdk-calls` `133562451970`, demo APK `133562451697`, conformance `133561373476`, containers `133560765397`, sandbox `133560765428`, demo bank `133560765581`, CodeQL `133560764562`, Trivy `133560765113`, audit and secret scan `133560764914`, SBOM `133560765159`.
 
 | # | Directive item | CI job (workflow) | Command | Job ID | Status | Result |
 |---|---|---|---|---|---|---|
@@ -21,7 +23,7 @@ Commit `f8cbc11` (code state of the fourth cycle), 2026-11-16, workflows `CI` (r
 | 9 | Migration validation | integration job, suite `database migrations with a ledger` | as 4 | as 4 | PASS | 7 tests: empty database, re-run, checksums, adoption; schema version check in `check-repository.sh` |
 | 10 | Dependency audit | `Dependency audit and secret scan`, `SBOM (CycloneDX)` (Security) | `npm audit`; CycloneDX | `133540852939`, `133540852358` | PASS | Two high advisories fixed in this cycle (zod, body-parser) |
 | 11 | Docker builds | `containers / build and health check` (CI) | `docker build` of the Auth Core and sandbox images; the sandbox container answers its health check | `133541034533` | PASS | Both images build; the Auth Core image is also scanned by Trivy (8) |
-| 12 | iOS SDK build | `ios-sdk / build and unit tests`, `ios demo app / build`, `ios-sdk-calls / WebRTC module build` (CI) | `swift test`; `xcodebuild … -sdk iphoneos`; `xcodebuild -scheme NEXUSSignCalls` | `133541033907`, `133550486553` (this run); `133535913952`, `133539501894`, `133539501764` (run `43934636812`, `8de9d41`) | PARTIAL | At `8de9d41`: all three iOS jobs PASS, `swift test` 38 tests in 9 suites, 0 failures; demo app built for `iphoneos`; call module built. At `f8cbc11`: NOT RUN — the `macos-15` job waited 15 minutes for a runner and was cancelled, twice (first attempt and a re-run); the two dependent iOS jobs were skipped. The Swift change of `f8cbc11` (N-13) is therefore not yet compiled |
+| 12 | iOS SDK build | `ios-sdk / build and unit tests`, `ios demo app / build`, `ios-sdk-calls / WebRTC module build` (CI) | `swift test`; `xcodebuild … -sdk iphoneos`; `xcodebuild -scheme NEXUSSignCalls` | `133560765523`, `133561361078`, `133561359963` (final run) | PASS | `swift test` on `macos-15`: 41 tests in 10 suites, 0 failures, among them the 20 mandate vectors (N-13); demo app built for `iphoneos` against the SDK; call module built against `stasel/WebRTC`. At `f8cbc11` the iOS jobs got no runner and were cancelled (`133541033907`, `133550486553`); at `8de9d41` they passed with 38 tests |
 | 13 | Android SDK build | `android-sdk / build and unit tests`, `android-sdk-calls / WebRTC module build`, `android demo app / debug APK`, `android-sdk call state machine against Auth Core` (CI) | `./gradlew testDebugUnitTest lintRelease assembleRelease`; `assembleRelease`; `assembleDebug`; conformance test | `133541034382`, `133542889739`, `133542889596`, `133541412070` | PASS | Real Gradle and Android SDK builds (not JVM stubs); details in [SDK validation](SDK_VALIDATION.md) |
 | 14 | E2E | `auth-core / end-to-end (PostgreSQL, Redis)` (CI) | `node scripts/e2e-smoke.mjs` against a running Auth Core | `133541411973` | PASS | 80/80 checks: enrolment, signing, replay, revocation, replacement hold, recovery, evidence chain verified |
 | 15 | Offline verification | integration job (5 offline suites), unit (offline verifier), `sandbox` | as 4; `npm test` | `133541411998`, `133541034776` | PASS | `offline confirmation v2: deferred device signature` 15, `restart, v1 deployments, production posture` 4, `enforcement` 5 + 2, `v1 forgery resistance` 6, `limits` 3; evidence verified offline in `backup and restore` |
@@ -52,14 +54,14 @@ The remaining 23 suites test the services and the bank database directly on Post
 | `43932099625` (`497f6cc`) | gitleaks: 7 findings | Allowlist missed the mandate vectors (credential UUID) | `454e542` | The secret-scan job |
 | `43932489275` (`b0ae83b`) | `ios-sdk`: does not compile | Property named `operator` | `78a5280` | `AccountModelsTests` |
 | `43932489275` | `android-sdk-calls`: Lint | AGP cannot build the lint model in a composite build | Lint kept on the core SDK only (`8de9d41`) | — (limitation TD-R2) |
-| review after `43934636812` | iOS mandate terms weaker than Android | Parser not ported; vectors not a resource | `f8cbc11` | `MandateTermsVectorsTests` |
+| review after `43934636812` | iOS mandate terms weaker than Android | Parser not ported; vectors not a resource | `f8cbc11` | `MandateTermsVectorsTests` 3/3 (final run) |
+| `43936067310` (`f8cbc11`) | iOS jobs cancelled | No macOS runner within 15 minutes, twice (GitHub capacity or minutes) | None needed in the code | Passed in the next run (`43941741958`) |
 
 ## Not run in CI
 
 | Check | Status | Why |
 |---|---|---|
 | Release workflow (`release.yml`) | NOT RUN | Runs only on a tag; creating a tag or release is forbidden in this cycle |
-| iOS build and tests of `f8cbc11` | NOT RUN | No macOS runner was assigned (twice cancelled after 15 minutes in the queue). Possible cause: the account's macOS minutes for private repositories; the repository owner can check *Settings → Billing* and re-run job `ios-sdk` |
 | iOS tests on a simulator or device | NOT RUN / BLOCKED | `swift test` runs on the macOS host; simulator UI tests do not exist; devices: BLOCKED |
 | Android instrumented tests | BLOCKED | Need an emulator with hardware-backed keystore or a device |
 | Load, failover, bank HSM, bank push, penetration test | BLOCKED | [Release blockers](RELEASE_BLOCKERS.md) |

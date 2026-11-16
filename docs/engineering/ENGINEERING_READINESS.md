@@ -2,9 +2,9 @@
 
 Directive: *Master Execution Directive, Cycle 4: Engineering Validation, Technical Debt Elimination & Production Readiness*. Repository `ptrvalina/nexus-sign`, branch `engineering/production-readiness`, base `2.0.0-rc.2`, draft pull request #22. Date of the results: 2026-11-16.
 
-What this cycle changed in kind: for the first time every check ran for real. CI had never run on the branch; the HSM suites had never run anywhere; the iOS SDK had never been compiled. Running them found and closed ten defects, among them an iOS SDK that did not compile, a gap in the iOS mandate checks, two high dependency advisories and a call-closure race. Everything that can be shown without phones, the bank's HSM, the bank's systems and an external tester now passes in CI, except the iOS build of the very last change, which is waiting for a macOS runner.
+What this cycle changed in kind: for the first time every check ran for real. CI had never run on the branch; the HSM suites had never run anywhere; the iOS SDK had never been compiled. Running them found and closed ten defects, among them an iOS SDK that did not compile, a gap in the iOS mandate checks, two high dependency advisories and a call-closure race. Everything that can be shown without phones, the bank's HSM, the bank's systems and an external tester now passes in CI. Final run: run `43941741958` (CI) / `43941742021` (Security), commit `689c876`, every job of both workflows green.
 
-**Final decision: NOT READY — REMAINING BLOCKERS.** One engineering item is open: the iOS build of the last Swift change (`f8cbc11`) has not run, because GitHub assigned no macOS runner. When that job passes, the state matches READY FOR EXTERNAL VALIDATION; a controlled bank pilot additionally needs the external validation in section K.
+**Final decision: READY FOR EXTERNAL VALIDATION.** Not ready for a controlled bank pilot: that needs the external validation listed in section K, which has not happened.
 
 ---
 
@@ -21,7 +21,7 @@ What this cycle changed in kind: for the first time every check ran for real. CI
 | 7 | Secret-scan allowlist covers the mandate vectors | `454e542` | gitleaks 0 leaks |
 | 8 | Android Lint on the core SDK (API calls against `minSdk 28`) | `b0ae83b` | `android-sdk` job |
 | 9 | iOS SDK compiles (`operator` keyword) | `78a5280` | `ios-sdk` job; `AccountModelsTests` |
-| 10 | iOS mandate terms checked like Android (canonical bytes, exact fields, values): finding N-13 | `f8cbc11` | `MandateTermsVectorsTests` (3 valid, 17 invalid): **not yet run**, no macOS runner |
+| 10 | iOS mandate terms checked like Android (canonical bytes, exact fields, values): finding N-13 | `f8cbc11` | `MandateTermsVectorsTests` (3 valid, 17 invalid), 3/3 |
 | 11 | Repository check refuses broken relative links in Markdown | documentation commit | `check-repository.sh` (negative-tested) |
 
 ## B. Technical debt removed
@@ -42,15 +42,15 @@ What this cycle changed in kind: for the first time every check ran for real. CI
 
 ## F. iOS SDK build
 
-**PARTIAL.** The iOS SDK was compiled for the first time in this cycle and failed (`operator` keyword, N-07); after the fix every iOS job passed at `8de9d41` (run `43934636812`): `swift test` on `macos-15`, 38 tests in 9 suites, 0 failures (job `133535913952`); the demo app built for `iphoneos` against the SDK (job `133539501894`); the WebRTC call module built (job `133539501764`). The last change (`f8cbc11`, the Swift mandate parser of N-13 and its 20-vector test) is **NOT RUN**: its `ios-sdk` job was queued twice and cancelled after 15 minutes without a macOS runner (jobs `133541033907`, `133550486553`). Nothing was simulated: the iOS status of `f8cbc11` stays NOT RUN until that job runs. Not run on an iPhone (BLOCKED). [SDK validation](SDK_VALIDATION.md).
+**PASS.** The iOS SDK was compiled for the first time in this cycle and failed (`operator` keyword, N-07, job `133528489071`); after the fix every iOS job passed. Final run `43941741958`: `swift test` on `macos-15`, 41 tests in 10 suites, 0 failures, including the 20 mandate vectors of N-13 (job `133560765523`); the demo app built for `iphoneos` against the SDK (job `133561361078`); the WebRTC call module built (job `133561359963`). At `f8cbc11` the iOS jobs got no macOS runner and were cancelled twice; nothing was simulated, they ran in the next run. Not run on an iPhone (BLOCKED). [SDK validation](SDK_VALIDATION.md).
 
 ## G. CI
 
-Reference run: `CI` `43936067310` and `Security` `43936067272` on `f8cbc11`; every job of both workflows passed except the iOS jobs, which got no macOS runner (section F). Directive items 1–16 with job IDs and results: [CI validation](CI_VALIDATION.md). Ten failures found by CI in this cycle, each with root cause, fix and regression test: same document.
+Final run: `CI` `43941741958` and `Security` `43941742021` on `689c876`: every job of both workflows passed. The code commit `f8cbc11` (runs `43936067310` / `43936067272`) passed every job except iOS, which got no runner there. Directive items 1–16 with job IDs and results: [CI validation](CI_VALIDATION.md). Ten failures found by CI in this cycle, each with root cause, fix and regression test: same document.
 
 ## H. Security audit
 
-[Security findings](SECURITY_FINDINGS.md). Critical 0; High 5 found, 5 fixed (new this cycle: N-09 dependencies); Medium 19 found, 18 fixed (N-13 in code, its iOS test pending a runner), 1 open (D-01, accepted for a pilot with offline confirmation off, not for production); new this cycle N-07 to N-13. Re-audit of injection, XSS, CSRF, SSRF, randomness, secret comparison and logging, `SECURITY DEFINER`, Redis TTLs: no new finding beyond those listed. Threat model of the ten scenarios with residual risk: same document. Highest residual risks: the customer approving a genuine fraudulent payee (business, bank's Verification of Payee), a compromised HSM (high impact, low likelihood; cannot cause an execution), insider with database ownership (detected by the bank's chain checkpoints). This is an internal review; **no external penetration test has been done.**
+[Security findings](SECURITY_FINDINGS.md). Critical 0; High 5 found, 5 fixed (new this cycle: N-09 dependencies); Medium 19 found, 18 fixed, 1 open (D-01, accepted for a pilot with offline confirmation off, not for production); new this cycle N-07 to N-13. Re-audit of injection, XSS, CSRF, SSRF, randomness, secret comparison and logging, `SECURITY DEFINER`, Redis TTLs: no new finding beyond those listed. Threat model of the ten scenarios with residual risk: same document. Highest residual risks: the customer approving a genuine fraudulent payee (business, bank's Verification of Payee), a compromised HSM (high impact, low likelihood; cannot cause an execution), insider with database ownership (detected by the bank's chain checkpoints). This is an internal review; **no external penetration test has been done.**
 
 ## I. The 49 functions
 
@@ -58,7 +58,7 @@ Reference run: `CI` `43936067310` and `Security` `43936067272` on `f8cbc11`; eve
 
 ## J. The 20 pilot conditions
 
-[Pilot readiness matrix](PILOT_READINESS_MATRIX.md): PASS 10, PARTIAL 5, BLOCKED 5, FAIL 0. Not met: the iOS build of the last change (5), real devices (7), D-01/D-02 on a device (8), bank HSM (10), bank scenarios for audio, video and push (15), mandates on a device (16), real bank integration (17), external penetration test and its findings (18, 19), a release run from a tag (20).
+[Pilot readiness matrix](PILOT_READINESS_MATRIX.md): PASS 11, PARTIAL 4, BLOCKED 5, FAIL 0. Not met: real devices (7), D-01/D-02 on a device (8), bank HSM (10), bank scenarios for audio, video and push (15), mandates on a device (16), real bank integration (17), external penetration test and its findings (18, 19), a release run from a tag (20).
 
 ## K. Remaining blockers
 
@@ -85,9 +85,10 @@ Documents: new `docs/engineering/{ENGINEERING_READINESS,CI_VALIDATION,SDK_VALIDA
 | `454e542` | gitleaks allowlist | | |
 | `b0ae83b` | Android Lint | `43932489275` / `43932489291` | Integration 349/349, HSM 8/8, e2e, media pass; iOS compile error; Lint fails on the calls module |
 | `78a5280` | iOS compiles | | |
-| `8de9d41` | No Lint on the calls module | `43934636812` / `43934636743` | All jobs pass, among them `ios-sdk` (38 tests), iOS demo and calls builds |
-| `f8cbc11` | iOS mandate parser (also carried the two document renames) | `43936067310` / `43936067272` | Reference run: all jobs pass except iOS (no runner, cancelled twice) |
-| after `f8cbc11` | Documents of this cycle and the Markdown link check (`git log f8cbc11..`) | the runs of those commits on pull request #22 | Same code; they re-run every job |
+| `8de9d41` | No Lint on the calls module | `43934636812` / `43934636743` | iOS (38 tests, demo, call module), Android, e2e, media and Security pass; integration cancelled by the next push |
+| `f8cbc11` | iOS mandate parser (also carried the two document renames) | `43936067310` / `43936067272` | All jobs pass except iOS (no macOS runner, cancelled twice) |
+| `689c876` | Documents of this cycle, Markdown link check, changelog | `43941741958` / `43941742021` | **All jobs pass**, iOS included (41/41) — final run |
+| later | Final updates of these documents (`git log 689c876..`) | runs of those commits on pull request #22 | Same code |
 
 ## N. Reproduction
 
@@ -104,8 +105,8 @@ Documents: new `docs/engineering/{ENGINEERING_READINESS,CI_VALIDATION,SDK_VALIDA
 
 ## O. Objective assessment
 
-What is shown: the server (Auth Core), the bank database rules and the reference bank execution boundary behave as designed under every test the repository has — 134 unit tests, 349 integration tests in 53 suites against real PostgreSQL 16, Redis 7 and SoftHSM 2.7.0, 80 end-to-end checks, 6 real WebRTC calls in Chromium — and the central security property holds in those tests: a fully compromised Auth Core cannot make the bank execute a payment. Both SDKs compile for their platforms and pass their unit and shared-vector tests (iOS as of `8de9d41`; the last Swift change awaits a macOS runner); dependency, secret, container and code scans are clean. No Critical or High finding is open.
+What is shown: the server (Auth Core), the bank database rules and the reference bank execution boundary behave as designed under every test the repository has — 134 unit tests, 349 integration tests in 53 suites against real PostgreSQL 16, Redis 7 and SoftHSM 2.7.0, 80 end-to-end checks, 6 real WebRTC calls in Chromium — and the central security property holds in those tests: a fully compromised Auth Core cannot make the bank execute a payment. Both SDKs compile for their platforms and pass their unit and shared-vector tests; dependency, secret, container and code scans are clean. No Critical or High finding is open.
 
 What is not shown: anything on a real iPhone or Android phone (hardware keys, biometrics, prompts, push, calls), anything on the bank's HSM or in the bank's infrastructure (failover, load, the core banking adapter), and any external assessment. These are not engineering gaps that this team can close; they are the external validation the product now needs. One Medium finding (D-01) stays open by decision and must be closed before production.
 
-Decision: **NOT READY — REMAINING BLOCKERS.** The only engineering blocker is the pending iOS CI run of `f8cbc11`; after it passes, the product is READY FOR EXTERNAL VALIDATION. It is not READY FOR CONTROLLED BANK PILOT: conditions 7, 10, 17, 18 and 19 require external validation that has not happened, and this report does not claim a bank HSM test or a penetration test.
+Decision: **READY FOR EXTERNAL VALIDATION.** It is not READY FOR CONTROLLED BANK PILOT: conditions 7, 10, 17, 18 and 19 require external validation that has not happened, and this report does not claim a bank HSM test or a penetration test.
