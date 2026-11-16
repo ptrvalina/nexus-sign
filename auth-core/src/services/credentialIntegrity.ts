@@ -119,8 +119,10 @@ export function recordMetadataProblem(record: SealedEvidence): string | null {
     ['sealKeyId', record.sealKeyId, p.sealKeyId],
     ['schemaVersion', record.schemaVersion, p.schemaVersion],
   ];
-  // AUTHORIZATION records name their authorization; the others have none.
-  pairs.push(['authorizationId', record.authorizationId ?? null, record.recordType === 'AUTHORIZATION' ? p.authorizationId ?? null : null]);
+  // AUTHORIZATION and AUTHORIZATION_OUTCOME records name their authorization;
+  // the others have none.
+  const namesAuthorization = record.recordType === 'AUTHORIZATION' || record.recordType === 'AUTHORIZATION_OUTCOME';
+  pairs.push(['authorizationId', record.authorizationId ?? null, namesAuthorization ? p.authorizationId ?? null : null]);
   const differs = pairs.filter(([, column, sealed]) => column !== sealed).map(([name]) => name);
   return differs.length ? `the record metadata does not match the sealed payload (${differs.join(', ')})` : null;
 }

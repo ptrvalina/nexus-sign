@@ -67,7 +67,7 @@ async function main(): Promise<void> {
 
   const webhookWorker = startWebhookWorker(logger);
   const pushWorker = startPushWorker(logger);
-  const expiryWorker = startExpiryWorker(logger);
+  const expiryWorker = startExpiryWorker(logger, hsmAdapter);
 
   // Graceful shutdown: stop accepting connections, let requests in
   // flight finish (bounded by SHUTDOWN_DRAIN_MS), then close the HSM, the

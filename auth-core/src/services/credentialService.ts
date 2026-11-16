@@ -13,6 +13,7 @@ import { sealCredentialEnrolment, type EnrolmentAttestation, type EnrolmentReaso
 import { queueReplacementNotice } from './pushService';
 import { enqueueWebhook } from './webhookService';
 import { consumeDeviceReplacement } from './deviceReplacementService';
+import { setOutcomeReason } from './outcomeReason';
 
 export type CredentialPlatform = 'IOS' | 'ANDROID' | 'OTHER';
 export type CredentialState = 'ACTIVE' | 'REVOKED';
@@ -112,6 +113,7 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
     if (replacedCredentialIds.length > 0) {
       // Announced on the replaced device while it can still be reached.
       for (const credentialId of replacedCredentialIds) await queueReplacementNotice(client, input.clientId, input.nexusId, credentialId);
+      await setOutcomeReason(client, 'DEVICE_REPLACED');
       await client.query(`UPDATE credentials SET state = 'REVOKED', revoked_at = now() WHERE credential_id = ANY($1::uuid[])`, [replacedCredentialIds]);
       await client.query(`UPDATE authorization_requests SET state = 'CANCELLED' WHERE credential_id = ANY($1::uuid[]) AND state = 'PENDING_USER'`, [replacedCredentialIds]);
       await recordAuditEvent('credential_revoked', { nexusId: input.nexusId }, { credentialIds: replacedCredentialIds, reason: 'DEVICE_REPLACED' }, client);
@@ -178,6 +180,7 @@ export async function getCredentialForClient(credentialId: string, clientId: str
 
 export async function revokeCredentialForClient(credentialId: string, clientId: string, reason: string): Promise<void> {
   await withTransaction(async (client) => {
+    await setOutcomeReason(client, `REVOKED_BY_BANK:${reason}`);
     const result = await client.query(
       `UPDATE credentials c SET state = 'REVOKED', revoked_at = now()
        FROM nexus_identities n
@@ -187,6 +190,7 @@ export async function revokeCredentialForClient(credentialId: string, clientId: 
     );
     if (result.rowCount !== 1) throw new CredentialNotFoundError(credentialId);
     const identity = await client.query(`SELECT nexus_id FROM credentials WHERE credential_id = $1`, [credentialId]);
+    await setOutcomeReason(client, 'CREDENTIAL_REVOKED');
     const cancelled = await client.query(
       `UPDATE authorization_requests SET state = 'CANCELLED' WHERE credential_id = $1 AND state = 'PENDING_USER'`, [credentialId]);
     await recordAuditEvent('credential_revoked', { nexusId: identity.rows[0]?.nexus_id ?? null },

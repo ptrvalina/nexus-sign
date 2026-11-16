@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { withTransaction, pool } from '../db/pool';
 import { recordAuditEvent } from './auditService';
 import { forgetInactivePushRegistrations } from './pushRegistrationService';
+import { setOutcomeReason } from './outcomeReason';
 
 export interface NexusIdentityRecord {
   nexusId: string;
@@ -112,6 +113,7 @@ export async function suspendNexusIdentity(nexusId: string, reason: string, acto
   await withTransaction(async (client) => {
     const result = await client.query(`UPDATE nexus_identities SET status='SUSPENDED', updated_at=now() WHERE nexus_id=$1 AND status='ACTIVE'`, [nexusId]);
     if (result.rowCount === 0) throw new NexusIdentityNotFoundError(nexusId);
+    await setOutcomeReason(client, 'IDENTITY_SUSPENDED');
     const cancelled = await client.query(`UPDATE authorization_requests SET state='CANCELLED' WHERE nexus_id=$1 AND state='PENDING_USER'`, [nexusId]);
     await recordAuditEvent('identity_suspended', { nexusId, actor }, { reason, cancelledAuthorizations: cancelled.rowCount ?? 0 }, client);
   });
@@ -126,6 +128,7 @@ export async function revokeNexusIdentity(nexusId: string, reason: string, actor
   await inTransaction(tx, async (client) => {
     const result = await client.query(`UPDATE nexus_identities SET status='REVOKED', updated_at=now() WHERE nexus_id=$1 AND status IN ('ACTIVE','SUSPENDED')`, [nexusId]);
     if (result.rowCount === 0) throw new NexusIdentityNotFoundError(nexusId);
+    await setOutcomeReason(client, 'IDENTITY_REVOKED');
     await client.query(`UPDATE credentials SET state='REVOKED', revoked_at=now() WHERE nexus_id=$1 AND state = 'ACTIVE'`, [nexusId]);
     const cancelled = await client.query(`UPDATE authorization_requests SET state='CANCELLED' WHERE nexus_id=$1 AND state='PENDING_USER'`, [nexusId]);
     await recordAuditEvent('identity_revoked', { nexusId, actor }, { reason, cancelledAuthorizations: cancelled.rowCount ?? 0 }, client);

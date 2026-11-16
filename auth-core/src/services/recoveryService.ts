@@ -13,6 +13,7 @@ import { queueReplacementNotice } from './pushService';
 import { getEvidenceRecord, sealCredentialEnrolment, sealRecoveryConfiguration, type EnrolmentAttestation } from './evidenceService';
 import { sealProblem } from './credentialIntegrity';
 import { enqueueWebhook } from './webhookService';
+import { setOutcomeReason } from './outcomeReason';
 
 /**
  * Account recovery, protocol 2 (docs/protocol/recovery-protocol-v2.md).
@@ -306,6 +307,7 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     // device replacement (audit finding A2-02): the owner learns that the
     // identity moved, also when someone else recovered it with a phished phrase.
     for (const credentialId of revokedIds) await queueReplacementNotice(tx, s.client_id, s.nexus_id, credentialId);
+    await setOutcomeReason(tx, 'IDENTITY_RECOVERED');
     if (revokedIds.length > 0) await tx.query(`UPDATE credentials SET state='REVOKED',revoked_at=now() WHERE credential_id = ANY($1::uuid[])`, [revokedIds]);
     await tx.query(`UPDATE authorization_requests SET state='CANCELLED' WHERE nexus_id=$1 AND state='PENDING_USER'`, [s.nexus_id]);
     await forgetInactivePushRegistrations(tx, s.nexus_id);

@@ -3,6 +3,7 @@ import { withTransaction } from '../db/pool';
 import { recordAuditEvent, type AuditContext } from './auditService';
 import { enqueueWebhook } from './webhookService';
 import { ConflictError, NotFoundError } from './errors';
+import { setOutcomeReason } from './outcomeReason';
 
 /**
  * Ending an authorization before anyone confirmed it (audit finding A1-03).
@@ -34,7 +35,8 @@ async function lockOpen(tx: PoolClient, authorizationId: string, clientId: strin
   return row;
 }
 
-async function close(tx: PoolClient, row: OpenRow, state: 'REJECTED' | 'CANCELLED'): Promise<void> {
+async function close(tx: PoolClient, row: OpenRow, state: 'REJECTED' | 'CANCELLED', outcomeReason: string): Promise<void> {
+  await setOutcomeReason(tx, outcomeReason);
   await tx.query(`UPDATE authorization_requests SET state = $2 WHERE authorization_id = $1 AND state = 'PENDING_USER'`, [row.authorization_id, state]);
   await tx.query(
     `UPDATE authorization_verification_plans SET status = 'CANCELLED', updated_at = now()
@@ -47,7 +49,7 @@ export async function declineAuthorization(authorizationId: string, clientId: st
   return withTransaction(async (tx) => {
     const row = await lockOpen(tx, authorizationId, clientId);
     if (row.credential_id !== credentialId) throw new ConflictError('The authorization is bound to another device', 'CREDENTIAL_MISMATCH');
-    await close(tx, row, 'REJECTED');
+    await close(tx, row, 'REJECTED', `DECLINED_BY_CUSTOMER:${reason}`);
     await recordAuditEvent('authorization_declined', { ...context, nexusId: row.nexus_id, clientId, actor: `credential:${credentialId}` },
       { authorizationId, reason }, tx);
     await enqueueWebhook(clientId, 'authorization.declined', {
@@ -61,7 +63,7 @@ export async function declineAuthorization(authorizationId: string, clientId: st
 export async function cancelAuthorizationByBank(authorizationId: string, clientId: string, reason: BankCancelReason, context: AuditContext = {}): Promise<{ authorizationId: string; state: 'CANCELLED'; reason: BankCancelReason }> {
   return withTransaction(async (tx) => {
     const row = await lockOpen(tx, authorizationId, clientId);
-    await close(tx, row, 'CANCELLED');
+    await close(tx, row, 'CANCELLED', `CANCELLED_BY_BANK:${reason}`);
     await recordAuditEvent('authorization_cancelled', { ...context, nexusId: row.nexus_id, clientId, actor: context.actor ?? `bank:${clientId}` },
       { authorizationId, reason }, tx);
     await enqueueWebhook(clientId, 'authorization.cancelled', {

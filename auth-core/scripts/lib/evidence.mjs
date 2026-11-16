@@ -46,6 +46,8 @@ function sealVerifies(record, keys) {
   });
 }
 
+/** Final authorization states other than VERIFIED (AUTHORIZATION_OUTCOME). */
+const OUTCOMES = new Set(['REJECTED', 'EXPIRED', 'CANCELLED', 'OFFLINE_UNSIGNED']);
 const labelOf = (record) => record.authorizationId ?? `${record.recordType ?? 'record'}#${record.chainSequence ?? '?'}`;
 
 /**
@@ -105,6 +107,19 @@ export function verifyEvidenceRecord(record, evidenceKeys, { standalone = false,
     }
   } else if (recordType === 'RECOVERY_CONFIGURED') {
     if (typeof payload.recoveryPublicKeyPem !== 'string') problems.push(`${label}: recovery record does not carry the recovery key`);
+  } else if (recordType === 'AUTHORIZATION_OUTCOME') {
+    // An authorization that ended without a confirmation: it carries no
+    // device signature, only what was asked and how it ended.
+    if (payload.authorizationId !== record.authorizationId) problems.push(`${label}: record metadata does not match the sealed payload (authorizationId)`);
+    if (!OUTCOMES.has(payload.outcome)) problems.push(`${label}: unknown authorization outcome ${payload.outcome}`);
+    if (!/^[0-9a-f]{64}$/.test(payload.canonicalPayloadHash ?? '') || typeof payload.transactionReference !== 'string'
+        || typeof payload.reason !== 'string' || typeof payload.occurredAt !== 'string') {
+      problems.push(`${label}: outcome record does not carry the transaction, the outcome and its reason`);
+    }
+  } else if (recordType === 'CREDENTIAL_REVOKED') {
+    if (payload.credentialId !== record.credentialId || typeof payload.reason !== 'string' || typeof payload.revokedAt !== 'string') {
+      problems.push(`${label}: revocation record does not carry the credential and the reason`);
+    }
   } else {
     problems.push(`${label}: unknown record type ${recordType}`);
   }
@@ -213,6 +228,12 @@ export function verifyEvidenceChain(records, evidenceKeys, { expectedHead, rejec
     const payload = record.sealedPayload ?? {};
     if (payload.schemaVersion === '3' && payload.recordType === 'CREDENTIAL_ENROLLED') {
       enrolments.set(record.evidenceHash, payload);
+    }
+    if (payload.schemaVersion === '3' && ['AUTHORIZATION_OUTCOME', 'CREDENTIAL_REVOKED'].includes(payload.recordType) && payload.enrolmentEvidenceHash) {
+      const enrolment = enrolments.get(payload.enrolmentEvidenceHash);
+      if (!enrolment || enrolment.credentialId !== payload.credentialId) {
+        problems.push(`${label}: the enrolment of the credential it names is not earlier in the chain`);
+      }
     }
     if (payload.schemaVersion === '3' && payload.recordType === 'AUTHORIZATION') {
       const enrolment = enrolments.get(payload.enrolmentEvidenceHash);

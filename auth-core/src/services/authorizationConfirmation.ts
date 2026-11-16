@@ -27,6 +27,7 @@ import { ConflictError, ForbiddenError, UnprocessableError } from './errors';
 import { markExpired } from './authorizationExpiry';
 import { enqueueWebhook } from './webhookService';
 import { getChainHead } from './evidenceService';
+import { setOutcomeReason } from './outcomeReason';
 
 const MAX_SIGNATURE_ATTEMPTS = 5;
 
@@ -255,6 +256,7 @@ async function countFailedAttempt(tx: PoolClient, id: string, credentialId: stri
   const context = { ...auditContext, nexusId };
   await recordAuditEvent('authorization_rejected', context, { authorizationId: id, attempt, reason }, tx);
   if (attempt < MAX_SIGNATURE_ATTEMPTS) return { status: 'FAILED', reason, attempts: attempt };
+  await setOutcomeReason(tx, 'SIGNATURE_ATTEMPTS_EXHAUSTED');
   const rejected = await tx.query<{ client_id: string; transaction_reference: string }>(
     `UPDATE authorization_requests SET state = 'REJECTED' WHERE authorization_id = $1 AND state = 'PENDING_USER' RETURNING client_id, transaction_reference`, [id]);
   await recordAuditEvent('authorization_rejected', context, { authorizationId: id, reason: 'REJECTED' }, tx);

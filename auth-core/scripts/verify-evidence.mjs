@@ -81,6 +81,8 @@ for (const record of records) {
   const type = payload.schemaVersion === '3' ? payload.recordType : 'AUTHORIZATION';
   if (type === 'AUTHORIZATION') console.log(`VALID  #${record.chainSequence ?? '-'}  ${record.authorizationId}  ${describeSignedTransaction(payload)}`);
   else if (type === 'CREDENTIAL_ENROLLED') console.log(`VALID  #${record.chainSequence}  credential ${payload.credentialId} enrolled (${payload.reason}, attestation ${payload.attestation?.status})`);
+  else if (type === 'AUTHORIZATION_OUTCOME') console.log(`VALID  #${record.chainSequence}  ${record.authorizationId}  ${payload.outcome} (${payload.reason}) at ${payload.occurredAt}: ${payload.amountMinor} (minor units) ${payload.currency}, ref ${payload.transactionReference}`);
+  else if (type === 'CREDENTIAL_REVOKED') console.log(`VALID  #${record.chainSequence}  credential ${payload.credentialId} revoked (${payload.reason}) at ${payload.revokedAt}`);
   else console.log(`VALID  #${record.chainSequence}  recovery key configured by credential ${payload.credentialId}`);
 }
 const authorizations = records.filter((r) => (r.sealedPayload.schemaVersion === '3' ? r.sealedPayload.recordType : 'AUTHORIZATION') === 'AUTHORIZATION');

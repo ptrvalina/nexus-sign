@@ -23,8 +23,14 @@ The HSM seal and the customer signature are independent. The holder of the HSM k
 | `AUTHORIZATION` | An authorization becomes `VERIFIED`, in the transaction that consumes it | Signed bytes, device signature and key, `enrolmentEvidenceHash`, policy, verification factors |
 | `CREDENTIAL_ENROLLED` | A credential is registered (enrolment, replacement, recovery) or sealed once on upgrade (`BASELINE`), in the transaction that creates it | The credential's public keys, platform, security level, attestation material, replaced credentials, the bank's replacement authorization |
 | `RECOVERY_CONFIGURED` | A device registers a recovery key ([recovery protocol 2](recovery-protocol-v2.md)) | The recovery public key, the SHA-256 of the wrapped key, the KDF salt and iterations |
+| `AUTHORIZATION_OUTCOME` | An authorization ends without a confirmation: `REJECTED` (declined by the customer, signature attempts exhausted, verification failed), `EXPIRED`, `CANCELLED` (by the bank, or because the device or identity was revoked, suspended, replaced or recovered) or `OFFLINE_UNSIGNED` | `outcomeId`, `authorizationId`, `credentialId`, `transactionReference`, `canonicalPayloadHash`, `operationType`, `amountMinor`, `currency`, `issuedAt`, `expiresAt`, `outcome`, `reason`, `occurredAt`, `policyReference`, `policyVersion`, `credentialState`, `device` (`platform`, `securityLevel`), `enrolmentEvidenceHash`, `correlationId`, `verificationFactors` |
+| `CREDENTIAL_REVOKED` | A credential is revoked (by the bank, by replacement, recovery or identity revocation) | `outcomeId`, `credentialId`, `reason`, `revokedAt`, `device`, `enrolmentEvidenceHash` |
 
-All three types share one chain per NEXUS ID.
+All types share one chain per NEXUS ID.
+
+### How outcomes reach the chain
+
+Outcome records are not written by the code path that ends the authorization. A database trigger (migration 025) records the outcome in `evidence_outcomes` in the same transaction as the state change, whichever code or session made it, with the reason the transaction set (`nexus.outcome_reason`) or a default for the state. The expiry worker seals pending outcomes into the chain every `AUTHORIZATION_EXPIRY_SWEEP_MS` and links each to its record once; `evidence_outcomes` rows cannot be deleted or rewritten. While the HSM is unavailable outcomes stay pending and are sealed when it returns; the worker logs an error when the oldest pending outcome is older than 5 minutes. An outcome record therefore follows its state change by up to one sweep interval, and the `authorization.*` webhook that announced the outcome may arrive before it.
 
 ## Sealed fields
 

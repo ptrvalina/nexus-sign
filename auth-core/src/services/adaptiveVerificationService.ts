@@ -5,6 +5,7 @@ import { recordAuditEvent } from './auditService';
 import { ConflictError, ForbiddenError, GoneError, NotFoundError, ValidationError } from './errors';
 import { enqueueWebhook } from './webhookService';
 import { verifyResultToken, VerificationResultError, type ProviderKey } from './verificationResult';
+import { setOutcomeReason } from './outcomeReason';
 
 /**
  * Adaptive verification plan of one authorization.
@@ -320,6 +321,7 @@ async function applySessionResult(tx: PoolClient, plan: VerificationPlanRow, ses
     }
     const failed = await tx.query<VerificationPlanRow>(
       `UPDATE authorization_verification_plans SET status='FAILED', updated_at=now() WHERE authorization_id=$1 RETURNING *`, [authorizationId]);
+    await setOutcomeReason(tx, 'VERIFICATION_FAILED');
     const rejected = await tx.query<{ transaction_reference: string }>(
       `UPDATE authorization_requests SET state='REJECTED' WHERE authorization_id=$1 AND state='PENDING_USER' RETURNING transaction_reference`, [authorizationId]);
     if (rejected.rows[0]) {

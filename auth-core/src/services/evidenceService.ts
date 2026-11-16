@@ -16,7 +16,15 @@ import { enqueueWebhook } from './webhookService';
  *                        CREDENTIAL_ENROLLED record of the signing credential;
  *   CREDENTIAL_ENROLLED  the public keys of a credential and the attestation
  *                        material that admitted them;
- *   RECOVERY_CONFIGURED  the recovery public key a device registered.
+ *   RECOVERY_CONFIGURED  the recovery public key a device registered;
+ *   AUTHORIZATION_OUTCOME an authorization that ended without a confirmation
+ *                        (REJECTED, EXPIRED, CANCELLED, OFFLINE_UNSIGNED),
+ *                        with its reason and the transaction it was about;
+ *   CREDENTIAL_REVOKED   a credential that was revoked, with the reason.
+ *
+ * Outcomes are recorded by database triggers in evidence_outcomes in the
+ * transaction that changes the state (migration 025) and sealed afterwards
+ * by sealPendingOutcomes(), so a state change cannot happen without them.
  *
  * Each record seals { schemaVersion, recordType, nexusId, chainSequence,
  * previousEvidenceHash, sealKeyId, ...body }:
@@ -38,7 +46,7 @@ import { enqueueWebhook } from './webhookService';
  */
 export const EVIDENCE_SCHEMA_VERSION = '3';
 
-export type EvidenceRecordType = 'AUTHORIZATION' | 'CREDENTIAL_ENROLLED' | 'RECOVERY_CONFIGURED';
+export type EvidenceRecordType = 'AUTHORIZATION' | 'CREDENTIAL_ENROLLED' | 'RECOVERY_CONFIGURED' | 'AUTHORIZATION_OUTCOME' | 'CREDENTIAL_REVOKED';
 
 export interface ChainPosition {
   evidenceId: string;
@@ -309,6 +317,126 @@ export async function sealRecoveryConfiguration(tx: PoolClient, hsm: HsmAdapter,
   }, { authorizationId: null, credentialId: input.credentialId });
   await tx.query(`UPDATE nexus_identities SET recovery_evidence_id = $2 WHERE nexus_id = $1`, [input.nexusId, position.evidenceId]);
   return position;
+}
+
+interface OutcomeRow {
+  outcome_id: string; subject: 'AUTHORIZATION' | 'CREDENTIAL'; authorization_id: string | null; credential_id: string;
+  nexus_id: string; outcome: string; reason: string; occurred_at: Date;
+}
+
+/**
+ * Seals outcomes recorded by the database triggers of migration 025 into
+ * the evidence chain, oldest first, each in its own transaction. Rows are
+ * claimed with FOR UPDATE SKIP LOCKED, so several instances can run it, and
+ * a row is linked to its record once (the table refuses a second link).
+ * Returns the number sealed.
+ */
+export async function sealPendingOutcomes(hsm: HsmAdapter, limit = 100): Promise<number> {
+  let sealed = 0;
+  for (; sealed < limit; sealed += 1) {
+    const done = await withTransactionOn(async (tx) => {
+      const claimed = await tx.query<OutcomeRow>(
+        `SELECT outcome_id, subject, authorization_id, credential_id, nexus_id, outcome, reason, occurred_at
+           FROM evidence_outcomes WHERE evidence_id IS NULL ORDER BY occurred_at, outcome_id LIMIT 1 FOR UPDATE SKIP LOCKED`);
+      const row = claimed.rows[0];
+      if (!row) return false;
+      const position = row.subject === 'AUTHORIZATION' ? await sealAuthorizationOutcome(tx, hsm, row) : await sealCredentialRevocation(tx, hsm, row);
+      await tx.query(`UPDATE evidence_outcomes SET evidence_id = $2, sealed_at = clock_timestamp() WHERE outcome_id = $1`, [row.outcome_id, position.evidenceId]);
+      return true;
+    });
+    if (!done) break;
+  }
+  return sealed;
+}
+
+/** Outcomes recorded but not yet sealed, and the age of the oldest (seconds). */
+export async function unsealedOutcomes(): Promise<{ count: number; oldestSeconds: number }> {
+  const r = await pool.query<{ count: string; oldest: string | null }>(
+    `SELECT count(*) AS count, extract(epoch FROM now() - min(occurred_at)) AS oldest FROM evidence_outcomes WHERE evidence_id IS NULL`);
+  return { count: Number(r.rows[0].count), oldestSeconds: Math.max(0, Math.floor(Number(r.rows[0].oldest ?? 0))) };
+}
+
+async function withTransactionOn<T>(fn: (tx: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function credentialFacts(tx: PoolClient, credentialId: string): Promise<{ state: string; platform: string; securityLevel: string; enrolmentEvidenceHash: string | null }> {
+  const r = await tx.query<{ state: string; platform: string; security_level: string; enrolment_hash: string | null }>(
+    `SELECT c.state, c.platform, c.security_level, e.evidence_hash AS enrolment_hash
+       FROM credentials c LEFT JOIN evidence_records e ON e.evidence_id = c.enrolment_evidence_id WHERE c.credential_id = $1`, [credentialId]);
+  const row = r.rows[0];
+  if (!row) throw new Error(`credential ${credentialId} of an outcome was not found`);
+  return { state: row.state, platform: row.platform, securityLevel: row.security_level, enrolmentEvidenceHash: row.enrolment_hash };
+}
+
+async function sealAuthorizationOutcome(tx: PoolClient, hsm: HsmAdapter, row: OutcomeRow): Promise<ChainPosition> {
+  const a = (await tx.query<{ transaction_reference: string; canonical_payload_hash: string; operation_type: string; amount_minor: string;
+    currency: string; policy_reference: string; policy_version: string; issued_at: Date; expires_at: Date; correlation_id: string | null }>(
+    `SELECT transaction_reference, canonical_payload_hash, operation_type, amount_minor::text AS amount_minor, currency, policy_reference,
+            policy_version, issued_at, expires_at, correlation_id
+       FROM authorization_requests WHERE authorization_id = $1`, [row.authorization_id])).rows[0];
+  if (!a) throw new Error(`authorization ${row.authorization_id} of an outcome was not found`);
+  const credential = await credentialFacts(tx, row.credential_id);
+  const factors = await tx.query<{ channel: string; status: string; result_method: string | null; result_issuer: string | null; completed_at: Date | null }>(
+    `SELECT channel, status, result_method, result_issuer, completed_at FROM verification_sessions WHERE authorization_id = $1 ORDER BY created_at ASC`,
+    [row.authorization_id]);
+  const verificationFactors = factors.rows.map((f) => ({
+    channel: f.channel, status: f.status, method: f.result_method, issuer: f.result_issuer, completedAt: f.completed_at?.toISOString() ?? null,
+  }));
+  return appendRecord(tx, hsm, row.nexus_id, 'AUTHORIZATION_OUTCOME', {
+    outcomeId: row.outcome_id,
+    authorizationId: row.authorization_id,
+    credentialId: row.credential_id,
+    transactionReference: a.transaction_reference,
+    canonicalPayloadHash: a.canonical_payload_hash,
+    operationType: a.operation_type,
+    amountMinor: a.amount_minor,
+    currency: a.currency,
+    issuedAt: a.issued_at.toISOString(),
+    expiresAt: a.expires_at.toISOString(),
+    outcome: row.outcome,
+    reason: row.reason,
+    occurredAt: row.occurred_at.toISOString(),
+    policyReference: a.policy_reference,
+    policyVersion: a.policy_version,
+    credentialState: credential.state,
+    device: { platform: credential.platform, securityLevel: credential.securityLevel },
+    enrolmentEvidenceHash: credential.enrolmentEvidenceHash,
+    correlationId: a.correlation_id,
+    verificationFactors,
+  }, {
+    authorizationId: row.authorization_id,
+    credentialId: row.credential_id,
+    transactionReference: a.transaction_reference,
+    canonicalPayloadHash: a.canonical_payload_hash,
+    policyVersion: a.policy_version,
+    result: row.outcome,
+    correlationId: a.correlation_id,
+    verificationFactors,
+  });
+}
+
+async function sealCredentialRevocation(tx: PoolClient, hsm: HsmAdapter, row: OutcomeRow): Promise<ChainPosition> {
+  const credential = await credentialFacts(tx, row.credential_id);
+  return appendRecord(tx, hsm, row.nexus_id, 'CREDENTIAL_REVOKED', {
+    outcomeId: row.outcome_id,
+    credentialId: row.credential_id,
+    reason: row.reason,
+    revokedAt: row.occurred_at.toISOString(),
+    device: { platform: credential.platform, securityLevel: credential.securityLevel },
+    enrolmentEvidenceHash: credential.enrolmentEvidenceHash,
+  }, { authorizationId: null, credentialId: row.credential_id, result: 'REVOKED' });
 }
 
 /** One record by ID, for integrity checks. */

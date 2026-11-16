@@ -2,6 +2,11 @@ import type { Logger } from 'pino';
 import { env } from '../config/env';
 import { expireOverdueAuthorizations, expireOverdueVerificationSessions, purgeExpiredDeviceNonces } from '../services/authorizationExpiry';
 import { expireUnsignedOfflineConfirmations } from '../services/authorizationConfirmation';
+import { sealPendingOutcomes, unsealedOutcomes } from '../services/evidenceService';
+import type { HsmAdapter } from '../crypto/hsmAdapter';
+
+/** An outcome not sealed after this long is reported on every sweep. */
+const UNSEALED_WARNING_SECONDS = 300;
 
 export interface ExpiryWorkerHandle {
   stop: () => void;
@@ -11,10 +16,11 @@ export interface ExpiryWorkerHandle {
  * Sweeps authorizations whose expiry has passed, verification
  * sessions nobody completed, offline confirmations whose device signature can
  * no longer arrive and expired device request nonces, every
- * AUTHORIZATION_EXPIRY_SWEEP_MS. Several Auth Core instances can run it at
+ * AUTHORIZATION_EXPIRY_SWEEP_MS, and seals recorded outcomes into the
+ * evidence chains. Several Auth Core instances can run it at
  * once: rows are claimed with FOR UPDATE SKIP LOCKED.
  */
-export function startExpiryWorker(logger: Logger): ExpiryWorkerHandle {
+export function startExpiryWorker(logger: Logger, hsm: HsmAdapter): ExpiryWorkerHandle {
   let stopped = false;
   let inFlight = false;
   const timer = setInterval(() => {
@@ -28,6 +34,14 @@ export function startExpiryWorker(logger: Logger): ExpiryWorkerHandle {
         const unsigned = await expireUnsignedOfflineConfirmations();
         if (unsigned > 0) logger.warn({ count: unsigned }, 'Offline confirmations without a device signature (OFFLINE_UNSIGNED)');
         if (env.DEVICE_NONCE_STORE === 'postgres') await purgeExpiredDeviceNonces();
+        // Outcomes the state changes above (and every other path) recorded
+        // are sealed into the evidence chains (audit finding B-04).
+        const outcomes = await sealPendingOutcomes(hsm);
+        if (outcomes > 0) logger.info({ count: outcomes }, 'Sealed authorization and credential outcomes');
+        const backlog = await unsealedOutcomes();
+        if (backlog.count > 0 && backlog.oldestSeconds > UNSEALED_WARNING_SECONDS) {
+          logger.error({ count: backlog.count, oldestSeconds: backlog.oldestSeconds }, 'Outcomes are waiting to be sealed (HSM unavailable?)');
+        }
       })
       .catch((error: unknown) => { logger.error({ err: error }, 'Authorization expiry sweep failed'); })
       .finally(() => { inFlight = false; });
