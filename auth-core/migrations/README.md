@@ -40,6 +40,7 @@ Run migrations as the table owner. After `scripts/db/roles.sql` has been applied
 | `028_payment_mandates.sql` | Tables `mandates` (signed, immutable terms; lifecycle and insert-state triggers) and `mandate_debits` (append-only; the trigger `mandate_debits_check` allows a debit only inside the signed terms, with the mandate row locked); `evidence_records.mandate_id` and record type `MANDATE` |
 | `029_customer_conversations.sql` | Tables `conversations` (state machine `WITH_BOT` → `WAITING_FOR_AGENT` → `WITH_AGENT` → `CLOSED`, owner immutable) and `conversation_messages` (append-only, hash-chained per conversation; only the delivery and read marks are set, once) |
 | `030_customer_calls.sql` | `bank_clients.customer_call_channels` (the channels the bank staffs, default none) and table `customer_calls` (state machine `WAITING` → `CONNECTED` → `ENDED`, or `WAITING` → `CANCELLED` / `MISSED`; one open call per NEXUS ID; caller, device and channel immutable; rows never deleted) |
+| `031_device_nonce_delete_guard.sql` | Trigger `device_request_nonces_expired_only`: a device request nonce is deleted only after it expires, for every role (finding C-11; the application role keeps `DELETE` for the expiry sweep) |
 
 ## Notes on 009
 

@@ -56,8 +56,11 @@ END $$;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM nexus_app;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO nexus_app;
 GRANT DELETE ON push_registrations TO nexus_app;
--- Expired device request nonces.
+-- Expired device request nonces (the trigger of migration 031 refuses live
+-- ones). Nonces are never updated: without UPDATE the role cannot move a live
+-- nonce's expiry into the past and then delete it (finding C-11).
 GRANT DELETE ON device_request_nonces TO nexus_app;
+REVOKE UPDATE ON device_request_nonces FROM nexus_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexus_app;
 -- Evidence and audit records are only ever added.
 REVOKE UPDATE ON evidence_records, audit_logs FROM nexus_app;

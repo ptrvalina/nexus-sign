@@ -3,7 +3,7 @@
 -- to apply again. Existing databases are upgraded with migrations/.
 -- Install and upgrade with `npm run migrate` (src/cli/migrate.ts), which keeps
 -- the migration ledger. This file contains every migration up to:
--- schema-version: 030
+-- schema-version: 031
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -1278,3 +1278,17 @@ BEGIN
 END $$;
 DROP TRIGGER IF EXISTS customer_calls_no_delete ON customer_calls;
 CREATE TRIGGER customer_calls_no_delete BEFORE DELETE ON customer_calls FOR EACH ROW EXECUTE FUNCTION customer_calls_kept();
+
+-- Device request nonces are deleted only after they expire (migration 031, finding C-11).
+CREATE OR REPLACE FUNCTION device_request_nonces_expired_only() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF OLD.expires_at >= now() THEN
+    RAISE EXCEPTION 'device request nonce of credential % has not expired (DELETE refused)', OLD.credential_id
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS device_request_nonces_expired_only ON device_request_nonces;
+CREATE TRIGGER device_request_nonces_expired_only BEFORE DELETE ON device_request_nonces
+  FOR EACH ROW EXECUTE FUNCTION device_request_nonces_expired_only();
