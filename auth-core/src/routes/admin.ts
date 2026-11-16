@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { operatorClaim as claimConversation, operatorClose as closeConversation, operatorMessages as conversationMessages, operatorQueue as conversationQueue, operatorRelease as releaseConversation, operatorSend as answerConversation } from '../services/conversationService';
 import { z } from 'zod';
-import { login, logout, InvalidAdminCredentialsError } from '../services/adminAuthService';
+import { login, logout, resolveSession, InvalidAdminCredentialsError } from '../services/adminAuthService';
 import { ADMIN_SESSION_COOKIE, getSessionTokenFromRequest, requireAdminSession, requireRole, type AdminRequest } from '../middleware/adminAuth';
 import { listBankClients } from '../services/clientService';
 import { listAuditLogs, listWebhookDeliveries, getDashboardStats } from '../services/adminService';
@@ -105,8 +105,11 @@ export function buildAdminRouter(options: { cookieSecure: boolean; hsm: HsmAdapt
     try {
       const token = getSessionTokenFromRequest(req);
       if (token) {
+        // Logout runs before the session middleware: resolve the session
+        // first so the record names who logged out (finding A2-07).
+        const session = await resolveSession(token);
         await logout(token);
-        await recordAuditEvent('admin_logout', {});
+        if (session) await recordAuditEvent('admin_logout', { actor: `admin:${session.username}`, clientId: session.clientId ?? undefined });
       }
       res.setHeader('Set-Cookie', sessionCookieHeader('', 0, options.cookieSecure));
       res.status(200).json({ ok: true });

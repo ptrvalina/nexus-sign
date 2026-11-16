@@ -89,6 +89,11 @@ describe('admin console', { skip: skipWithoutServices }, () => {
     assert.ok(logs.every((l) => l.clientId === 'bank-a'), 'no other bank\'s audit records');
     const viewed = await server.db.query(`SELECT actor, nexus_id FROM audit_logs WHERE event_type = 'admin_identity_viewed'`);
     assert.deepEqual(viewed.rows, [{ actor: 'admin:operator-a', nexus_id: identityA.nexusId }]);
+    // The logout record names the account and its bank (finding A2-07).
+    assert.equal((await a.call('POST', '/admin/api/logout')).status, 200);
+    const loggedOut = await server.db.query(`SELECT actor, client_id FROM audit_logs WHERE event_type = 'admin_logout'`);
+    assert.deepEqual(loggedOut.rows, [{ actor: 'admin:operator-a', client_id: 'bank-a' }]);
+    assert.equal((await a.call('GET', '/admin/api/me')).status, 401, 'the session ended');
   });
 
   test('revocation needs a second admin with access to the bank', async () => {
