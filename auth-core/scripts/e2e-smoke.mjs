@@ -167,6 +167,7 @@ expect(identity.status === 201 && /^\d{9}$/.test(NEXUS_ID ?? ''), `NEXUS ID issu
 // --- Mobile bootstrap ---
 // How the bank re-identified the customer before enrolling a replacement device.
 const REPLACEMENT = { replacement: { method: 'OTHER', reference: `e2e-${randomBytes(4).toString('hex')}` } };
+let REPLACEMENT_ID;
 const bootstrapSession = await call('POST', '/v1/mobile/sessions', { token: BANK, body: { nexusId: NEXUS_ID } });
 expect(bootstrapSession.status === 201 && bootstrapSession.json?.purpose === 'BOOTSTRAP', 'bank mints a customer-scoped bootstrap token', bootstrapSession.text);
 
@@ -230,12 +231,19 @@ const MOBILE = { credentialId: CREDENTIAL_ID, authKey: deviceAuthKey };
   const silent = await call('POST', '/v1/mobile/sessions', { token: BANK, body: { nexusId: NEXUS_ID } });
   expect(silent.status === 409 && silent.json?.code === 'ACTIVE_CREDENTIAL_EXISTS',
     'no enrolment token for a customer with an enrolled device unless the bank authorizes a replacement', silent.text);
+  // A replacement for a customer with an enrolled device is held until that
+  // device approves it (or the hold passes): no token yet (finding A2-01).
+  const pending = await call('POST', '/v1/mobile/sessions', { token: BANK, body: { nexusId: NEXUS_ID, ...REPLACEMENT } });
+  expect(pending.status === 202 && pending.json?.status === 'REPLACEMENT_PENDING' && !pending.json?.accessToken,
+    'a replacement is held until the enrolled device approves it; no token is issued', pending.text);
+  REPLACEMENT_ID = pending.json?.replacementId;
   const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' }).toString();
-  const fresh = await call('POST', '/v1/mobile/sessions', { token: BANK, body: { nexusId: NEXUS_ID, ...REPLACEMENT } });
+  const rsaIdentity = await call('POST', '/v1/nexus-identities', { token: BANK, body: { bankCustomerRef: `${bankCustomerRef}-rsa` } });
+  const fresh = await call('POST', '/v1/mobile/sessions', { token: BANK, body: { nexusId: rsaIdentity.json.nexusId } });
   const rsaBootstrap = await call('POST', '/v1/mobile/bootstrap', {
     token: fresh.json.accessToken, body: { publicKeyPem: rsa, authPublicKeyPem: newDeviceKey().publicKeyPem, platform: 'OTHER', securityLevel: 'SOFTWARE_TEST', deviceAttestation: {} },
   });
-  expect(rsaBootstrap.status === 400, 'a non-P-256 device key is rejected', rsaBootstrap.text);
+  expect(fresh.status === 201 && rsaBootstrap.status === 400, 'a non-P-256 device key is rejected', rsaBootstrap.text);
 }
 
 // --- Authorization + idempotency ---
@@ -268,7 +276,11 @@ expect(fetched.status === 200 && fetched.json?.canonicalPayloadBase64, 'device f
 }
 const canonical = Buffer.from(fetched.json.canonicalPayloadBase64, 'base64');
 {
+  // The enrolled device approves the bank's replacement request; then the bank gets a BOOTSTRAP token.
+  const approved = await call('POST', `/v1/mobile/device-replacements/${REPLACEMENT_ID}/approve`, { device: MOBILE, body: {} });
+  expect(approved.status === 200 && approved.json?.state === 'APPROVED', 'the enrolled device approves the replacement request', approved.text);
   const bootstrapOnly = await call('POST', '/v1/mobile/sessions', { token: BANK, body: { nexusId: NEXUS_ID, ...REPLACEMENT } });
+  expect(bootstrapOnly.status === 201 && bootstrapOnly.json?.purpose === 'BOOTSTRAP', 'after approval the bank receives a BOOTSTRAP token for the replacement', bootstrapOnly.text);
   const withBootstrap = await call('GET', `/v1/mobile/authorizations/${AUTH_ID}`, { token: bootstrapOnly.json.accessToken });
   expect(withBootstrap.status === 403, 'a bootstrap token cannot read or sign authorizations', withBootstrap.text);
 }
