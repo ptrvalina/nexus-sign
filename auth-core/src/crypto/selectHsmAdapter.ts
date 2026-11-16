@@ -20,13 +20,16 @@ export async function selectHsmAdapter(config: Pick<typeof env, 'HSM_ADAPTER' | 
     const { join } = await import('node:path');
     const { HsmWorkerHost } = await import('./hsmWorkerHost');
     const options = pkcs11OptionsFromEnv();
-    return new HsmWorkerHost(() => new Worker(join(__dirname, 'pkcs11Worker.js'), { workerData: { options } }), {
+    const host = new HsmWorkerHost(() => new Worker(join(__dirname, 'pkcs11Worker.js'), { workerData: { options } }), {
       name: 'pkcs11',
       timeoutMs: env.HSM_OPERATION_TIMEOUT_MS,
       queueLimit: env.HSM_QUEUE_LIMIT,
       breakerThreshold: env.HSM_BREAKER_THRESHOLD,
       breakerCooldownMs: env.HSM_BREAKER_COOLDOWN_MS,
     });
+    const { observeHsm } = await import('../observability/metrics');
+    observeHsm(() => host.state());
+    return host;
   }
   if (config.NODE_ENV === 'production' || !config.ALLOW_INSECURE_DEVELOPMENT) {
     throw new Error('HSM_ADAPTER=software keeps the evidence key in memory and is refused here: set HSM_ADAPTER=pkcs11, or ALLOW_INSECURE_DEVELOPMENT=true outside production');

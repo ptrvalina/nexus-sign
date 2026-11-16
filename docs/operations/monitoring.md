@@ -24,6 +24,11 @@ Metrics are per process. Aggregate across pods in the query.
 | `nexus_http_request_duration_seconds` | Histogram | `method`, `route`, `status_code` | Request duration. Buckets: 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5 s. |
 | `nexus_http_requests_total` | Counter | `method`, `route`, `status_code` | Completed requests. |
 | `nexus_webhook_delivery_outcomes_total` | Counter | `outcome` | Webhook delivery attempts by outcome: `delivered`, `retried` (a retry was scheduled), `failed` (the delivery reached `FAILED`). |
+| `nexus_authorization_confirmations_total` | Counter | `method` | Authorizations confirmed (`VERIFIED`): `DEVICE_SIGNATURE`, `OFFLINE_CODE` (v1), `OFFLINE_SIGNED` (v2). Counted in the confirming transaction, so a transaction that rolls back afterwards is still counted. |
+| `nexus_sealed_outcomes_total` | Counter | `subject`, `outcome` | Outcomes sealed into the evidence chain, once each: `subject` `AUTHORIZATION` with `outcome` `REJECTED`, `CANCELLED`, `EXPIRED`, `OFFLINE_UNSIGNED` and the others; `subject` `CREDENTIAL` for revocations. With the confirmations counter this gives the confirmation success rate. |
+| `nexus_evidence_unsealed_outcomes` | Gauge | — | Outcomes recorded but not yet sealed (set by the expiry sweep). Grows while the HSM is unavailable. |
+| `nexus_hsm_breaker_state` | Gauge | — | HSM circuit breaker: 0 closed, 1 half-open, 2 open (HSM calls fail closed). Only with `HSM_ADAPTER=pkcs11`. |
+| `nexus_hsm_in_flight` | Gauge | — | PKCS#11 operations queued or running in the HSM worker. Only with `HSM_ADAPTER=pkcs11`. |
 | `nexus_push_delivery_outcomes_total` | Counter | `provider`, `outcome` | Secure push outcomes. `provider`: `APNS`, `FCM`, or `none` when the message never reached a provider. `outcome`: `sent` (accepted by the provider), `retried`, `delivered` (receipt from the device), `failed`, `expired`. |
 
 The `route` label is the Express route pattern, for example `/v1/authorizations/:authorizationId/signature` or `/oauth/token`, never the concrete URL. Requests that did not reach a route handler share `route="unmatched"`. These include unknown paths and requests rejected by authentication middleware before the handler: bank requests without a valid access token and mobile requests without a valid token or device signature (both 401). `POST /v1/mobile/sessions` and `POST /v1/recovery/sessions` check the bank token inside the route and keep their own `route` label.
@@ -88,6 +93,9 @@ The following are replaced with `[redacted]`:
 | Push messages failing | `sum by (provider) (increase(nexus_push_delivery_outcomes_total{outcome=~"failed\|expired"}[15m]))` above a bank-set count | [Push delivery](runbooks/push-delivery.md) |
 | Push accepted but not received | Ratio of `outcome="delivered"` to `outcome="sent"` over 1 h below a bank-set value | [Push delivery](runbooks/push-delivery.md) |
 | Push worker errors | Log message `Push delivery batch failed` | [Push delivery](runbooks/push-delivery.md) |
+| Confirmation success rate falls | `sum(rate(nexus_authorization_confirmations_total[1h])) / (sum(rate(nexus_authorization_confirmations_total[1h])) + sum(rate(nexus_sealed_outcomes_total{subject="AUTHORIZATION"}[1h])))` below a bank-set ratio | Check declines (`outcome="REJECTED"`) against expiries (`EXPIRED`: push or device problems) |
+| HSM breaker open | `max(nexus_hsm_breaker_state) == 2` for 1 m | [HSM unavailable](runbooks/hsm-unavailable.md) |
+| Outcomes not sealed | `max(nexus_evidence_unsealed_outcomes) > 0` for 10 m | [HSM unavailable](runbooks/hsm-unavailable.md) |
 | Startup failure | Log message `Fatal error during startup`, or restart loops | [HSM unavailable](runbooks/hsm-unavailable.md) |
 | Token endpoint throttling | `rate(nexus_http_requests_total{route="/oauth/token",status_code="429"}[5m]) > 0` | |
 | Authentication rejections | `rate(nexus_http_requests_total{route="unmatched",status_code="401"}[5m])` above a bank-set rate | |

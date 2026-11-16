@@ -15,6 +15,11 @@ describe('metrics access', { skip: skipWithoutServices }, () => {
     assert.equal((await fetch(`${server.baseUrl}/metrics`, { headers: { Authorization: `Bearer ${token}x` } })).status, 401);
     const ok = await fetch(`${server.baseUrl}/metrics`, { headers: { Authorization: `Bearer ${token}` } });
     assert.equal(ok.status, 200);
-    assert.match(await ok.text(), /# HELP/);
+    const text = await ok.text();
+    assert.match(text, /# HELP/);
+    // Confirmation and outcome counters and the unsealed backlog are exported (the HSM gauges only with HSM_ADAPTER=pkcs11).
+    for (const name of ['nexus_authorization_confirmations_total', 'nexus_sealed_outcomes_total', 'nexus_evidence_unsealed_outcomes']) {
+      assert.match(text, new RegExp(`# HELP ${name} `), name);
+    }
   });
 });

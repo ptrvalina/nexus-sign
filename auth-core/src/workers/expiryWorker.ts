@@ -6,6 +6,7 @@ import { sealPendingOutcomes, unsealedOutcomes } from '../services/evidenceServi
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { expireMandates } from '../services/mandateService';
 import { expireCustomerCalls } from '../services/customerCallService';
+import { unsealedOutcomesGauge } from '../observability/metrics';
 
 /** An outcome not sealed after this long is reported on every sweep. */
 const UNSEALED_WARNING_SECONDS = 300;
@@ -47,6 +48,7 @@ export function startExpiryWorker(logger: Logger, hsm: HsmAdapter): ExpiryWorker
         const outcomes = await sealPendingOutcomes(hsm);
         if (outcomes > 0) logger.info({ count: outcomes }, 'Sealed authorization and credential outcomes');
         const backlog = await unsealedOutcomes();
+        unsealedOutcomesGauge.set(backlog.count);
         if (backlog.count > 0 && backlog.oldestSeconds > UNSEALED_WARNING_SECONDS) {
           logger.error({ count: backlog.count, oldestSeconds: backlog.oldestSeconds }, 'Outcomes are waiting to be sealed (HSM unavailable?)');
         }

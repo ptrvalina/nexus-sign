@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sealedOutcomes } from '../observability/metrics';
 import type { PoolClient } from 'pg';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { pool } from '../db/pool';
@@ -387,9 +388,10 @@ export async function sealPendingOutcomes(hsm: HsmAdapter, limit = 100): Promise
       if (!row) return false;
       const position = row.subject === 'AUTHORIZATION' ? await sealAuthorizationOutcome(tx, hsm, row) : await sealCredentialRevocation(tx, hsm, row);
       await tx.query(`UPDATE evidence_outcomes SET evidence_id = $2, sealed_at = clock_timestamp() WHERE outcome_id = $1`, [row.outcome_id, position.evidenceId]);
-      return true;
+      return { subject: row.subject, outcome: row.outcome };
     });
     if (!done) break;
+    sealedOutcomes.inc({ subject: done.subject, outcome: done.outcome });
   }
   return sealed;
 }

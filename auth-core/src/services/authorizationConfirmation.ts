@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { authorizationConfirmations } from '../observability/metrics';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../db/pool';
 import { recordAuditEvent, type AuditContext } from './auditService';
@@ -392,6 +393,7 @@ async function finalizeVerified(tx: PoolClient, auth: AuthorizationRow, verified
      WHERE authorization_id = $1 RETURNING *`,
     [id, verified.signature, verified.signatureFormat, verified.confirmationMethod, recordCode, verified.offlineCodeTag ?? null]);
   const row = updated.rows[0];
+  authorizationConfirmations.inc({ method: verified.confirmationMethod });
   await tx.query(`UPDATE credentials SET last_used_at = now() WHERE credential_id = $1`, [verified.credentialId]);
   await tx.query(`UPDATE nexus_identities SET last_used_at = now(), updated_at = now() WHERE nexus_id = $1`, [auth.nexus_id]);
   await tx.query(
