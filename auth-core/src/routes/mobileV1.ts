@@ -24,6 +24,9 @@ import { deviceCancel, deviceJoin, deviceSignal, deviceSignals } from '../servic
 import { byIp, loginThrottle } from '../middleware/bruteForceProtection';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../services/errors';
 import { declineAuthorization } from '../services/authorizationDecline';
+import {
+  authorizationHistory, evidenceForCustomer, getSettings, listDevices, notificationHistory, securityEvents, suspendByCustomer, updateSettings,
+} from '../services/customerAccountService';
 
 const bootstrapSchema = z.object({
   publicKeyPem: z.string().min(1).max(4096),
@@ -375,6 +378,83 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
   router.post('/v1/mobile/device-replacements/:replacementId/approve', decideReplacement('APPROVE'));
   /** The customer cancels a replacement on the enrolled device ("it wasn't me"). */
   router.post('/v1/mobile/device-replacements/:replacementId/cancel', decideReplacement('CANCEL'));
+
+  // --- The customer's own section in the bank's app (presentation pages 19-22) ---
+
+  const page = z.object({ before: z.string().datetime().optional(), limit: z.coerce.number().int().min(1).max(200).optional() });
+
+  /** "My devices": every device that held keys for this NEXUS ID. */
+  router.get('/v1/mobile/devices', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ devices: await listDevices(device.nexusId, device.credentialId) });
+    } catch (e) { next(e); }
+  });
+
+  /** Confirmations, declines and open requests, newest first. */
+  router.get('/v1/mobile/history', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const q = page.extend({ filter: z.enum(['all', 'confirmed', 'declined', 'open']).optional() }).parse(req.query);
+      res.json({ authorizations: await authorizationHistory(device.nexusId, q) });
+    } catch (e) { next(e); }
+  });
+
+  /** The sealed evidence of one of the customer's authorizations. */
+  router.get('/v1/mobile/authorizations/:authorizationId/evidence', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const auth = await authorizationInScope(req.params.authorizationId, device);
+      res.json(await evidenceForCustomer(device.nexusId, auth.authorizationId));
+    } catch (e) { next(e); }
+  });
+
+  /** The identity's security log. */
+  router.get('/v1/mobile/security-events', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ events: await securityEvents(device.nexusId, page.parse(req.query)) });
+    } catch (e) { next(e); }
+  });
+
+  /** Past notifications (the event feed); each opens with GET /v1/mobile/push-messages/{id}. */
+  router.get('/v1/mobile/notifications', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ notifications: await notificationHistory(device.nexusId, page.parse(req.query)) });
+    } catch (e) { next(e); }
+  });
+
+  router.get('/v1/mobile/settings', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json(await getSettings(device.nexusId));
+    } catch (e) { next(e); }
+  });
+
+  const amount = z.string().regex(/^(0|[1-9]\d{0,29})$/).nullable();
+  /** Limits, video-check threshold and channels; relaxing changes wait CUSTOMER_SETTINGS_RELAX_HOLD_SECONDS. */
+  router.put('/v1/mobile/settings', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({
+        currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
+        perPaymentLimitMinor: amount, dailyLimitMinor: amount, videoCheckAboveMinor: amount,
+        channels: z.object({ push: z.boolean(), audio: z.boolean(), video: z.boolean() }).strict(),
+      }).strict().parse(req.body);
+      res.json(await updateSettings(device.clientId, device.nexusId, device.credentialId, body));
+    } catch (e) { next(e); }
+  });
+
+  /** The customer suspends their NEXUS ID; the bank reactivates it after re-identification. */
+  router.post('/v1/mobile/identity/suspend', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ reason: z.enum(['LOST_DEVICE', 'SUSPECTED_FRAUD', 'OTHER']) }).strict().parse(req.body);
+      await suspendByCustomer(device.clientId, device.nexusId, device.credentialId, body.reason);
+      res.json({ nexusId: device.nexusId, status: 'SUSPENDED' });
+    } catch (e) { next(e); }
+  });
 
   // --- Secure push ---
 

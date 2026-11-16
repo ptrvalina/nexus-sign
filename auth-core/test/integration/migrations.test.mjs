@@ -7,7 +7,7 @@
 // ledger row in one transaction.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, renameSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -18,6 +18,10 @@ const { migrate, planMigrations, readMigrations, schemaVersionOf } = loadTs('db/
 const MIGRATIONS = join(ROOT, 'migrations');
 const SCHEMA = readFileSync(join(ROOT, 'src/db/schema.sql'), 'utf8');
 const RC2_SCHEMA = readFileSync(join(ROOT, 'test/fixtures/schema-2.0.0-rc.2.sql'), 'utf8');
+const FILES = readMigrations(MIGRATIONS).files;
+const LAST = FILES[FILES.length - 1];
+const NEXT = LAST.version + 1;
+const pad = (n) => String(n).padStart(3, '0');
 
 /** Tables, columns, constraints, indexes, triggers and functions, as sorted text. */
 async function shape(client) {
@@ -102,11 +106,11 @@ describe('database migrations with a ledger (PostgreSQL)', { skip: skipWithoutSe
     await assert.rejects(migrate(db, { migrationsDir: changed, schemaSql: SCHEMA }), /migration 24 \(024_authorization_insert_state.sql\) was changed after it was applied/);
 
     const removed = copyOfMigrations('removed');
-    rmSync(join(removed, '025_evidence_outcomes.sql'));
-    await assert.rejects(migrate(db, { migrationsDir: removed, schemaSql: SCHEMA }), /migration 25 .* missing from this release/);
+    rmSync(join(removed, LAST.name));
+    await assert.rejects(migrate(db, { migrationsDir: removed, schemaSql: SCHEMA }), new RegExp(`migration ${LAST.version} .* missing from this release`));
 
     const gap = copyOfMigrations('gap');
-    writeFileSync(join(gap, '027_later.sql'), 'SELECT 1;');
+    writeFileSync(join(gap, `${pad(NEXT + 1)}_later.sql`), 'SELECT 1;');
     await assert.rejects(migrate(db, { migrationsDir: gap, schemaSql: SCHEMA }), /leave a gap/);
     assert.equal((await ledger(db)).length, readMigrations(MIGRATIONS).files.length);
   });
@@ -115,15 +119,15 @@ describe('database migrations with a ledger (PostgreSQL)', { skip: skipWithoutSe
     const db = await database({ schema: false });
     await migrate(db, { migrationsDir: MIGRATIONS, schemaSql: SCHEMA });
     const bad = copyOfMigrations('bad');
-    writeFileSync(join(bad, '026_half_done.sql'), 'CREATE TABLE half_done (id int);\nSELECT * FROM table_that_does_not_exist;');
+    writeFileSync(join(bad, `${pad(NEXT)}_half_done.sql`), 'CREATE TABLE half_done (id int);\nSELECT * FROM table_that_does_not_exist;');
     await assert.rejects(migrate(db, { migrationsDir: bad, schemaSql: SCHEMA }), /table_that_does_not_exist/);
     assert.equal((await db.query(`SELECT to_regclass('public.half_done') AS t`)).rows[0].t, null);
-    assert.equal((await ledger(db)).some((r) => r.version === 26), false);
+    assert.equal((await ledger(db)).some((r) => r.version === NEXT), false);
 
-    writeFileSync(join(bad, '026_half_done.sql'), 'CREATE TABLE half_done (id int);');
-    assert.deepEqual((await migrate(db, { migrationsDir: bad, schemaSql: SCHEMA })).applied, [26]);
-    await assert.rejects(db.query(`DELETE FROM schema_migrations WHERE version = 26`), /append-only/);
-    await assert.rejects(db.query(`UPDATE schema_migrations SET checksum = repeat('0', 64) WHERE version = 26`), /append-only/);
+    writeFileSync(join(bad, `${pad(NEXT)}_half_done.sql`), 'CREATE TABLE half_done (id int);');
+    assert.deepEqual((await migrate(db, { migrationsDir: bad, schemaSql: SCHEMA })).applied, [NEXT]);
+    await assert.rejects(db.query(`DELETE FROM schema_migrations WHERE version = ${NEXT}`), /append-only/);
+    await assert.rejects(db.query(`UPDATE schema_migrations SET checksum = repeat('0', 64) WHERE version = ${NEXT}`), /append-only/);
   });
 
   test('two runs at once apply each migration once', async () => {
@@ -143,12 +147,11 @@ describe('database migrations with a ledger (PostgreSQL)', { skip: skipWithoutSe
   test('a schema.sql behind the migrations is refused at a fresh install', async () => {
     const db = await database({ schema: false });
     const ahead = copyOfMigrations('ahead');
-    writeFileSync(join(ahead, '026_new.sql'), 'SELECT 1;');
-    const stale = SCHEMA.replace(/^-- schema-version: \d{3}$/m, '-- schema-version: 027');
-    await assert.rejects(migrate(db, { migrationsDir: ahead, schemaSql: stale }), /states version 27, but the last migration is 26/);
+    writeFileSync(join(ahead, `${pad(NEXT)}_new.sql`), 'SELECT 1;');
+    const stale = SCHEMA.replace(/^-- schema-version: \d{3}$/m, `-- schema-version: ${pad(NEXT + 1)}`);
+    await assert.rejects(migrate(db, { migrationsDir: ahead, schemaSql: stale }), new RegExp(`states version ${NEXT + 1}, but the last migration is ${NEXT}`));
     // An older schema.sql with later migration files is fine: they are applied.
     const result = await migrate(db, { migrationsDir: ahead, schemaSql: SCHEMA });
-    assert.deepEqual(result.applied, [26]);
-    renameSync(join(ahead, '026_new.sql'), join(ahead, '026_new.sql.off'));
+    assert.deepEqual(result.applied, [NEXT]);
   });
 });

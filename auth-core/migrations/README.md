@@ -35,6 +35,7 @@ Run migrations as the table owner. After `scripts/db/roles.sql` has been applied
 | `023_device_replacement_hold.sql` | Table `device_replacements`: bank-requested device replacements with a hold, decided by the enrolled device; lifecycle and no-delete triggers |
 | `024_authorization_insert_state.sql` | `BEFORE INSERT` trigger `authorization_insert_state`: authorizations are created `PENDING_USER` / `PENDING` with nothing confirmed; CHECK on `bank_transaction_state`. Stops, naming the rows, if existing data has an unknown bank transaction state |
 | `025_evidence_outcomes.sql` | Record types `AUTHORIZATION_OUTCOME` and `CREDENTIAL_REVOKED`; table `evidence_outcomes`, filled by triggers on `authorization_requests` and `credentials` in the transaction of the state change and sealed into the chain by the expiry worker; rows are kept and linked to their record once |
+| `026_customer_settings.sql` | Table `customer_settings_versions`: the customer's limits, video-check threshold and channel preferences, versioned and append-only; relaxing changes take effect after a hold |
 
 ## Notes on 009
 

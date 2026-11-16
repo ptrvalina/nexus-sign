@@ -127,6 +127,62 @@ paths:
                   evidenceHead: { allOf: [{ $ref: '#/components/schemas/ChainPosition' }], nullable: true, description: Latest record of the identity's evidence chain; store it to detect later truncation }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /v1/nexus-identities/{nexusId}/suspend:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    post:
+      tags: [Identities]
+      summary: Suspend an identity (lost phone reported to the bank, suspected fraud); open authorizations are cancelled
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, minLength: 1, maxLength: 128 } } } } }
+      responses:
+        '200': { description: Suspended, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [SUSPENDED] } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/nexus-identities/{nexusId}/reactivate:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    post:
+      tags: [Identities]
+      summary: Reactivate a suspended identity after the bank re-identified the customer (method and case reference are audited)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reidentification]
+              additionalProperties: false
+              properties:
+                reidentification:
+                  type: object
+                  required: [method, reference]
+                  properties:
+                    method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
+                    reference: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200': { description: Active, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [ACTIVE] } } } } } }
+        '404': { description: Not found, or not SUSPENDED, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /v1/nexus-identities/{nexusId}/devices:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Identities]
+      summary: The identity's devices, active and revoked
+      responses:
+        '200':
+          description: Devices
+          content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: '#/components/schemas/DeviceSummary' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/nexus-identities/{nexusId}/settings:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Identities]
+      summary: The customer's settings and limits in force, and a relaxing change on hold
+      responses:
+        '200': { description: Settings, content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettingsState' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /v1/nexus-identities/{nexusId}/evidence:
     parameters: [{ $ref: '#/components/parameters/NexusId' }]
     get:
@@ -769,6 +825,110 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /v1/mobile/devices:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's devices ("My devices"), active and revoked, newest first
+      responses:
+        '200':
+          description: Devices
+          content: { application/json: { schema: { type: object, required: [devices], properties: { devices: { type: array, items: { $ref: '#/components/schemas/DeviceSummary' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/history:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The identity's authorizations with how each ended, newest first
+      parameters:
+        - { in: query, name: filter, schema: { type: string, enum: [all, confirmed, declined, open] } }
+        - { in: query, name: before, description: createdAt of the last entry of the previous page, schema: { type: string, format: date-time } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Page of the history
+          content: { application/json: { schema: { type: object, required: [authorizations], properties: { authorizations: { type: array, items: { $ref: '#/components/schemas/HistoryEntry' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/authorizations/{authorizationId}/evidence:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The sealed evidence of one of the customer's authorizations (confirmation or outcome) with the enrolment record of its credential
+      responses:
+        '200':
+          description: Evidence record (schema 3) and the enrolment record it names
+          content: { application/json: { schema: { type: object, required: [record], properties: { record: { type: object }, credentialEnrolment: { type: object, nullable: true } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/security-events:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The identity's security log (enrolments, revocations, replacements, recoveries, suspensions, settings, declines), newest first
+      parameters:
+        - { in: query, name: before, schema: { type: string, format: date-time } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Events
+          content: { application/json: { schema: { type: object, required: [events], properties: { events: { type: array, items: { type: object, required: [eventType, at, actor, details], properties: { eventType: { type: string }, at: { type: string, format: date-time }, actor: { type: string, enum: [BANK, DEVICE, OPERATOR, SYSTEM] }, details: { type: object } } } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/notifications:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Past push messages (event feed); open one with GET /v1/mobile/push-messages/{messageId}
+      parameters:
+        - { in: query, name: before, schema: { type: string, format: date-time } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Notifications
+          content: { application/json: { schema: { type: object, required: [notifications], properties: { notifications: { type: array, items: { type: object, required: [messageId, category, status, createdAt], properties: { messageId: { type: string, format: uuid }, category: { type: string }, authorizationId: { type: string, format: uuid, nullable: true }, status: { type: string }, createdAt: { type: string, format: date-time }, deliveredAt: { type: string, format: date-time, nullable: true } } } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/settings:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's settings in force and a relaxing change still on hold
+      responses:
+        '200': { description: Settings, content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettingsState' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Sets limits, the video-check threshold and channels
+      description: >
+        Tightening applies at once. A change that raises or removes a limit or threshold, or changes the
+        currency, applies after CUSTOMER_SETTINGS_RELAX_HOLD_SECONDS. The bank receives customer.settings_changed.
+        Above perPaymentLimitMinor or the daily limit, POST /v1/authorizations answers 409 CUSTOMER_LIMIT_EXCEEDED;
+        above videoCheckAboveMinor the verification plan requires VIDEO.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettingsInput' } } }
+      responses:
+        '200': { description: The saved version, content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettings' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/identity/suspend:
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer suspends their NEXUS ID; open authorizations are cancelled; the bank reactivates it after re-identification
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, enum: [LOST_DEVICE, SUSPECTED_FRAUD, OTHER] } } } } }
+      responses:
+        '200': { description: Suspended, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [SUSPENDED] } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   /v1/mobile/device-replacements:
     get:
       tags: [Mobile SDK]
@@ -1123,6 +1283,59 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    DeviceSummary:
+      type: object
+      required: [credentialId, platform, securityLevel, attestationStatus, state, enrolledAt, thisDevice]
+      properties:
+        credentialId: { type: string, format: uuid }
+        platform: { type: string }
+        securityLevel: { type: string }
+        attestationStatus: { type: string }
+        state: { type: string, enum: [ACTIVE, REVOKED] }
+        enrolledAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        thisDevice: { type: boolean }
+    HistoryEntry:
+      type: object
+      required: [authorizationId, transactionReference, operationType, amountMinor, currency, beneficiary, state, createdAt, credentialId, evidence]
+      properties:
+        authorizationId: { type: string, format: uuid }
+        transactionReference: { type: string }
+        operationType: { type: string }
+        amountMinor: { type: string }
+        currency: { type: string }
+        beneficiary: { type: object, additionalProperties: { type: string } }
+        state: { type: string }
+        reason: { type: string, nullable: true, description: Outcome reason for a declined, rejected, expired or cancelled authorization }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        credentialId: { type: string, format: uuid }
+        evidence: { type: boolean, description: 'True when a sealed record exists (GET /v1/mobile/authorizations/{id}/evidence)' }
+    CustomerSettingsInput:
+      type: object
+      required: [currency, perPaymentLimitMinor, dailyLimitMinor, videoCheckAboveMinor, channels]
+      additionalProperties: false
+      properties:
+        currency: { type: string, pattern: '^[A-Z]{3}$', nullable: true }
+        perPaymentLimitMinor: { type: string, pattern: '^(0|[1-9][0-9]{0,29})$', nullable: true }
+        dailyLimitMinor: { type: string, pattern: '^(0|[1-9][0-9]{0,29})$', nullable: true }
+        videoCheckAboveMinor: { type: string, pattern: '^(0|[1-9][0-9]{0,29})$', nullable: true }
+        channels:
+          type: object
+          required: [push, audio, video]
+          properties: { push: { type: boolean, enum: [true] }, audio: { type: boolean }, video: { type: boolean } }
+    CustomerSettings:
+      allOf:
+        - { $ref: '#/components/schemas/CustomerSettingsInput' }
+        - type: object
+          required: [version, effectiveAt]
+          properties: { version: { type: integer }, effectiveAt: { type: string, format: date-time } }
+    CustomerSettingsState:
+      type: object
+      required: [current]
+      properties:
+        current: { $ref: '#/components/schemas/CustomerSettings' }
+        pending: { allOf: [{ $ref: '#/components/schemas/CustomerSettings' }], nullable: true }
     CreatedIdentity:
       type: object
       required: [nexusId, status, createdAt, replayed]

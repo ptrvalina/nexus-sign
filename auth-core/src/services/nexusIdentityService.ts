@@ -109,8 +109,8 @@ function map(row: IdentityRow): NexusIdentityRecord {
 
 /** Suspends an identity: open authorizations are cancelled, and signing,
  * mobile sessions and recovery are refused until it is reactivated. */
-export async function suspendNexusIdentity(nexusId: string, reason: string, actor?: string): Promise<void> {
-  await withTransaction(async (client) => {
+export async function suspendNexusIdentity(nexusId: string, reason: string, actor?: string, tx?: PoolClient): Promise<void> {
+  await inTransaction(tx, async (client) => {
     const result = await client.query(`UPDATE nexus_identities SET status='SUSPENDED', updated_at=now() WHERE nexus_id=$1 AND status='ACTIVE'`, [nexusId]);
     if (result.rowCount === 0) throw new NexusIdentityNotFoundError(nexusId);
     await setOutcomeReason(client, 'IDENTITY_SUSPENDED');

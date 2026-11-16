@@ -120,6 +120,8 @@ const envSchema = z.object({
   DEVICE_NONCE_STORE: z.enum(['postgres', 'redis']).default('postgres'),
   /** Hold before a bank-requested device replacement may enrol, unless the
    * customer approves it from the enrolled device (deviceReplacementService). */
+  /** Delay before a customer's change that relaxes their own limits takes effect (tightening is immediate). */
+  CUSTOMER_SETTINGS_RELAX_HOLD_SECONDS: z.coerce.number().int().min(0).max(30 * 24 * 3600).default(24 * 3600),
   DEVICE_REPLACEMENT_HOLD_SECONDS: z.coerce.number().int().min(0).max(30 * 24 * 3600).default(24 * 3600),
   /** Highest amount, per currency, that may be confirmed with an
    * offline code, e.g. `PLN:100000,EUR:20000` (minor units). The offline code

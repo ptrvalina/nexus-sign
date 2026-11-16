@@ -19,6 +19,7 @@ import {
 import { mapAuthorization, type AuthorizationRecord, type AuthorizationRow } from './authorizationRecord';
 import { getPushMessageForClient, queueAuthorizationPush, type PushMessageRecord } from './pushService';
 import { ConflictError, ValidationError } from './errors';
+import { applyCustomerLimits } from './customerAccountService';
 
 const DEFAULT_TTL_SECONDS = 120;
 
@@ -96,6 +97,9 @@ export async function createAuthorization(input: CreateAuthorizationInput, clien
 
   try {
     return await withTransaction(async (tx) => {
+      // The customer's own limits and video-check threshold, with the identity
+      // row locked so concurrent payments are counted against the daily limit.
+      const customer = await applyCustomerLimits(tx, input.nexusId, input.amountMinor, input.currency);
       const inserted = await tx.query<AuthorizationRow>(
         `INSERT INTO authorization_requests (
           authorization_id, client_id, nexus_id, credential_id, transaction_reference,
@@ -112,6 +116,7 @@ export async function createAuthorization(input: CreateAuthorizationInput, clien
       // authorization without a plan could never be signed.
       const plan = await createVerificationPlan({
         ...(input.verificationPolicy ?? {}),
+        ...(customer.requireVideo ? { requireVideo: true } : {}),
         authorizationId,
         nexusId: input.nexusId,
         clientId,

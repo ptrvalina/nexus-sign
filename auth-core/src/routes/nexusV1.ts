@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth';
-import { createNexusIdentity, getNexusIdentityForClient } from '../services/nexusIdentityService';
+import { createNexusIdentity, getNexusIdentityForClient, reactivateNexusIdentity, suspendNexusIdentity } from '../services/nexusIdentityService';
+import { getSettings, listDevices } from '../services/customerAccountService';
 import { getCredentialForClient, revokeCredentialForClient } from '../services/credentialService';
 import { createAuthorization } from '../services/authorizationService';
 import { getAuthorizationForClient } from '../services/authorizationRecord';
@@ -121,6 +122,45 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
         lastUsedAt: identity.lastUsedAt?.toISOString() ?? null,
         evidenceHead: await getChainHead(pool, identity.nexusId),
       });
+    } catch (e) { next(e); }
+  });
+
+  // --- Suspension by the bank (lost phone reported by phone, fraud) ---
+
+  router.post('/v1/nexus-identities/:nexusId/suspend', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      const body = z.object({ reason: z.string().min(1).max(128) }).strict().parse(req.body);
+      await suspendNexusIdentity(identity.nexusId, `BANK:${body.reason}`, `bank:${clientIdOf(req)}`);
+      res.json({ nexusId: identity.nexusId, status: 'SUSPENDED' });
+    } catch (e) { next(e); }
+  });
+
+  /** After the bank re-identified the customer (method and the bank's case reference are audited). */
+  router.post('/v1/nexus-identities/:nexusId/reactivate', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      const body = z.object({
+        reidentification: z.object({ method: z.enum(['BRANCH_VISIT', 'VIDEO_IDENTIFICATION', 'IN_APP_STRONG_AUTHENTICATION', 'OTHER']), reference: z.string().min(1).max(128) }).strict(),
+      }).strict().parse(req.body);
+      await reactivateNexusIdentity(identity.nexusId, `BANK:${body.reidentification.method}:${body.reidentification.reference}`, `bank:${clientIdOf(req)}`);
+      res.json({ nexusId: identity.nexusId, status: 'ACTIVE' });
+    } catch (e) { next(e); }
+  });
+
+  /** The identity's devices, for the bank's support and console. */
+  router.get('/v1/nexus-identities/:nexusId/devices', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      res.json({ devices: await listDevices(identity.nexusId, '') });
+    } catch (e) { next(e); }
+  });
+
+  /** The customer's settings and limits (the bank applies its own on top). */
+  router.get('/v1/nexus-identities/:nexusId/settings', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      res.json(await getSettings(identity.nexusId));
     } catch (e) { next(e); }
   });
 

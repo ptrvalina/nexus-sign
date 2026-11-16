@@ -3,6 +3,7 @@ export type KeyAlgorithm = 'ES256';
 export type AuditEventType =
   | 'identity_created'
   | 'identity_suspended'
+  | 'customer_settings_changed'
   | 'identity_reactivated'
   | 'identity_revoked'
   | 'credential_created'
