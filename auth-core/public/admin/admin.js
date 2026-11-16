@@ -315,7 +315,7 @@ async function loadStats() {
 }
 
 async function loadEverything() {
-  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries(), loadCalls(), loadConversations()]);
+  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries(), loadCalls(), loadConversations(), ...(typeof loadCustomerCalls === 'function' ? [loadCustomerCalls()] : [])]);
 }
 
 function reportError(error) {

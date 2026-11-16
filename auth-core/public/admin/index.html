@@ -136,6 +136,29 @@
     </div>
   </section>
 
+  <section id="customer-calls-section">
+    <div class="section-header">
+      <h2>Calls from customers</h2>
+      <button class="ghost" id="customer-calls-refresh-btn">Refresh</button>
+    </div>
+    <div class="body">
+      <div id="customer-calls-table"></div>
+      <div id="ccall-active" style="display:none; margin-top:12px;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;">
+          <video id="ccall-remote" autoplay playsinline style="width:360px; max-width:100%; background:#000; border-radius:6px;"></video>
+          <video id="ccall-local" autoplay playsinline muted style="width:160px; background:#000; border-radius:6px;"></video>
+          <audio id="ccall-remote-audio" autoplay></audio>
+          <div style="flex:1; min-width:240px;">
+            <div id="ccall-title" style="font-weight:600"></div>
+            <div style="margin-top:10px;"><span class="badge PENDING" id="ccall-indicators">Camera and microphone off</span> <span class="muted" id="ccall-state"></span></div>
+            <div class="identity-actions"><button class="ghost" id="ccall-hangup-btn">Hang up</button></div>
+            <div class="muted" style="margin-top:8px; font-size:12px;">Nothing of the call is recorded; the call's record (who, when, how it ended) and your username are kept.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="calls-section">
     <div class="section-header">
       <h2>Verification calls</h2>
@@ -237,5 +260,6 @@
 <script src="/admin/calls.js"></script>
 <script src="/admin/conversations.js"></script>
 <script src="/admin/customer.js"></script>
+<script src="/admin/customer-calls.js"></script>
 </body>
 </html>

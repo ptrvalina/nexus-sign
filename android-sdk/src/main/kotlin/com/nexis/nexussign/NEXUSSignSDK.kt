@@ -640,6 +640,33 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     suspend fun requestAgent(conversationId: String): NexusConversation =
         parse(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/handover"))
 
+    // Calls the customer starts ("talk to the bank")
+
+    /**
+     * Asks the bank for a call; it waits for an operator of the bank. Use
+     * [customerCallSignalling] with the call engine as for a verification
+     * call. Refused with 409 `CALL_CHANNEL_NOT_ENABLED` when the bank does
+     * not take calls on that channel, `CALL_ALREADY_OPEN` when one is open.
+     */
+    suspend fun requestBankCall(channel: VerificationChannel, topic: String, conversationId: String? = null): NexusCustomerCall {
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        return parse<CustomerCallJoin>(networkClient.deviceCall("POST", "/v1/mobile/customer-calls", buildJsonObject {
+            put("channel", channel.name); put("topic", topic)
+            conversationId?.let { put("conversationId", requireId(it, "conversation ID")) }
+        })).call
+    }
+
+    suspend fun bankCalls(): List<NexusCustomerCall> = parse<CustomerCallList>(networkClient.deviceCall("GET", "/v1/mobile/customer-calls")).calls
+
+    suspend fun bankCall(callId: String): NexusCustomerCall =
+        parse<CustomerCallJoin>(networkClient.deviceCall("GET", "/v1/mobile/customer-calls/${requireId(callId, "call ID")}")).call
+
+    /** Device-signed signalling of a call this device asked for. */
+    fun customerCallSignalling(call: NexusCustomerCall): CallSignalling {
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        return CustomerCallSignalling(requireId(call.callId, "call ID"), networkClient)
+    }
+
     suspend fun closeConversation(conversationId: String): NexusConversation =
         parse(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/close"))
 

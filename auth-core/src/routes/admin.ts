@@ -15,6 +15,7 @@ import { assertClaimedBy, claimCall, listCalls, operatorSignal, operatorSignals,
 import { recordOperatorDecision } from '../services/adaptiveVerificationService';
 import { consoleCancelDeviceRequest, consoleDevices, consoleMandate, consoleMandateAction, consoleMandates, consoleRevokeDevice } from '../services/bankConsoleService';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
+import * as customerCalls from '../services/customerCallService';
 
 const loginSchema = z.object({
   username: z.string().min(1).max(64),
@@ -274,6 +275,31 @@ export function buildAdminRouter(options: { cookieSecure: boolean; hsm: HsmAdapt
     try {
       res.status(200).json(await consoleCancelDeviceRequest(sessionOf(req as AdminRequest), nexusParam.parse(req.params.nexusId), uuidSchema.parse(req.params.requestId)));
     } catch (error) { next(error); }
+  });
+
+  // --- Calls the customer started (operators of the bank) ---
+  const callOperator = (req: Request) => ({ username: sessionOf(req as AdminRequest).username, clientId: sessionOf(req as AdminRequest).clientId });
+  router.get('/admin/api/customer-calls', requireRole('operator'), async (req, res, next) => {
+    try { res.status(200).json({ calls: await customerCalls.operatorCallQueue(callOperator(req)) }); } catch (error) { next(error); }
+  });
+  router.post('/admin/api/customer-calls/:callId/answer', requireRole('operator'), async (req, res, next) => {
+    try { res.status(200).json(await customerCalls.operatorAnswer(callOperator(req), uuidSchema.parse(req.params.callId))); } catch (error) { next(error); }
+  });
+  router.post('/admin/api/customer-calls/:callId/signals', requireRole('operator'), async (req, res, next) => {
+    try {
+      const body = z.object({ type: z.string(), payload: z.unknown().optional(), messageId: z.string().uuid().optional() }).strict().parse(req.body);
+      const sent = await customerCalls.operatorSignal(callOperator(req), uuidSchema.parse(req.params.callId), body.type, body.payload ?? null, body.messageId);
+      res.status(sent.duplicate ? 200 : 201).json(sent);
+    } catch (error) { next(error); }
+  });
+  router.get('/admin/api/customer-calls/:callId/signals', requireRole('operator'), async (req, res, next) => {
+    try {
+      const query = z.object({ after: z.coerce.number().int().nonnegative().default(0), waitMs: z.coerce.number().int().min(0).max(20_000).default(0) }).parse(req.query);
+      res.status(200).json(await customerCalls.operatorSignals(callOperator(req), uuidSchema.parse(req.params.callId), query.after, query.waitMs));
+    } catch (error) { next(error); }
+  });
+  router.post('/admin/api/customer-calls/:callId/end', requireRole('operator'), async (req, res, next) => {
+    try { res.status(200).json(await customerCalls.operatorEnd(callOperator(req), uuidSchema.parse(req.params.callId))); } catch (error) { next(error); }
   });
 
   // --- Conversations handed over to a person (operators of the bank) ---

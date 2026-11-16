@@ -23,6 +23,7 @@ import { buildAttestationBinding } from '../services/attestationBinding';
 import { registerPushDevice, unregisterPushDevice, type DeviceContext } from '../services/pushRegistrationService';
 import { getPushEnvelopeForDevice, recordPushReceipt } from '../services/pushService';
 import { deviceCancel, deviceJoin, deviceSignal, deviceSignals } from '../services/verificationCall';
+import * as customerCalls from '../services/customerCallService';
 import { byIp, loginThrottle } from '../middleware/bruteForceProtection';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../services/errors';
 import { declineAuthorization } from '../services/authorizationDecline';
@@ -422,6 +423,37 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
 
   const conversationParam = z.string().uuid();
   const attachmentSchema = z.object({ reference: z.string(), sha256: z.string(), mediaType: z.string(), fileName: z.string(), sizeBytes: z.number().int() }).strict().nullable().optional();
+
+  // --- Calls the customer starts (customerCallService.ts) ---
+  const callParam = z.string().uuid();
+  router.get('/v1/mobile/customer-calls', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json({ calls: await customerCalls.listDeviceCalls(await callDevice(req)) }); } catch (e) { next(e); }
+  });
+  router.post('/v1/mobile/customer-calls', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ channel: z.enum(['AUDIO', 'VIDEO']), topic: z.string().min(1).max(200), conversationId: z.string().uuid().nullable().optional() }).strict().parse(req.body);
+      res.status(201).json(await customerCalls.requestCustomerCall(await callDevice(req), body));
+    } catch (e) { next(e); }
+  });
+  router.get('/v1/mobile/customer-calls/:callId', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerCalls.deviceCallState(callParam.parse(req.params.callId), await callDevice(req))); } catch (e) { next(e); }
+  });
+  router.post('/v1/mobile/customer-calls/:callId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ type: z.string(), payload: z.unknown().optional(), messageId: z.string().uuid().optional() }).strict().parse(req.body);
+      const sent = await customerCalls.deviceSignal(callParam.parse(req.params.callId), await callDevice(req), body.type, body.payload ?? null, body.messageId);
+      res.status(sent.duplicate ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+  router.get('/v1/mobile/customer-calls/:callId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const query = z.object({ after: z.coerce.number().int().nonnegative().default(0), waitMs: z.coerce.number().int().min(0).max(20_000).default(0) }).parse(req.query);
+      res.json(await customerCalls.deviceSignals(callParam.parse(req.params.callId), await callDevice(req), query.after, query.waitMs));
+    } catch (e) { next(e); }
+  });
+  router.post('/v1/mobile/customer-calls/:callId/end', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerCalls.deviceEnd(callParam.parse(req.params.callId), await callDevice(req))); } catch (e) { next(e); }
+  });
 
   router.get('/v1/mobile/conversations', async (req: MobileAuthenticatedRequest, res, next) => {
     try { res.json({ conversations: await listCustomerConversations((await deviceInScope(req)).nexusId) }); } catch (e) { next(e); }

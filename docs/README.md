@@ -27,6 +27,7 @@
 - [Lifecycle state machines](architecture/state-machines.md): authorization, bank transaction, credential and identity transitions enforced by the database
 - [Device replacement](architecture/device-replacement.md): moving an enrolled identity to a new device with the bank's replacement authorization
 - [Conversations with the bank](architecture/customer-conversations.md): chat, the bank's bot and the handover to an operator
+- [Calls the customer starts](architecture/customer-calls.md)
 - [Bank trust boundary](architecture/bank-trust-boundary.md) and [payment state machine](architecture/payment-state-machine.md): what the bank verifies before it executes a payment
 - [Architecture decision records](adr/README.md), including [0016](adr/0016-remove-compatibility-paths.md) removal of compatibility paths and unused schema
 

@@ -149,6 +149,23 @@ final class NetworkClient {
         _ = try await perform("POST", "/v1/mobile/verification-sessions/\(sessionID)/cancel", body: [:], token: .device)
     }
 
+    // Calls the customer starts ("talk to the bank"): same signalling, own routes.
+    func joinCustomerCall(callID: String) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/customer-calls/\(callID)")
+    }
+
+    func sendCustomerCallSignal(callID: String, body: [String: Any]) async throws {
+        _ = try await perform("POST", "/v1/mobile/customer-calls/\(callID)/signals", body: body, token: .device)
+    }
+
+    func receiveCustomerCallSignals(callID: String, after: Int64, waitMilliseconds: Int) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/customer-calls/\(callID)/signals?after=\(after)&waitMs=\(waitMilliseconds)")
+    }
+
+    func endCustomerCall(callID: String) async throws {
+        _ = try await perform("POST", "/v1/mobile/customer-calls/\(callID)/end", body: [:], token: .device)
+    }
+
     func declineAuthorization(authorizationID: String, reason: NexusDeclineReason) async throws {
         _ = try await perform("POST", "/v1/mobile/authorizations/\(authorizationID)/decline", body: ["reason": reason.rawValue], token: .device)
     }

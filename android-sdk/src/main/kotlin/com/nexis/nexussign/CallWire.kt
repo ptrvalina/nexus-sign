@@ -67,19 +67,24 @@ internal object CallWire {
         operatorJoined = (body["operatorJoined"] as? JsonPrimitive)?.content == "true",
     )
 
+    /** `GET /v1/mobile/customer-calls/{id}`: `{call, iceServers}`. The operator has joined once the call is CONNECTED. */
+    fun decodeCustomerCallJoin(body: JsonObject): VerificationCallInfo {
+        val call = body["call"] as? JsonObject ?: invalid()
+        val state = call.string("state")
+        if (state != "WAITING" && state != "CONNECTED") throw NEXUSSignError.ServerError(409, "The call is $state")
+        return decodeJoin(buildJsonObject {
+            put("sessionId", call.string("callId") ?: invalid())
+            put("channel", call.string("channel") ?: invalid())
+            put("expiresAt", call.string("expiresAt") ?: invalid())
+            body["iceServers"]?.let { put("iceServers", it) }
+            put("operatorJoined", state == "CONNECTED")
+        })
+    }
+
     private fun channel(value: String?) = VerificationChannel.entries.firstOrNull { it.name == value } ?: invalid()
     private fun instant(value: String?) = runCatching { Instant.parse(value) }.getOrNull() ?: invalid()
     private fun invalid(): Nothing = throw NEXUSSignError.ServerError(200, "Unexpected response format")
 
     private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
     private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.content?.toLongOrNull()
-}
-
-/** [CallSignalling] over device-signed requests to Auth Core. */
-internal class DeviceCallSignalling(override val sessionId: String, private val network: NetworkClient) : CallSignalling {
-    override suspend fun join(): VerificationCallInfo = CallWire.decodeJoin(network.joinCall(sessionId))
-    override suspend fun send(message: CallMessage, messageId: String) = network.sendCallSignal(sessionId, CallWire.encode(message, messageId))
-    override suspend fun receive(after: Long, waitMillis: Long): SignalBatch =
-        CallWire.decodeBatch(network.receiveCallSignals(sessionId, after, waitMillis.coerceAtMost(network.callPollWaitMillis)), after)
-    override suspend fun cancel() = network.cancelCall(sessionId)
 }

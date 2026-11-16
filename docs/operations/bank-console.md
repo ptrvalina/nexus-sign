@@ -37,4 +37,4 @@ The device limit is a setting of the bank client (`bank_clients.max_devices_per_
 
 ## Not verified
 
-These screens were checked by the PostgreSQL service tests and a JavaScript syntax check. The HTTP routes and the screen in a browser were not run in the review environment (no `express`); CI job `auth-core / integration` and a manual look at the console are needed.
+The services were checked by the PostgreSQL tests. The screen was rendered in Chromium against a stubbed API (escaping, which buttons appear for which state and role); it has not been used against a running Auth Core. The HTTP routes were not run in the review environment (no `express`); CI job `auth-core / integration` and a look at the console on a test system are needed.

@@ -5,6 +5,7 @@ import { expireUnsignedOfflineConfirmations } from '../services/authorizationCon
 import { sealPendingOutcomes, unsealedOutcomes } from '../services/evidenceService';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { expireMandates } from '../services/mandateService';
+import { expireCustomerCalls } from '../services/customerCallService';
 
 /** An outcome not sealed after this long is reported on every sweep. */
 const UNSEALED_WARNING_SECONDS = 300;
@@ -38,6 +39,9 @@ export function startExpiryWorker(logger: Logger, hsm: HsmAdapter): ExpiryWorker
         // Mandate offers nobody signed and mandates past their validity.
         const mandates = await expireMandates(hsm);
         if (mandates > 0) logger.info({ count: mandates }, 'Expired payment mandates');
+        // Calls nobody answered, calls past their longest duration, and calls of a revoked device or suspended identity.
+        const calls = await expireCustomerCalls();
+        if (calls > 0) logger.info({ count: calls }, 'Closed customer calls');
         // Outcomes the state changes above (and every other path) recorded
         // are sealed into the evidence chains (audit finding B-04).
         const outcomes = await sealPendingOutcomes(hsm);

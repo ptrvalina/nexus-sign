@@ -40,9 +40,14 @@ jobs:
         run: npm run build
       - name: Unit tests, protocol vectors, OpenAPI routes, repository hygiene
         run: npm run check:all
-      - name: OpenAPI contract parses
+      # Structure of the documents themselves ($refs, path parameters, valid
+      # schemas); check:all compares only the routes. PyYAML and jsonschema
+      # come from the Ubuntu archive, not from PyPI.
+      - name: OpenAPI documents are structurally valid
         run: |
-          python3 -c "import yaml; d = yaml.safe_load(open('openapi.yaml')); assert d['openapi'] == '3.0.3' and d['paths'], 'invalid OpenAPI document'"
+          sudo apt-get install -y --no-install-recommends python3-yaml python3-jsonschema
+          python3 scripts/validate-openapi.py openapi.yaml
+          python3 scripts/validate-openapi.py ../sandbox/openapi.yaml
 
   auth-core-integration:
     name: auth-core / integration (PostgreSQL, Redis, SoftHSM)

@@ -4,6 +4,7 @@ import type { AuthenticatedRequest } from '../middleware/auth';
 import { createNexusIdentity, getNexusIdentityForClient, reactivateNexusIdentity, suspendNexusIdentity } from '../services/nexusIdentityService';
 import { getSettings, listDevices } from '../services/customerAccountService';
 import { bankClose, bankConversation, botSend, verifyConversation } from '../services/conversationService';
+import { bankCall } from '../services/customerCallService';
 import { createMandate, getMandateForClient, listMandatesForIdentity, requestMandateDebit, withdrawMandate } from '../services/mandateService';
 import { getCredentialForClient, revokeCredentialForClient } from '../services/credentialService';
 import { createAuthorization } from '../services/authorizationService';
@@ -128,6 +129,11 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
   });
 
   // --- Conversations: the bank's bot answers and hands over ---
+
+  // --- Calls the customer started (state for reconciliation; events arrive by webhook) ---
+  router.get('/v1/customer-calls/:callId', async (req: AuthenticatedRequest, res, next) => {
+    try { res.json(await bankCall(clientIdOf(req), z.string().uuid().parse(req.params.callId))); } catch (e) { next(e); }
+  });
 
   router.get('/v1/conversations/:conversationId', async (req: AuthenticatedRequest, res, next) => {
     try {

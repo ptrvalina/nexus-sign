@@ -142,6 +142,30 @@ public struct NexusConversationAttachment: Codable, Equatable {
     }
 }
 
+/// A call the customer started from the app ("talk to the bank").
+public struct NexusCustomerCall: Decodable, Equatable {
+    public let callId: String
+    public let nexusId: String
+    public let credentialId: String
+    /// AUDIO or VIDEO.
+    public let channel: String
+    public let topic: String
+    public let conversationId: String?
+    /// WAITING, CONNECTED, ENDED, CANCELLED or MISSED.
+    public let state: String
+    public let operator: String?
+    public let createdAt: String
+    public let expiresAt: String
+    public let answeredAt: String?
+    public let endedAt: String?
+    public let endedBy: String?
+    /// cancelled, hung_up, operator_ended, no_operator_answered, max_duration, credential_revoked, identity_not_active.
+    public let endReason: String?
+}
+
+struct CustomerCallList: Decodable { let calls: [NexusCustomerCall] }
+struct CustomerCallJoin: Decodable { let call: NexusCustomerCall }
+
 public struct NexusConversation: Decodable, Equatable {
     public let conversationId: String
     public let nexusId: String

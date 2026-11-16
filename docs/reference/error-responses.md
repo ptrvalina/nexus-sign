@@ -79,6 +79,10 @@ A path that matches no route returns 401 without a bank token and the framework'
 | `CONVERSATION_NOT_WITH_BOT` | `POST /v1/conversations/{id}/bot-messages` | A person has taken over or the conversation waits for one; the bot no longer answers | Do not answer from the bot |
 | `CONVERSATION_NOT_WAITING` | `POST /admin/api/conversations/{id}/claim` | The conversation is not waiting for an operator | Refresh the queue |
 | `CONVERSATION_NOT_ASSIGNED` | Operator answer, release or close | Another operator took the conversation | Refresh the queue |
+| `CALL_CHANNEL_NOT_ENABLED` | `POST /v1/mobile/customer-calls` | The bank does not take calls from the app on this channel ([customer calls](../architecture/customer-calls.md)) | The app offers the channels the bank takes, or a conversation |
+| `CALL_ALREADY_OPEN` | `POST /v1/mobile/customer-calls` | The customer already has a call waiting or connected | Rejoin or end that call |
+| `CALL_NOT_OPEN` | Signals or end of a customer call | The call ended, was cancelled or was missed | None; ask for a new call |
+| `CALL_NOT_WAITING` | `POST /admin/api/customer-calls/{id}/answer`, operator signals | Another operator answered, the call is no longer waiting, or the operator has not answered it | Refresh the queue |
 | `MESSAGE_ID_REUSED` | Sending a message | The `clientMessageId` was used before for another text | Use a new id for a new message |
 | `MANDATE_REFERENCE_EXISTS` | `POST /v1/mandates` | The bank client already has a mandate with this `mandateReference` | Use a new reference; changed terms are a new mandate |
 | `MANDATE_NOT_PENDING` | `POST /v1/mobile/mandates/{id}/signature` | The mandate is no longer waiting for a signature | Handled by the SDK: refresh the mandate |

@@ -94,6 +94,34 @@ data class NexusMandate(
 @Serializable
 data class NexusConversationAttachment(val reference: String, val sha256: String, val mediaType: String, val fileName: String, val sizeBytes: Int)
 
+/** A call the customer started from the app ("talk to the bank"). */
+@Serializable
+data class NexusCustomerCall(
+    val callId: String,
+    val nexusId: String,
+    val credentialId: String,
+    /** AUDIO or VIDEO. */
+    val channel: String,
+    val topic: String,
+    val conversationId: String? = null,
+    /** WAITING, CONNECTED, ENDED, CANCELLED or MISSED. */
+    val state: String,
+    val operator: String? = null,
+    val createdAt: String,
+    val expiresAt: String,
+    val answeredAt: String? = null,
+    val endedAt: String? = null,
+    val endedBy: String? = null,
+    /** cancelled, hung_up, operator_ended, no_operator_answered, max_duration, credential_revoked, identity_not_active. */
+    val endReason: String? = null,
+)
+
+@Serializable
+internal data class CustomerCallList(val calls: List<NexusCustomerCall>)
+
+@Serializable
+internal data class CustomerCallJoin(val call: NexusCustomerCall)
+
 @Serializable
 data class NexusConversation(
     val conversationId: String,

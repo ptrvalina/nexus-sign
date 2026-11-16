@@ -58,14 +58,19 @@ interface CallRow {
   expires_at: Date; credential_id: string | null; auth_state: string; auth_expires_at: Date; credential_state: string | null;
 }
 
+/** A call's signalling keys: `vcall` for verification calls, `ccall` for
+ * calls the customer starts (customerCallService.ts). */
+export type CallPrefix = 'vcall' | 'ccall';
+
 // One hash tag per call: the keys of a call are in one Redis Cluster slot,
 // as the append script needs.
-const keys = (sessionId: string) => ({
-  seq: `vcall:{${sessionId}}:seq`,
-  operator: `vcall:{${sessionId}}:operator`,
-  state: `vcall:{${sessionId}}:state`,
-  inbox: (role: CallRole) => `vcall:{${sessionId}}:to:${role}`,
+export const callKeys = (sessionId: string, prefix: CallPrefix = 'vcall') => ({
+  seq: `${prefix}:{${sessionId}}:seq`,
+  operator: `${prefix}:{${sessionId}}:operator`,
+  state: `${prefix}:{${sessionId}}:state`,
+  inbox: (role: CallRole) => `${prefix}:{${sessionId}}:to:${role}`,
 });
+const keys = (sessionId: string) => callKeys(sessionId);
 
 async function loadCall(sessionId: string): Promise<CallRow> {
   const result = await pool.query<CallRow>(
@@ -100,9 +105,10 @@ function assertOpen(row: CallRow): void {
 
 /** Milliseconds the call keys live: until the session expires, plus a minute
  * so the last signals (bye) can still be read. */
-function keyLifetimeMs(row: CallRow): number {
-  return Math.max(1_000, row.expires_at.getTime() - Date.now() + 60_000);
+export function signalLifetimeMs(expiresAt: Date): number {
+  return Math.max(1_000, expiresAt.getTime() - Date.now() + 60_000);
 }
+const keyLifetimeMs = (row: CallRow): number => signalLifetimeMs(row.expires_at);
 
 /**
  * STUN and TURN servers for one session. TURN credentials follow the TURN
@@ -203,7 +209,7 @@ export async function claimCall(sessionId: string, operator: OperatorIdentity): 
   };
 }
 
-function validateSignal(type: string, payload: unknown): SignalType {
+export function validateSignal(type: string, payload: unknown): SignalType {
   if (!(SIGNAL_TYPES as readonly string[]).includes(type)) throw new ValidationError('type must be offer, answer, candidate or bye');
   const size = JSON.stringify(payload ?? null).length;
   if ((type === 'offer' || type === 'answer')) {
@@ -273,14 +279,19 @@ const APPEND_ERRORS: Record<string, () => Error> = {
   ERR_LIMIT: () => new ConflictError('Too many signalling messages for this call'),
 };
 
-async function append(row: CallRow, from: SignalSender, type: SignalType, payload: unknown, messageId?: string): Promise<{ seq: number; duplicate: boolean }> {
-  const k = keys(row.session_id);
+/** Appends one signal to a call's inboxes under the signalling rules above. */
+export async function appendSignal(prefix: CallPrefix, callId: string, expiresAt: Date, from: SignalSender, type: SignalType, payload: unknown,
+  messageId?: string): Promise<{ seq: number; duplicate: boolean }> {
+  const k = callKeys(callId, prefix);
   const body = JSON.stringify({ from, type, payload, at: new Date().toISOString() });
   const result = await redis.eval(APPEND_SCRIPT, 4, k.seq, k.state, k.inbox('device'), k.inbox('operator'),
-    from, type, messageId ?? '', body, String(keyLifetimeMs(row)), String(MAX_SIGNALS_PER_DIRECTION)) as [number, number] | string;
+    from, type, messageId ?? '', body, String(signalLifetimeMs(expiresAt)), String(MAX_SIGNALS_PER_DIRECTION)) as [number, number] | string;
   if (typeof result === 'string') throw (APPEND_ERRORS[result] ?? (() => new ConflictError(result)))();
   return { seq: Number(result[0]), duplicate: Number(result[1]) === 1 };
 }
+
+const append = (row: CallRow, from: SignalSender, type: SignalType, payload: unknown, messageId?: string) =>
+  appendSignal('vcall', row.session_id, row.expires_at, from, type, payload, messageId);
 
 /** Relays one bye from `server` when the session or authorization has been
  * closed, at most once per call. */
@@ -298,14 +309,20 @@ const CLOSURE_CHECK_MS = 2_000;
  * for the first one (long poll). Checks every few seconds whether the call
  * has been closed elsewhere, and relays that as a bye. */
 async function read(sessionId: string, role: CallRole, after: number, waitMs: number): Promise<{ signals: Signal[]; next: number }> {
+  return readSignals('vcall', sessionId, role, after, waitMs, () => relayClosure(sessionId));
+}
+
+/** Long-polls a call's inbox; `checkClosed` runs every few seconds and may relay a server bye. */
+export async function readSignals(prefix: CallPrefix, callId: string, role: CallRole, after: number, waitMs: number,
+  checkClosed: () => Promise<void>): Promise<{ signals: Signal[]; next: number }> {
   const deadline = Date.now() + Math.min(Math.max(waitMs, 0), MAX_WAIT_MS);
   let nextClosureCheck = 0;
   for (;;) {
     if (Date.now() >= nextClosureCheck) {
-      await relayClosure(sessionId);
+      await checkClosed();
       nextClosureCheck = Date.now() + CLOSURE_CHECK_MS;
     }
-    const raw = await redis.lrange(keys(sessionId).inbox(role), 0, -1);
+    const raw = await redis.lrange(callKeys(callId, prefix).inbox(role), 0, -1);
     const signals = raw.map((s) => JSON.parse(s) as Signal).filter((s) => s.seq > after);
     if (signals.length > 0 || Date.now() >= deadline) return { signals, next: signals.at(-1)?.seq ?? after };
     await new Promise((resolve) => setTimeout(resolve, POLL_STEP_MS));

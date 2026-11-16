@@ -165,6 +165,17 @@ paths:
         '200': { description: Active, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [ACTIVE] } } } } } }
         '404': { description: Not found, or not SUSPENDED, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /v1/customer-calls/{callId}:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Conversations]
+      summary: State of a call a customer of this bank started (for reconciliation; events arrive as webhooks customer_call.requested, .answered, .ended)
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCall' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /v1/conversations/{conversationId}:
     parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
     get:
@@ -219,6 +230,91 @@ paths:
         '200':
           description: OK
           content: { application/json: { schema: { type: object, required: [intact, problems], properties: { intact: { type: boolean }, problems: { type: array, items: { type: string } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/customer-calls:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's calls with the bank, newest first
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [calls], properties: { calls: { type: array, items: { $ref: '#/components/schemas/CustomerCall' } } } } } }
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer asks to talk to the bank by audio or video; the call waits for an operator of the bank
+      description: 'Only on a channel the bank enabled (409 `CALL_CHANNEL_NOT_ENABLED`); one open call per NEXUS ID (409 `CALL_ALREADY_OPEN`). The bank receives `customer_call.requested`. Unanswered after `CUSTOMER_CALL_WAIT_SECONDS` the call ends `MISSED`.'
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [channel, topic], properties: { channel: { type: string, enum: [AUDIO, VIDEO] }, topic: { type: string, minLength: 1, maxLength: 200 }, conversationId: { type: string, format: uuid, nullable: true } } } } }
+      responses:
+        '201':
+          description: The call is waiting for an operator
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCallJoin' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/customer-calls/{callId}:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: State of a call this device asked for, and the ICE servers while it is open
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCallJoin' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/customer-calls/{callId}/signals:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Send a WebRTC signalling message to the operator (the offer may be sent while the call waits)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalRequest' } } }
+      responses:
+        '201': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '200': { description: 'A message with this messageId was already accepted; nothing is relayed again', content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 'The call is not open (`CALL_NOT_OPEN`), or the message breaks the signalling order', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Signalling messages from the operator, and a `bye` from `server` when the call ends (long poll)
+      parameters:
+        - { in: query, name: after, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: waitMs, schema: { type: integer, minimum: 0, maximum: 20000, default: 0 } }
+      responses:
+        '200':
+          description: Messages with seq greater than `after`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next: { type: integer }
+                  signals: { type: array, items: { $ref: '#/components/schemas/CallSignal' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/customer-calls/{callId}/end:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer hangs up (CONNECTED → ENDED) or stops waiting (WAITING → CANCELLED)
+      responses:
+        '200':
+          description: The call as it ended
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCall' } } }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
@@ -1702,6 +1798,30 @@ components:
         mediaType: { type: string }
         fileName: { type: string, maxLength: 200 }
         sizeBytes: { type: integer, minimum: 1, maximum: 52428800 }
+    CustomerCall:
+      type: object
+      required: [callId, nexusId, credentialId, channel, topic, state, createdAt, expiresAt]
+      properties:
+        callId: { type: string, format: uuid }
+        nexusId: { type: string, pattern: '^[0-9]{9}$' }
+        credentialId: { type: string, format: uuid, description: The device that asked for the call }
+        channel: { type: string, enum: [AUDIO, VIDEO] }
+        topic: { type: string }
+        conversationId: { type: string, format: uuid, nullable: true }
+        state: { type: string, enum: [WAITING, CONNECTED, ENDED, CANCELLED, MISSED] }
+        operator: { type: string, nullable: true, description: The operator of the bank who answered }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, description: 'WAITING: until when an operator may answer. CONNECTED: the longest the call lasts' }
+        answeredAt: { type: string, format: date-time, nullable: true }
+        endedAt: { type: string, format: date-time, nullable: true }
+        endedBy: { type: string, nullable: true, description: '`credential:<id>`, `admin:<username>` or `system`' }
+        endReason: { type: string, nullable: true, description: '`cancelled`, `hung_up`, `operator_ended`, `no_operator_answered`, `max_duration`, `credential_revoked`, `identity_not_active`' }
+    CustomerCallJoin:
+      type: object
+      required: [call, iceServers]
+      properties:
+        call: { $ref: '#/components/schemas/CustomerCall' }
+        iceServers: { type: array, items: { $ref: '#/components/schemas/IceServer' } }
     Conversation:
       type: object
       required: [conversationId, nexusId, topic, state, lastSequence, createdAt, updatedAt]

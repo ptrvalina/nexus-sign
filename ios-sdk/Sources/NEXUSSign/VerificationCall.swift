@@ -502,6 +502,21 @@ enum CallWire {
         return VerificationCallInfo(sessionID: id, channel: channel, expiresAt: expires, iceServers: servers, operatorJoined: body["operatorJoined"] as? Bool ?? false)
     }
 
+    /// `GET /v1/mobile/customer-calls/{id}`: `{call, iceServers}`. The operator has joined once the call is CONNECTED.
+    static func decodeCustomerCallJoin(_ body: [String: Any]) throws -> VerificationCallInfo {
+        guard let call = body["call"] as? [String: Any], let id = call["callId"] as? String,
+              let channel = (call["channel"] as? String).flatMap(VerificationChannel.init(rawValue:)),
+              let expires = (call["expiresAt"] as? String).flatMap(parseDate) else { throw invalid }
+        if let state = call["state"] as? String, !["WAITING", "CONNECTED"].contains(state) {
+            throw NEXUSSignError.serverError(statusCode: 409, message: "The call is \(state)")
+        }
+        let servers: [IceServer] = (body["iceServers"] as? [[String: Any]] ?? []).compactMap { o in
+            let urls = (o["urls"] as? [String]) ?? (o["urls"] as? String).map { [$0] } ?? []
+            return urls.isEmpty ? nil : IceServer(urls: urls, username: o["username"] as? String, credential: o["credential"] as? String)
+        }
+        return VerificationCallInfo(sessionID: id, channel: channel, expiresAt: expires, iceServers: servers, operatorJoined: call["state"] as? String == "CONNECTED")
+    }
+
     private static let invalid = NEXUSSignError.serverError(statusCode: 200, message: "Unexpected response format")
 
     private static func int64(_ value: Any?) -> Int64? {
@@ -530,4 +545,21 @@ final class DeviceCallSignalling: CallSignalling, @unchecked Sendable {
         CallWire.decodeBatch(try await network.receiveCallSignals(sessionID: sessionID, after: after, waitMilliseconds: min(waitMilliseconds, network.callPollWaitMilliseconds)), after: after)
     }
     func cancel() async throws { try await network.cancelCall(sessionID: sessionID) }
+}
+
+/// [CallSignalling] for a call the customer started: the same call engine,
+/// media and signalling rules; `cancel` hangs up or stops waiting.
+final class CustomerCallSignalling: CallSignalling, @unchecked Sendable {
+    let sessionID: String
+    private let network: NetworkClient
+    init(callID: String, network: NetworkClient) { self.sessionID = callID; self.network = network }
+
+    func join() async throws -> VerificationCallInfo { try CallWire.decodeCustomerCallJoin(try await network.joinCustomerCall(callID: sessionID)) }
+    func send(_ message: CallMessage, messageID: String) async throws {
+        try await network.sendCustomerCallSignal(callID: sessionID, body: CallWire.encode(message, messageID: messageID))
+    }
+    func receive(after: Int64, waitMilliseconds: Int) async throws -> SignalBatch {
+        CallWire.decodeBatch(try await network.receiveCustomerCallSignals(callID: sessionID, after: after, waitMilliseconds: min(waitMilliseconds, network.callPollWaitMilliseconds)), after: after)
+    }
+    func cancel() async throws { try await network.endCustomerCall(callID: sessionID) }
 }

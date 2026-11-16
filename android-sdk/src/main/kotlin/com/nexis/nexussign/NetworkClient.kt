@@ -187,6 +187,21 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
         send("/v1/mobile/verification-sessions/$sessionId/cancel", JsonObject(emptyMap()), TokenSource.Device) // 204
     }
 
+    // Calls the customer starts ("talk to the bank"): same signalling, own routes.
+    suspend fun joinCustomerCall(callId: String): JsonObject =
+        parseObject(send("/v1/mobile/customer-calls/$callId", null, TokenSource.Device))
+
+    suspend fun sendCustomerCallSignal(callId: String, body: JsonObject) {
+        send("/v1/mobile/customer-calls/$callId/signals", body, TokenSource.Device)
+    }
+
+    suspend fun receiveCustomerCallSignals(callId: String, after: Long, waitMillis: Long): JsonObject =
+        parseObject(send("/v1/mobile/customer-calls/$callId/signals?after=$after&waitMs=$waitMillis", null, TokenSource.Device))
+
+    suspend fun endCustomerCall(callId: String) {
+        send("/v1/mobile/customer-calls/$callId/end", JsonObject(emptyMap()), TokenSource.Device)
+    }
+
     suspend fun declineAuthorization(authorizationId: String, reason: NexusDeclineReason) {
         send("/v1/mobile/authorizations/$authorizationId/decline", buildJsonObject { put("reason", reason.name) }, TokenSource.Device)
     }

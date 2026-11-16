@@ -12,6 +12,7 @@ import { recordAuditEvent } from '../services/auditService';
  *   node dist/cli/verificationSetup.js provider-add <clientId> <providerId> <keyId> <AUDIO,VIDEO> <public-key.pem>
  *   node dist/cli/verificationSetup.js provider-retire <clientId> <providerId> <keyId>
  *   node dist/cli/verificationSetup.js operator <clientId> <AUDIO,VIDEO | none>
+ *   node dist/cli/verificationSetup.js customer-calls <clientId> <AUDIO,VIDEO | none>
  *   node dist/cli/verificationSetup.js show <clientId>
  *
  * provider-add  registers an ES256 (P-256) public key of a verification
@@ -20,6 +21,8 @@ import { recordAuditEvent } from '../services/auditService';
  * operator      enables in-app calls answered by the bank's operators in the
  *               admin console for the given channels.
  * A channel is offered in verification plans only if one of the two exists.
+ * customer-calls enables calls the customer starts from the app ("talk to
+ *               the bank"), answered by the bank's operators in the console.
  */
 const NAME = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -71,18 +74,29 @@ async function main(): Promise<void> {
       console.log(`Operator verification for "${clientId}": ${values.length ? values.join(', ') : 'off'}.`);
       return;
     }
+    case 'customer-calls': {
+      if (!clientId) throw new Error('usage: customer-calls <clientId> <AUDIO,VIDEO | none>');
+      await requireClient(clientId);
+      const values = channels(args[0], true);
+      await pool.query(`UPDATE bank_clients SET customer_call_channels = $2, updated_at = now() WHERE client_id = $1`, [clientId, values]);
+      await recordAuditEvent('customer_call_channels_changed', actor, { channels: values });
+      console.log(`Customer calls for "${clientId}": ${values.length ? values.join(', ') : 'off'}.`);
+      return;
+    }
     case 'show': {
       if (!clientId) throw new Error('usage: show <clientId>');
       await requireClient(clientId);
-      const operator = await pool.query<{ operator_verification_channels: string[] }>(`SELECT operator_verification_channels FROM bank_clients WHERE client_id = $1`, [clientId]);
+      const operator = await pool.query<{ operator_verification_channels: string[]; customer_call_channels: string[] }>(
+        `SELECT operator_verification_channels, customer_call_channels FROM bank_clients WHERE client_id = $1`, [clientId]);
       const providers = await pool.query<{ provider_id: string; key_id: string; channels: string[]; status: string }>(
         `SELECT provider_id, key_id, channels, status FROM verification_providers WHERE client_id = $1 ORDER BY created_at`, [clientId]);
       console.log(`operator: ${operator.rows[0].operator_verification_channels.join(', ') || 'off'}`);
+      console.log(`customer calls: ${operator.rows[0].customer_call_channels.join(', ') || 'off'}`);
       for (const p of providers.rows) console.log(`provider: ${p.provider_id}/${p.key_id} ${p.channels.join(',')} ${p.status}`);
       return;
     }
     default:
-      throw new Error('usage: verificationSetup.js provider-add | provider-retire | operator | show <clientId> ...');
+      throw new Error('usage: verificationSetup.js provider-add | provider-retire | operator | customer-calls | show <clientId> ...');
   }
 }
 

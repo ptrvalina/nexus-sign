@@ -772,6 +772,36 @@ extension NEXUSSignSDK {
         try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/handover", body: [:])
     }
 
+    // MARK: Calls the customer starts ("talk to the bank")
+
+    /// Asks the bank for a call; it waits for an operator of the bank. Use
+    /// `customerCallSignalling(for:)` with the call engine as for a
+    /// verification call. Refused with 409 `CALL_CHANNEL_NOT_ENABLED` when the
+    /// bank does not take calls on that channel, `CALL_ALREADY_OPEN` when one is open.
+    public func requestBankCall(channel: VerificationChannel, topic: String, conversationID: String? = nil) async throws -> NexusCustomerCall {
+        guard keyManager.effectiveCredentialID != nil else { throw NEXUSSignError.notRegistered }
+        var body: [String: Any] = ["channel": channel.rawValue, "topic": topic]
+        if let conversationID { body["conversationId"] = try Self.checkedID(conversationID, "conversation ID") }
+        let joined: CustomerCallJoin = try await networkClient.deviceCall("POST", "/v1/mobile/customer-calls", body: body)
+        return joined.call
+    }
+
+    public func bankCalls() async throws -> [NexusCustomerCall] {
+        let list: CustomerCallList = try await networkClient.deviceCall("GET", "/v1/mobile/customer-calls")
+        return list.calls
+    }
+
+    public func bankCall(callID: String) async throws -> NexusCustomerCall {
+        let joined: CustomerCallJoin = try await networkClient.deviceCall("GET", "/v1/mobile/customer-calls/\(try Self.checkedID(callID, "call ID"))")
+        return joined.call
+    }
+
+    /// Device-signed signalling of a call this device asked for.
+    public func customerCallSignalling(for call: NexusCustomerCall) throws -> CallSignalling {
+        guard keyManager.effectiveCredentialID != nil else { throw NEXUSSignError.notRegistered }
+        return CustomerCallSignalling(callID: try Self.checkedID(call.callId, "call ID"), network: networkClient)
+    }
+
     public func closeConversation(conversationID: String) async throws -> NexusConversation {
         try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/close", body: [:])
     }

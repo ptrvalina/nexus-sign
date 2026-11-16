@@ -118,10 +118,14 @@ const envSchema = z.object({
    * data. `redis`: as before 2.0.0; a failover to an asynchronous replica or a
    * restore can forget nonces. Production requires postgres. */
   DEVICE_NONCE_STORE: z.enum(['postgres', 'redis']).default('postgres'),
-  /** Hold before a bank-requested device replacement may enrol, unless the
-   * customer approves it from the enrolled device (deviceReplacementService). */
   /** Delay before a customer's change that relaxes their own limits takes effect (tightening is immediate). */
   CUSTOMER_SETTINGS_RELAX_HOLD_SECONDS: z.coerce.number().int().min(0).max(30 * 24 * 3600).default(24 * 3600),
+  /** How long a call the customer starts waits for an operator before it is MISSED (customerCallService). */
+  CUSTOMER_CALL_WAIT_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
+  /** The longest an answered customer call lasts; then both parties receive a bye. */
+  CUSTOMER_CALL_MAX_SECONDS: z.coerce.number().int().min(60).max(4 * 3600).default(3600),
+  /** Hold before a bank-requested device replacement may enrol, unless the
+   * customer approves it from the enrolled device (deviceReplacementService). */
   DEVICE_REPLACEMENT_HOLD_SECONDS: z.coerce.number().int().min(0).max(30 * 24 * 3600).default(24 * 3600),
   /** Highest amount, per currency, that may be confirmed with an
    * offline code, e.g. `PLN:100000,EUR:20000` (minor units). The offline code
