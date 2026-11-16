@@ -53,7 +53,7 @@ The remaining 23 suites test the services and the bank database directly on Post
 | `43929147218` (Security) | `npm audit`, Trivy | zod, body-parser advisories | `6bcd0cb`, `497f6cc` | The audit and Trivy jobs |
 | `43932099625` (`497f6cc`) | gitleaks: 7 findings | Allowlist missed the mandate vectors (credential UUID) | `454e542` | The secret-scan job |
 | `43932489275` (`b0ae83b`) | `ios-sdk`: does not compile | Property named `operator` | `78a5280` | `AccountModelsTests` |
-| `43932489275` | `android-sdk-calls`: Lint | AGP cannot build the lint model in a composite build | Lint kept on the core SDK only (`8de9d41`) | — (limitation TD-R2) |
+| `43932489275` | `android-sdk-calls`: Lint | AGP cannot build the lint model in a composite build | Lint kept on the core SDK only (`8de9d41`); later run against the core SDK from Maven Local (`62523b3`, TD-13) | `lintRelease` in the calls job, passed (job `133597470092`) |
 | review after `43934636812` | iOS mandate terms weaker than Android | Parser not ported; vectors not a resource | `f8cbc11` | `MandateTermsVectorsTests` 3/3 (final run) |
 | `43936067310` (`f8cbc11`) | iOS jobs cancelled | No macOS runner within 15 minutes, twice (GitHub capacity or minutes) | None needed in the code | Passed in the next run (`43941741958`) |
 

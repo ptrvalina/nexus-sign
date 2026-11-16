@@ -71,4 +71,4 @@ PASS: no open Critical or High finding; Medium findings closed or accepted in wr
 
 ## What does not block the pilot, but production
 
-D-01 protocol change; open Low findings reviewed; load and resilience tests at production scale; regulatory assessment (PSD2/RTS SCA); the five GitHub Actions still pinned to Node 20 releases ([technical debt](TECHNICAL_DEBT.md), TD-R1).
+D-01 protocol change; the 19 Low findings planned before production ([security findings](SECURITY_FINDINGS.md#triage-of-the-low-findings)); load and resilience tests at production scale; regulatory assessment (PSD2/RTS SCA).

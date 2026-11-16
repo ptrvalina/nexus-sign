@@ -7,7 +7,7 @@ What NEXUS-SIGN does not do, or has not been shown to do, on branch `engineering
 | Limitation | Consequence | What closes it |
 |---|---|---|
 | Nothing has been run on a physical iPhone or Android phone | Key generation in Secure Enclave / StrongBox, biometric binding, the confirmation screen, push handling, offline confirmation and recovery on the phone are code that compiles and passes unit tests, not demonstrated behaviour | The [device acceptance checklist](DEVICE_ACCEPTANCE_CHECKLIST.md) on real devices ([protocol](RELEASE_BLOCKERS.md)) |
-| The SDKs are built and unit-tested in CI only (iOS on a macOS runner, Android with Gradle, Android Lint on the core SDK); no device or emulator ran them | Hardware-backed paths (Secure Enclave, StrongBox, BiometricPrompt, Keychain access control) are not exercised by unit tests | Device acceptance; details in [SDK validation](SDK_VALIDATION.md) |
+| The SDKs are built and unit-tested in CI only (iOS on a macOS runner, Android with Gradle and Android Lint on both modules); no device or emulator ran them | Hardware-backed paths (Secure Enclave, StrongBox, BiometricPrompt, Keychain access control) are not exercised by unit tests | Device acceptance; details in [SDK validation](SDK_VALIDATION.md) |
 | No production HSM has been used; the eight HSM suites pass on SoftHSM 2.7.0 in CI | Vendor-specific behaviour of `C_Login`, session limits, failover, FIPS mode and key attributes is unknown | Validation on the bank's HSM model ([HSM validation](HSM_VALIDATION.md)) |
 | No penetration test, load test or resilience test | Throughput, latency and behaviour under attack are unmeasured | The bank acceptance stage of the [implementation path](../integration/pilot-execution-pack.md) |
 | App Attest and Play Integrity verification are tested with test chains and verdicts made by the tests, not with real device tokens | A device-specific format detail would not be found | Recorded tokens from real devices as test fixtures |
@@ -35,7 +35,7 @@ One: checking the payee against the bank's own records (Verification of Payee) i
 | The in-database ECDSA verifier is PL/pgSQL | Tested against OpenSSL on generated valid and corrupted inputs; slower than native code; not reviewed for timing side channels (it handles public data only) |
 | Conversation bodies are stored in the Auth Core database in clear text | Protected like the rest of the database; not end-to-end encrypted; the bank sets retention |
 | No API rate limiting in Auth Core | Expected at the bank's gateway (finding A1-10) |
-| Low and informational review findings | 38 Low and 20 Info findings are open ([findings register](SECURITY_FINDINGS.md)) |
+| Low and informational review findings | 29 Low (10 accepted by design, 19 planned before production) and 20 Info findings are open ([findings register](SECURITY_FINDINGS.md)) |
 | Customer calls are recorded, not sealed | The call row is immutable once ended; calls authorize nothing |
 | Metrics and the audit export | The confirmation counter counts in the confirming transaction; the audit export needs a lag above the longest transaction |
 

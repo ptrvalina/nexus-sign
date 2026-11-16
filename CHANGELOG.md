@@ -12,6 +12,14 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ### Fixed
 
+- Recovery: the limit of 10 failed proofs per NEXUS ID in 24 hours applies to every attempt, also across sessions opened in parallel (finding A2-04).
+- Database: device request nonces can be deleted only after they expire, by every role (migration 031, finding C-11); `scripts/db/roles.sql` no longer grants `UPDATE` on them.
+- Webhooks: 6to4 addresses are judged by the IPv4 address inside them; Teredo, local-use NAT64, discard, benchmarking and ORCHIDv2 ranges are refused (finding A2-05).
+- `withTransaction` keeps the original error and destroys the connection when `ROLLBACK` fails (finding A1-08).
+- Console: `admin_logout` names the account and its bank (finding A2-07).
+- Evidence verifier: device keys other than ECDSA P-256 are refused (finding B-07).
+- iOS SDK: the response is compared with the signed bytes by UTF-16 code units (finding D-05). Android SDK: recovery phrases are split on Unicode White_Space, as on iOS (finding D-10).
+- Android call module: the published POM names the core SDK with its version.
 - iOS SDK did not compile: `NexusCustomerCall.operator` used a Swift keyword (the JSON key stays `operator`).
 - Verification calls: the side that closes the call (operator decision, release, device cancel) sends the only `bye`; before, the server's state watcher could close the call first with its own reason.
 

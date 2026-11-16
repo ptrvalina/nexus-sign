@@ -11,7 +11,7 @@ This is an **internal review**, not an external penetration test. No external te
 | Critical | 0 | 0 | 0 | — |
 | High | 5 | 5 | 0 | None open |
 | Medium | 19 | 18 | 1 (D-01) | Documented decision below |
-| Low | 46 | 8 | 38 | Listed in the area reports; none blocks a pilot alone |
+| Low | 46 | 17 | 29 (10 accepted, 19 planned before production) | [Triage of the Low findings](#triage-of-the-low-findings); none blocks a pilot alone |
 | Info | 20 | 0 | 20 | — |
 
 The third cycle closed D-02 and D-07 in code and recorded N-01 to N-06. The fourth cycle (this one) ran every check for real in CI for the first time and found N-07 to N-13 (below), and added the [threat model of ten scenarios](#threat-model-ten-scenarios). "Fixed" means fixed in code and covered by a test that passed in CI, unless the row says otherwise. Since the fourth cycle every test named as evidence in this document has passed in GitHub Actions on branch `engineering/production-readiness` (runs and jobs: [CI validation](CI_VALIDATION.md)); tests marked "(CI)" in earlier cycles' rows have now run.
@@ -91,6 +91,54 @@ Scope: the attacker fully controls the named component; the question is what the
 | 8 | Compromise of a bank staff account in the console | Actions in the console with that account's scope | Password + TOTP (replay refused), bank-scoped accounts, four eyes enforced in the database (the requester cannot approve), cross-origin state changes refused, password reset ends sessions, append-only audit | `admin console` 6, `audit log` 3, `bank-console` 5 | **Low**: a single account cannot revoke or reactivate alone; it can see its bank's data |
 | 9 | Abuse by a bank employee (insider, including a DBA) | Changing records, hiding actions | Database roles: the application role cannot change evidence or audit rows; evidence chain with checkpoints held by the bank; four eyes; operators decide only their bank's calls (A2-03); a call never replaces the signature | `db-roles` 2, `evidence-integrity` 5, `evidence-checkpoints` 3, `audit log` 3, `verification-call` 16 | **Medium**: a database owner can disable triggers; the chain checkpoints detect rewritten history but not the reading of data |
 | 10 | Infrastructure unavailability (HSM, PostgreSQL, Redis, Auth Core, network) | — | HSM: per-call deadline, breaker, readiness down, startup refused; bank boundary holds payments while Auth Core or the registry is down and executes once afterwards; offline confirmation v2 for the phone; runbooks | `hsm` 10, `master-key-hsm` 11, `bank-execution-boundary` 25, `offline-*` (5 suites), `backup-restore` 4 | **Medium**: no high-availability, failover or load test has run (BLOCKED: bank environment) |
+
+## Triage of the Low findings
+
+Every Low finding of the area reports was rechecked against the code in the fourth cycle. Six had already been fixed in earlier cycles without the register saying so for all of them (D-03: NFKC and digit rules and IBAN check digits 02–98 in Auth Core, Kotlin and Swift; D-04: `operation_type` gets the full display rules on all three; D-07; N-01 to N-03). Nine were fixed in this cycle, each with a test that fails without the fix:
+
+| ID | Fix | Commit | Test |
+|---|---|---|---|
+| A1-08 | A failed `ROLLBACK` keeps the original error and destroys the connection | `adfe7e3` | `low-findings` (unit) |
+| A2-04 | The 10-failures-per-identity recovery limit applies to every attempt, under the identity lock | `6226128` | `recovery-phrase-once` (3 sessions, 10 failures, then the right phrase is locked out) |
+| A2-05 | Webhook SSRF filter: 6to4 judged by its IPv4; Teredo, local NAT64, discard, benchmarking, ORCHIDv2 refused | `f37216a` | `gateway-and-webhooks` (unit) |
+| A2-07 | `admin_logout` names the account and its bank (the console reads were already audited) | `b65b37b` | `admin console` (HTTP suite) |
+| B-07 | The independent verifier refuses device keys other than ECDSA P-256 | `2d705f6` | `evidence` (unit: P-384, RSA, Ed25519) |
+| B-12 | ADR 0004 names the real sealing functions; removal of the newest records is detected only against a kept head | `a864ca7` | — (documentation) |
+| C-11 | Live device nonces cannot be deleted, by any role (migration 031); `UPDATE` revoked from the application role | `cb77ab6` | `device-nonce-guard` (new suite, real `roles.sql`) |
+| D-05 | iOS compares the response with the signed bytes by UTF-16 code units, not canonical equivalence | `3be0953` | `SignedTransactionTests` |
+| D-10 | Android splits recovery phrases on Unicode White_Space, like iOS | `3be0953` | `RecoveryPhraseTest`, `RecoveryProtocolTests` |
+
+The 29 that remain, with the decision for each. **Accepted** means the behaviour is intended or the control belongs to the bank's infrastructure, and it is documented; **Planned** means a fix is needed before production but not before a controlled pilot.
+
+| ID | Finding (short) | Decision | Reason or plan |
+|---|---|---|---|
+| A1-05 / B-06 | High-S ECDSA signatures accepted (malleability) | Planned | Secure Enclave and Android Keystore produce high-S signatures half of the time, so refusing them would break devices; the fix is to normalise S to low before storing and sealing, with a migration note for the verifier |
+| A1-06 | Idempotent replay ignores `verificationPolicy`, `expiresInSeconds`, `correlationId`, `pushNotification` | Accepted | Documented in the bank backend guide: a replay returns the original plan, so it cannot weaken it |
+| A1-07 | Lock-order inversion between revocation and confirmation (suspected) | Planned | Fails closed (deadlock error, 500, nothing committed); order the locks credential-first in both paths |
+| A1-09 | Bank tokens carry no scope | Accepted for the pilot | Tokens are bound to the bank's mTLS certificate; per-endpoint scopes when a bank needs separated backends |
+| A1-10 | No rate limiting in Auth Core | Accepted | The bank's gateway rate-limits (deployment guide); per-authorization and login counters exist |
+| A2-06 | Anyone can lock a named admin out for 15 min | Planned | Console is reachable only from the bank's network; move to per-address-and-account counters |
+| A2-08 | Webhooks: no secret overlap, no redelivery after `FAILED` | Planned | The bank polls authorization state as the source of truth (integration guide); add secret rotation overlap and manual redelivery |
+| A2-09 | Provider and TURN secrets in plain environment variables | Accepted for the pilot | Kubernetes secrets; HSM wrapping covers the stored secrets; production posture check to be added |
+| A2-10 | Swallowed errors on three security paths | Planned | Each path still fails closed (the request is refused); log the swallowed error |
+| B-08 | `reinitialize()` calls `C_Finalize` with calls in flight (suspected) | Planned | Needs the vendor HSM to observe; drain the worker before re-initialising |
+| B-09 / C-08 | Re-wrap guard is a session setting any application session can set | Planned | Effect is denial of service on one credential's offline secret (a swap is detected); move re-wrap to a separate role |
+| B-10 | Verifier cannot bind an export to an expected NEXUS ID or bank | Planned | Add `--expect-nexus-id` and a bank identifier in the sealed payload (schema change) |
+| B-11 | Legacy unbound webhook ciphertext accepted | Planned | Re-encrypt with `rotateSecretKeys`, then refuse the old format |
+| C-07 | Audit fields writable after the final state; audit rows accept supplied timestamps | Planned | Database defaults and immutability triggers for those columns |
+| C-09 | Boundary role can push a kept head to the maximum (denial of service) | Accepted | The boundary role is the bank's own component; the effect is a refusal, never an execution |
+| C-10 | No row-level security; tenant isolation in the application | Accepted for the pilot | Every query is scoped by `client_id` (tested by `security invariants` and console suites); RLS is a defence-in-depth step for multi-bank hosting |
+| C-12 | Provider outcomes: no distinct "rejected"; reference provider unauthenticated | Accepted | Reference adapter only; the bank's adapter defines outcomes ([pilot execution pack](../integration/pilot-execution-pack.md)) |
+| C-13 | REVIEW settled by one operator; Auth Core not told | Planned | Four eyes for REVIEW and a commit result to Auth Core |
+| C-14 | Security state only in Redis (lockouts, sessions) | Accepted | Redis persistence is required in production (deployment guide); a flush logs everyone out and resets counters, it does not grant access |
+| D-06 | iOS registration state in `UserDefaults` (not atomic, backed up) | Planned | Move to the Keychain with `ThisDeviceOnly`; needs a device to test |
+| D-08 | Certificate pinning off by default; iOS push receipt bypasses pins | Planned | Pinning is the bank app's choice (two pins required when on); route the receipt through the pinned session |
+| D-09 | Secure push has no replay or freshness check | Accepted | A push only invites the app to fetch the signed request; a replayed push shows nothing new |
+| D-11 | iOS error model leaks an internal type; status 0/200 for client errors | Planned | API change for the next SDK minor version |
+| D-12 | Blocking Secure Enclave and PBKDF2 calls inside async methods | Planned | Move to a dedicated queue; measure on a device |
+| D-13 | Android key bytes cleared only in the caller's copy | Accepted | `SecretKeySpec` copies by design; keys live in the Keystore, the copy is short-lived |
+| D-14 | WebRTC: DTLS-SRTP not asserted, ICE policy `all`, unofficial binaries | Planned | Provenance review of the binaries is an open release blocker (D-015); relay-only policy as a bank option |
+| D-15 | App Attest entitlement not documented for integrators | Planned | Document with the Apple Developer account setup (needs a paid account) |
 
 ## Control groups covered by the review
 

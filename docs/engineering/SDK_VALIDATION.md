@@ -12,7 +12,7 @@ What has been shown about the native SDKs (iOS in Swift, Android in Kotlin) and 
 | iOS SDK for iPhone | `xcodebuild -sdk iphoneos -destination 'generic/platform=iOS'` of the demo app against the SDK in the repository (`ios demo app / build`) | arm64 iOS device build, unsigned | PASS (job `133561361078`) | Compiles the iOS-only paths (Secure Enclave, `LAContext`, Keychain access control, UIKit) for the device SDK |
 | iOS call module (`ios-sdk-calls`) | `xcodebuild -scheme NEXUSSignCalls -destination 'generic/platform=iOS'` (`ios-sdk-calls / WebRTC module build`) | arm64 iOS, against `stasel/WebRTC` at an exact version | PASS (job `133561359963`) | |
 | Android SDK (`android-sdk`) | `./gradlew testDebugUnitTest lintRelease assembleRelease` (`android-sdk / build and unit tests`) | AAR, `minSdk 28` (Android 9), `compileSdk 34`, AGP 8.5.2, Kotlin 1.9.24 | PASS | Real Android Gradle build with the Android SDK, not JVM stubs. Android Lint passed (every API call checked against `minSdk 28`) |
-| Android call module (`android-sdk-calls`) | `./gradlew assembleRelease` (`android-sdk-calls / WebRTC module build`) | AAR against `io.github.webrtc-sdk:android` (pinned; SHA-256 of the artifact recorded) | PASS | Lint not possible in this composite build (TD-R2); the one API above 28 is version-guarded |
+| Android call module (`android-sdk-calls`) | `./gradlew assembleRelease`; `lintRelease` against the core SDK from Maven Local (`android-sdk-calls / WebRTC module build`) | AAR against `io.github.webrtc-sdk:android` (pinned; SHA-256 of the artifact recorded) | PASS | Android Lint passed (job `133597470092`, TD-13) |
 | Android demo app | `./gradlew assembleDebug` (`android demo app / debug APK`) | APK | PASS | |
 | Android call state machine against a running Auth Core | `CallConformanceTest` driven by the Auth Core test (`android-sdk call state machine against Auth Core`) | JVM, real HTTP to Auth Core with PostgreSQL and Redis | PASS | Signalling only, no media |
 
@@ -50,19 +50,20 @@ What has been shown about the native SDKs (iOS in Swift, Android in Kotlin) and 
 | Lifecycle, concurrency | PARTIAL | PARTIAL | Call controller tests with concurrent signals; app background/foreground and process death: BLOCKED |
 | Error handling | PASS (logic) | PASS (logic) | Every refused vector maps to a reason code |
 
-## Warnings left
+## Warnings
 
-The iOS test target compiles with Swift 6 language-mode warnings in `VerificationCallControllerTests.swift` (`NSLock.lock()` from an async context, 6 places). They are in test code, not in the SDK, and are warnings in Swift 5 mode; recorded as technical debt.
+None. Since `670dbf7` the iOS package and its tests compile with `-warnings-as-errors` (the Swift 6 concurrency warnings in `VerificationCallControllerTests.swift` were removed, TD-14).
 
 ## How to reproduce
 
 ```sh
 # iOS (macOS 15 with Xcode, as on the `macos-15` runner)
-cd ios-sdk && swift test
+cd ios-sdk && swift test -Xswiftc -warnings-as-errors
 xcodebuild -project demo/ios/NEXUSSignDemo.xcodeproj -scheme NEXUSSignDemo -configuration Debug \
   -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
 cd ios-sdk-calls && xcodebuild -scheme NEXUSSignCalls -destination 'generic/platform=iOS' -skipPackagePluginValidation build
 # Android (JDK 17, Android SDK)
 cd android-sdk && ./gradlew testDebugUnitTest lintRelease assembleRelease
 cd android-sdk-calls && ./gradlew assembleRelease
+(cd android-sdk && ./gradlew publishReleasePublicationToMavenLocal) && (cd android-sdk-calls && ./gradlew -Pnexus.coreSdkFromMavenLocal lintRelease)
 ```
