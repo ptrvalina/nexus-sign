@@ -360,8 +360,32 @@ export async function operatorSignals(sessionId: string, operator: OperatorIdent
  */
 export async function deviceCancel(sessionId: string, device: DeviceContextForCall): Promise<void> {
   const row = await deviceCall(sessionId, device);
-  await cancelSession(row, 'device');
-  await sendBye(sessionId, 'device', 'cancelled');
+  await closeAs(sessionId, 'device', 'cancelled', () => cancelSession(row, 'device'));
+}
+
+/**
+ * Closes the session on behalf of a party and tells the other one why, with
+ * that party's own bye. The closure is claimed in Redis before the database
+ * change, so a concurrent read that notices the closed session does not relay
+ * a server bye ("session_cancelled") in place of the party's reason
+ * ("operator_left", "decided:VERIFIED"). If the change fails, the claim is
+ * withdrawn and nothing is sent.
+ */
+export async function closeAs(sessionId: string, from: CallRole, reason: string, close: () => Promise<unknown>): Promise<void> {
+  const state = keys(sessionId).state;
+  const claimed = (await redis.hsetnx(state, 'closed', `${from}:${reason}`)) === 1;
+  try {
+    await close();
+  } catch (error) {
+    if (claimed) await redis.hdel(state, 'closed').catch(() => undefined);
+    throw error;
+  }
+  try {
+    await sendBye(sessionId, from, reason);
+  } catch {
+    // The change is made; let the next read relay a server bye instead.
+    if (claimed) await redis.hdel(state, 'closed').catch(() => undefined);
+  }
 }
 
 /**
@@ -372,8 +396,7 @@ export async function deviceCancel(sessionId: string, device: DeviceContextForCa
 export async function operatorRelease(sessionId: string, operator: OperatorIdentity): Promise<void> {
   await assertClaimedBy(sessionId, operator);
   const row = await loadCall(sessionId);
-  await cancelSession(row, `admin:${operator.username}`);
-  await sendBye(sessionId, 'operator', 'operator_left');
+  await closeAs(sessionId, 'operator', 'operator_left', () => cancelSession(row, `admin:${operator.username}`));
 }
 
 async function cancelSession(row: CallRow, by: string): Promise<void> {

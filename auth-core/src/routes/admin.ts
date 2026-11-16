@@ -11,7 +11,7 @@ import { recordAuditEvent } from '../services/auditService';
 import { setRequestActor } from '../services/requestContext';
 import type { AdminSession } from '../services/adminAuthService';
 import { byBodyField, byIp, loginThrottle } from '../middleware/bruteForceProtection';
-import { assertClaimedBy, claimCall, listCalls, operatorSignal, operatorSignals, operatorRelease, sendBye } from '../services/verificationCall';
+import { assertClaimedBy, claimCall, closeAs, listCalls, operatorSignal, operatorSignals, operatorRelease } from '../services/verificationCall';
 import { recordOperatorDecision } from '../services/adaptiveVerificationService';
 import { consoleAuthorizations, consoleCancelDeviceRequest, consoleDevices, consoleMandate, consoleMandateAction, consoleMandates, consoleRevokeDevice } from '../services/bankConsoleService';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
@@ -386,8 +386,8 @@ export function buildAdminRouter(options: { cookieSecure: boolean; hsm: HsmAdapt
       const sessionId = callParam.parse(req.params.sessionId);
       const body = z.object({ result: z.enum(['VERIFIED', 'FAILED']) }).strict().parse(req.body);
       await assertClaimedBy(sessionId, operatorOf(req));
-      const plan = await recordOperatorDecision(sessionId, operatorOf(req), body.result);
-      await sendBye(sessionId, 'operator', `decided:${body.result}`).catch(() => undefined);
+      let plan: Awaited<ReturnType<typeof recordOperatorDecision>> | undefined;
+      await closeAs(sessionId, 'operator', `decided:${body.result}`, async () => { plan = await recordOperatorDecision(sessionId, operatorOf(req), body.result); });
       res.status(200).json(plan);
     } catch (error) { next(error); }
   });

@@ -1,6 +1,6 @@
 // Redis for service-level tests: the real `ioredis` when it is installed,
 // otherwise a minimal RESP2 client with the same call shapes for the commands
-// the services use (get, set, del, eval, lrange, hget, hsetnx, ping, quit).
+// the services use (get, set, del, eval, lrange, hget, hsetnx, hdel, ping, quit).
 // Both talk to a real Redis server, so Lua scripts, NX and expiries run with
 // Redis semantics; nothing here imitates Redis behaviour.
 import { createRequire } from 'node:module';
@@ -67,6 +67,7 @@ class RespRedis {
   lrange(...a) { return this.call('LRANGE', ...a); }
   hget(...a) { return this.call('HGET', ...a); }
   hsetnx(...a) { return this.call('HSETNX', ...a); }
+  hdel(...a) { return this.call('HDEL', ...a); }
   ping() { return this.call('PING'); }
   async quit() { await this.call('QUIT').catch(() => {}); this.socket.end(); }
   disconnect() { this.socket.destroy(); }
