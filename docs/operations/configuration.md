@@ -56,7 +56,10 @@ See [HSM and key management](../security/hsm-key-management.md) and [HSM unavail
 | `PKCS11_EVIDENCE_KEY_ID` | none | Required when the label is not unique | `CKA_ID` of the evidence key, hex (an even number of hex digits). Added to the search for both key objects. |
 | `PKCS11_EVIDENCE_KEY_VERSION` | `1` | None | Positive integer written as `hsm_key_version` on every evidence record. Auth Core does not derive or check it. Since evidence schema 3 each record also names its key by `seal_key_id` (SHA-256 of the public key), which verification uses. |
 | `HSM_SESSION_POOL_SIZE` | `4` | None | Integer from 1 to 64. Logged-in PKCS#11 sessions used in parallel per process. Once as many timed-out calls as this number are still running, new operations fail at once (`HSM not answering`). Keep `UV_THREADPOOL_SIZE` (libuv worker threads, set to `16` in the Docker image) larger than this value. |
-| `HSM_OPERATION_TIMEOUT_MS` | `5000` | None | Integer from 100 to 60 000. Deadline for one sign or verify operation, and for waiting for a free session. |
+| `HSM_OPERATION_TIMEOUT_MS` | `5000` | None | Integer from 100 to 60 000. Deadline for one HSM call as seen by the service, whatever PKCS#11 function it is in (the module runs in a worker thread), and for waiting for a free session. |
+| `HSM_QUEUE_LIMIT` | `256` | None | Calls allowed to wait for the HSM worker; more are refused at once (`HSM queue is full`). |
+| `HSM_BREAKER_THRESHOLD` | `3` | None | Consecutive HSM timeouts that open the circuit breaker: calls then fail at once and readiness reports the HSM down. |
+| `HSM_BREAKER_COOLDOWN_MS` | `10000` | None | How long the opened breaker refuses calls before a fresh HSM worker is started and health-checked. New (unreleased) |
 | `EVIDENCE_RETIRED_PUBLIC_KEYS_PEM` | none | Required after an evidence key rotation | PEM public keys (concatenated) of evidence keys retired by rotation. Auth Core accepts them, next to the current HSM key, when it checks sealed enrolment and recovery records, and publishes them in evidence exports (`evidencePublicKeys`). See [key rotation](runbooks/key-rotation.md). |
 
 The PKCS#11 private key must be an EC key on P-256 with `CKA_SIGN` true, `CKA_SENSITIVE` true and `CKA_EXTRACTABLE` false; otherwise opening a session fails with a message naming the attribute.

@@ -13,9 +13,20 @@ import { env } from '../config/env';
  * do not run the server's posture checks. */
 export async function selectHsmAdapter(config: Pick<typeof env, 'HSM_ADAPTER' | 'NODE_ENV' | 'ALLOW_INSECURE_DEVELOPMENT'> = env): Promise<HsmAdapter> {
   if (config.HSM_ADAPTER === 'pkcs11') {
-    // Loaded lazily: pkcs11js is a native addon development does not need.
-    const { Pkcs11HsmAdapter } = await import('./pkcs11HsmAdapter');
-    return new Pkcs11HsmAdapter();
+    // The PKCS#11 module runs in a worker thread (audit finding B-01); the
+    // options are read here so a configuration error stops the start.
+    const { pkcs11OptionsFromEnv } = await import('./pkcs11HsmAdapter');
+    const { Worker } = await import('node:worker_threads');
+    const { join } = await import('node:path');
+    const { HsmWorkerHost } = await import('./hsmWorkerHost');
+    const options = pkcs11OptionsFromEnv();
+    return new HsmWorkerHost(() => new Worker(join(__dirname, 'pkcs11Worker.js'), { workerData: { options } }), {
+      name: 'pkcs11',
+      timeoutMs: env.HSM_OPERATION_TIMEOUT_MS,
+      queueLimit: env.HSM_QUEUE_LIMIT,
+      breakerThreshold: env.HSM_BREAKER_THRESHOLD,
+      breakerCooldownMs: env.HSM_BREAKER_COOLDOWN_MS,
+    });
   }
   if (config.NODE_ENV === 'production' || !config.ALLOW_INSECURE_DEVELOPMENT) {
     throw new Error('HSM_ADAPTER=software keeps the evidence key in memory and is refused here: set HSM_ADAPTER=pkcs11, or ALLOW_INSECURE_DEVELOPMENT=true outside production');

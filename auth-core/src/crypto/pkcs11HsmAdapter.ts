@@ -4,6 +4,7 @@ import type { EvidenceSeal, HsmAdapter } from './hsmAdapter';
 import { parseP256PublicKey } from './p256PublicKey';
 import { derToRaw, rawToDer } from './ecdsaSignatureFormat';
 import { env } from '../config/env';
+import { HsmTimeoutError } from './hsmErrors';
 
 /**
  * HSM adapter over PKCS#11 (pkcs11js). Tested with SoftHSM2
@@ -22,15 +23,13 @@ import { env } from '../config/env';
  *   (HSM_OPERATION_TIMEOUT_MS) that starts before its first PKCS#11 call. A
  *   session whose operation timed out is never reused; it is closed once the
  *   call returns.
- * - Not bounded (audit finding B-01, open): pkcs11js has no asynchronous form
- *   of C_OpenSession, C_Login, C_FindObjects*, C_GetAttributeValue,
- *   C_SignInit, C_VerifyInit, C_CreateObject or C_DestroyObject. They run on
- *   the main thread, and an HSM that stalls in one of them blocks the event
- *   loop for as long as the vendor library waits. To keep the common path
- *   free of the slowest ones, healthCheck() (run at startup and by the
- *   readiness probe) fills the pool, so requests open a session only after
- *   one was retired. Moving the module into a worker thread is the complete
- *   fix and is not done.
+ * - pkcs11js has no asynchronous form of C_OpenSession, C_Login,
+ *   C_FindObjects*, C_GetAttributeValue, C_SignInit, C_VerifyInit,
+ *   C_CreateObject or C_DestroyObject. In the service this adapter runs in a
+ *   worker thread (pkcs11Worker.ts, hsmWorkerHost.ts), so a stall in one of
+ *   them blocks that thread, not the event loop; the host bounds every call.
+ *   healthCheck() fills the pool, so requests open a session only after one
+ *   was retired.
  * - A lost session (HSM restart, failover) is discarded and the operation is
  *   retried once on a new session; a module that lost its initialisation is
  *   finalised and initialised again. Nothing falls back to software keys.
@@ -53,12 +52,7 @@ export interface Pkcs11Options {
   keyVersion: number;
 }
 
-export class HsmTimeoutError extends Error {
-  constructor(operation: string, timeoutMs: number) {
-    super(`HSM ${operation} timed out after ${timeoutMs} ms`);
-    this.name = 'HsmTimeoutError';
-  }
-}
+export { HsmTimeoutError };
 
 interface PooledSession {
   handle: Buffer;

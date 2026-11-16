@@ -204,6 +204,12 @@ const envSchema = z.object({
   HSM_SESSION_POOL_SIZE: z.coerce.number().int().min(1).max(64).default(4),
   /** Deadline for one HSM operation (and for waiting for a free session). */
   HSM_OPERATION_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(5000),
+  /** Calls allowed to wait for the HSM worker before new ones are refused (HsmBusyError). */
+  HSM_QUEUE_LIMIT: z.coerce.number().int().min(1).max(10_000).default(256),
+  /** Consecutive timeouts that open the HSM circuit breaker. */
+  HSM_BREAKER_THRESHOLD: z.coerce.number().int().min(1).max(100).default(3),
+  /** How long the opened breaker refuses calls before a fresh worker is probed. */
+  HSM_BREAKER_COOLDOWN_MS: z.coerce.number().int().min(100).max(600_000).default(10_000),
 
   // --- Device attestation verification ---
 
