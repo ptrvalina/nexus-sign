@@ -153,7 +153,7 @@ public struct NexusCustomerCall: Decodable, Equatable {
     public let conversationId: String?
     /// WAITING, CONNECTED, ENDED, CANCELLED or MISSED.
     public let state: String
-    public let operator: String?
+    public let `operator`: String?
     public let createdAt: String
     public let expiresAt: String
     public let answeredAt: String?
