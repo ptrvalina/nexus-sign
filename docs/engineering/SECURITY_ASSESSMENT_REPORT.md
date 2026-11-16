@@ -62,7 +62,7 @@ D-03 and D-04 (gaps in the display rules, `operation_type` outside them) were fi
 
 ## Found during the final verification
 
-The final test run found that the A2-01 change had broken the test helper `test/integration/support/compromise.mjs` (a nested template literal), so three SoftHSM suites could not load. Fixed in a separate commit; the embedded script was syntax-checked separately. Those suites still skip here for lack of SoftHSM.
+The final test run found that the A2-01 change had broken the test helper `test/integration/support/compromise.mjs` (a nested template literal), so three SoftHSM suites could not load. Fixed in `6bc2c61`; the embedded script was syntax-checked separately. Those suites still skip here for lack of SoftHSM.
 
 ## Threat model
 

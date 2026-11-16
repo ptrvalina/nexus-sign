@@ -13,7 +13,7 @@ Status of NEXUS-SIGN on branch `engineering/production-readiness` (base: `2.0.0-
 
 ## What changed on this branch
 
-15 commits, 109 files. All four High and 12 of 16 Medium findings of the internal review are fixed or partly fixed; details and commits in the [security assessment](SECURITY_ASSESSMENT_REPORT.md). Changes that affect a bank's integration (also in the [changelog](../../CHANGELOG.md)):
+17 commits on top of the base (`git log 5999984..HEAD`). All four High and 12 of 16 Medium findings of the internal review are fixed or partly fixed; details and commits in the [security assessment](SECURITY_ASSESSMENT_REPORT.md). Changes that affect a bank's integration (also in the [changelog](../../CHANGELOG.md)):
 
 - Device replacement answers 202 `REPLACEMENT_PENDING` until the customer's enrolled device approves or the hold passes.
 - `POST /v1/nexus-identities` returns an existing identity with 200 and `replayed: true` instead of 409.
