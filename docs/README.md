@@ -59,6 +59,7 @@
 - [Release: verification status and checklist](operations/release.md)
 - [Audio and video calls](operations/audio-video-calls.md)
 - [Bank console: customers' mandates and devices](operations/bank-console.md)
+- [Bank HSM acceptance procedure](operations/hsm-acceptance.md)
 
 ## Integration
 
