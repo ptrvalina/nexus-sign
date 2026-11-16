@@ -1,6 +1,9 @@
 -- NEXUS-SIGN Auth Core: database schema
 -- PostgreSQL 14+. Creates the current schema on an empty database and is safe
 -- to apply again. Existing databases are upgraded with migrations/.
+-- Install and upgrade with `npm run migrate` (src/cli/migrate.ts), which keeps
+-- the migration ledger. This file contains every migration up to:
+-- schema-version: 025
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 

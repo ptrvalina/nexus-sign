@@ -61,6 +61,13 @@ GRANT DELETE ON device_request_nonces TO nexus_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexus_app;
 -- Evidence and audit records are only ever added.
 REVOKE UPDATE ON evidence_records, audit_logs FROM nexus_app;
+-- The migration ledger belongs to the migration tool, not the service.
+DO $$
+BEGIN
+  IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+    REVOKE INSERT, UPDATE ON schema_migrations FROM nexus_app;
+  END IF;
+END $$;
 
 -- Archival reads.
 GRANT SELECT ON evidence_records, audit_logs TO nexus_audit_reader;

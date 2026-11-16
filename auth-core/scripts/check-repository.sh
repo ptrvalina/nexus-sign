@@ -47,4 +47,10 @@ if [ -n "$mismatched" ]; then
   printf 'Version differs from VERSION (%s):%s\n' "$version" "$mismatched" >&2
   exit 1
 fi
+latest=$(ls auth-core/migrations | grep -E '^[0-9]{3}_.*\.sql$' | sort | tail -1 | cut -c1-3)
+stated=$(sed -n 's/^-- schema-version: \([0-9]\{3\}\)$/\1/p' auth-core/src/db/schema.sql)
+if [ "$latest" != "$stated" ]; then
+  printf 'auth-core/src/db/schema.sql states schema-version %s, the last migration is %s: append the migration to schema.sql and update the line\n' "$stated" "$latest" >&2
+  exit 1
+fi
 echo 'ok: repository hygiene'

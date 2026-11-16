@@ -26,6 +26,7 @@
     "create-admin-user": "node dist/cli/createAdminUser.js",
     "set-client-certificates": "node dist/cli/setClientCertificates.js",
     "seal-credential-baseline": "node dist/cli/sealCredentialBaseline.js",
+    "migrate": "node dist/cli/migrate.js",
     "verification-setup": "node dist/cli/verificationSetup.js",
     "rotate-secret-keys": "node dist/cli/rotateSecretKeys.js",
     "master-keys": "node dist/cli/masterKeys.js"

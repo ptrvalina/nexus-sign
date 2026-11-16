@@ -48,6 +48,7 @@
 
 - [Deployment](operations/deployment.md)
 - [Configuration reference](operations/configuration.md)
+- [Database migrations](operations/database-migrations.md): ledger, fresh install, upgrade, rollback
 - [Monitoring](operations/monitoring.md)
 - [Upgrade from 1.4.0 to 2.0](operations/upgrade-2.0.md)
 - [Incident response](operations/incident-response.md)

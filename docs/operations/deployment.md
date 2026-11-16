@@ -21,8 +21,8 @@ The runtime image runs as the unprivileged user `nexus`, contains `dist/`, `publ
 
 ## Database
 
-- **New installation:** apply `auth-core/src/db/schema.sql`. It is complete and idempotent. Then apply `auth-core/scripts/db/roles.sql`.
-- **Upgrade of an existing deployment:** apply `auth-core/migrations/` in numeric order ([migrations/README.md](../../auth-core/migrations/README.md)), then `scripts/db/roles.sql` again. From 1.4.0, follow [upgrade to 2.0](upgrade-2.0.md).
+- **New installation:** `npm run migrate` on an empty database ([database migrations](database-migrations.md)); it applies `schema.sql` and starts the migration ledger. Then apply `auth-core/scripts/db/roles.sql`.
+- **Upgrade of an existing deployment:** `npm run migrate` ([database migrations](database-migrations.md); the first run on a database without a ledger needs `--adopt-at`), then `scripts/db/roles.sql` again. From 1.4.0, follow [upgrade to 2.0](upgrade-2.0.md).
 
 ### Database roles
 
