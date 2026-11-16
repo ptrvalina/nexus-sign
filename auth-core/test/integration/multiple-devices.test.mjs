@@ -112,7 +112,7 @@ describe('multiple devices (PostgreSQL)', { skip: skipWithoutServices }, () => {
     const tablet = await addDevice(nexusId, phone);
     const authId = randomUUID();
     await admin.query(`INSERT INTO authorization_requests (authorization_id, client_id, nexus_id, credential_id, transaction_reference, operation_type, amount_minor, currency, beneficiary, policy_reference, policy_version, canonical_payload_hash, nonce, issued_at, expires_at)
-      VALUES ($1, $2, $3, $4, $1, 'TRANSFER', 100, 'EUR', '{}', 'p', '1', repeat('0', 64), $1, now(), now() + interval '5 minutes')`, [authId, clientId, nexusId, phone.credentialId]);
+      VALUES ($1::uuid, $2, $3, $4, $1::text, 'TRANSFER', 100, 'EUR', '{}', 'p', '1', repeat('0', 64), $1::text, now(), now() + interval '5 minutes')`, [authId, clientId, nexusId, phone.credentialId]);
     const result = await s.credentials.revokeDeviceByCustomer(clientId, nexusId, tablet.credentialId, phone.credentialId);
     assert.equal(result.remainingActive, 1);
     assert.deepEqual(await active(nexusId), [tablet.credentialId]);

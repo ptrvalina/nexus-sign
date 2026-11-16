@@ -28,7 +28,10 @@ describe('offline confirmation v2: deferred device signature', { skip: skipWitho
   const submitCode = (id, code) => bank.call('POST', `/v1/authorizations/${id}/offline-confirmation`, { body: { code } });
   const upload = (device, id, signature, signatureFormat = 'der') =>
     call(server.baseUrl, 'POST', `/v1/mobile/authorizations/${id}/deferred-signature`, { device, body: { signature, signatureFormat } });
-  const evidenceCount = async (id) => (await q(`SELECT count(*)::int AS n FROM evidence_records WHERE authorization_id = $1`, [id])).rows[0].n;
+  /** Sealed confirmations (record_type AUTHORIZATION). A final state without a
+   * signature is sealed separately as an AUTHORIZATION_OUTCOME (migration 025). */
+  const evidenceCount = async (id) => (await q(`SELECT count(*)::int AS n FROM evidence_records WHERE authorization_id = $1 AND record_type = 'AUTHORIZATION'`, [id])).rows[0].n;
+  const outcomeOf = async (id) => (await q(`SELECT outcome, reason FROM evidence_outcomes WHERE subject = 'AUTHORIZATION' AND authorization_id = $1`, [id])).rows;
   const webhooks = async (id, type) => (await q(`SELECT payload FROM webhook_deliveries WHERE event_type = $2 AND payload->>'authorizationId' = $1`, [id, type])).rows;
   const audits = async (type, id) => (await q(`SELECT details FROM audit_logs WHERE event_type = $1 AND details->>'authorizationId' = $2`, [type, id])).rows;
 
@@ -155,7 +158,8 @@ describe('offline confirmation v2: deferred device signature', { skip: skipWitho
     const hook = await webhooks(phone.id, 'authorization.offline_unsigned');
     assert.equal(hook.length, 1);
     assert.equal(hook[0].payload.reason, 'credential_not_active');
-    assert.equal(await evidenceCount(phone.id), 0);
+    assert.equal(await evidenceCount(phone.id), 0, 'no signed confirmation is sealed');
+    assert.deepEqual(await outcomeOf(phone.id), [{ outcome: 'OFFLINE_UNSIGNED', reason: 'credential_not_active' }], 'the unsigned outcome itself is recorded for sealing');
   });
 
   test('6: unknown signature format and malformed signatures are refused', async () => {

@@ -150,7 +150,7 @@ describe('payment mandates (PostgreSQL)', { skip: skipWithoutServices }, () => {
     const m = await signed(c);
     const insert = (amount, period = `date_trunc('month', now())::date`) => admin.query(
       `INSERT INTO mandate_debits (debit_id, mandate_id, debit_reference, amount_minor, currency, period_start, decision)
-       VALUES ($1, $2, $1, $3, 'EUR', ${period}, 'ALLOWED')`, [randomUUID(), m.mandateId, amount]);
+       VALUES ($1::uuid, $2, $1::text, $3, 'EUR', ${period}, 'ALLOWED')`, [randomUUID(), m.mandateId, amount]);
     await assert.rejects(insert(99999), /outside the signed terms/);
     await assert.rejects(insert(100, `'2020-01-01'::date`), /outside the signed terms/);
     await insert(100);
@@ -162,7 +162,7 @@ describe('payment mandates (PostgreSQL)', { skip: skipWithoutServices }, () => {
     const unsigned = await propose(c);
     await assert.rejects(admin.query(`UPDATE mandates SET state = 'ACTIVE' WHERE mandate_id = $1`, [unsigned.mandateId]), /needs the customer's signature/);
     await assert.rejects(admin.query(`INSERT INTO mandate_debits (debit_id, mandate_id, debit_reference, amount_minor, currency, period_start, decision)
-      VALUES ($1, $2, $1, 100, 'EUR', date_trunc('month', now())::date, 'ALLOWED')`, [randomUUID(), unsigned.mandateId]), /outside the signed terms/);
+      VALUES ($1::uuid, $2, $1::text, 100, 'EUR', date_trunc('month', now())::date, 'ALLOWED')`, [randomUUID(), unsigned.mandateId]), /outside the signed terms/);
   });
 
   test('the customer suspends, resumes and revokes; the bank withdraws; every event is sealed and verifies', async () => {

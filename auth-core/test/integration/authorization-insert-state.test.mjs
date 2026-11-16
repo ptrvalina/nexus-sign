@@ -61,7 +61,7 @@ describe('authorization insert state (PostgreSQL)', { skip: skipWithoutServices 
       ALTER TABLE authorization_requests DISABLE TRIGGER authorization_insert_state`);
     const id = randomUUID();
     await client.query(`INSERT INTO authorization_requests (${COLUMNS}, bank_transaction_state)
-      VALUES ($1, 'bank-c05', '100000005', $1, 'TRANSFER', 1, 'EUR', '{}', 'p', '1', repeat('0', 64), $1, now(), now() + interval '1 hour', 'LEGACY')`, [id]);
+      VALUES ($1::uuid, 'bank-c05', '100000005', $1::text, 'TRANSFER', 1, 'EUR', '{}', 'p', '1', repeat('0', 64), $1::text, now(), now() + interval '1 hour', 'LEGACY')`, [id]);
     await assert.rejects(client.query(migration), new RegExp(`unknown bank_transaction_state: ${id} \\(LEGACY\\)`));
     await client.query(`ALTER TABLE authorization_requests DISABLE TRIGGER authorization_lifecycle;
       UPDATE authorization_requests SET bank_transaction_state = 'CANCELLED' WHERE authorization_id = '${id}';
