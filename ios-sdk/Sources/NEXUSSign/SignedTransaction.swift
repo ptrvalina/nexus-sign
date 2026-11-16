@@ -253,19 +253,34 @@ enum SignedPayload {
             if !ok { throw Rejected(reason: "response_mismatch", detail: field) }
         }
         try check("canonicalPayloadHash", hash == envelope.canonicalPayloadHash.lowercased())
-        try check("authorizationId", signed.authorizationId == envelope.authorizationId)
-        try check("nexusId", signed.nexusId == envelope.nexusId)
-        try check("credentialId", envelope.credentialId == nil || signed.credentialId == envelope.credentialId)
-        try check("transactionReference", signed.transactionReference == envelope.transactionReference)
-        try check("operationType", signed.operationType == envelope.operationType)
-        try check("amountMinor", signed.amountMinor == envelope.amountMinor)
-        try check("currency", signed.currency == envelope.currency)
-        try check("beneficiary", signed.beneficiary == envelope.beneficiary)
-        try check("policyReference", signed.policyReference == envelope.policyReference)
-        try check("policyVersion", signed.policyVersion == envelope.policyVersion)
+        try check("authorizationId", sameCodeUnits(signed.authorizationId, envelope.authorizationId))
+        try check("nexusId", sameCodeUnits(signed.nexusId, envelope.nexusId))
+        try check("credentialId", envelope.credentialId.map { sameCodeUnits(signed.credentialId, $0) } ?? true)
+        try check("transactionReference", sameCodeUnits(signed.transactionReference, envelope.transactionReference))
+        try check("operationType", sameCodeUnits(signed.operationType, envelope.operationType))
+        try check("amountMinor", sameCodeUnits(signed.amountMinor, envelope.amountMinor))
+        try check("currency", sameCodeUnits(signed.currency, envelope.currency))
+        try check("beneficiary", sameCodeUnits(signed.beneficiary, envelope.beneficiary))
+        try check("policyReference", sameCodeUnits(signed.policyReference, envelope.policyReference))
+        try check("policyVersion", sameCodeUnits(signed.policyVersion, envelope.policyVersion))
         try check("issuedAt", parseTimestamp(signed.issuedAt) == envelope.issuedAt)
         try check("expiresAt", parseTimestamp(signed.expiresAt) == envelope.expiresAt)
         return signed
+    }
+
+    /// Equality of UTF-16 code units, as in Auth Core and the Android SDK.
+    /// Swift `String ==` treats canonically equivalent strings as equal
+    /// ("é" precomposed and "e" + combining acute), which would let the
+    /// response differ from the signed bytes unnoticed (finding D-05).
+    static func sameCodeUnits(_ a: String, _ b: String) -> Bool {
+        a.utf16.elementsEqual(b.utf16)
+    }
+
+    static func sameCodeUnits(_ a: [String: String], _ b: [String: String]) -> Bool {
+        func units(_ d: [String: String]) -> [[UInt16]] {
+            d.map { Array($0.key.utf16) + [0] + Array($0.value.utf16) }.sorted { $0.lexicographicallyPrecedes($1) }
+        }
+        return a.count == b.count && units(a) == units(b)
     }
 
     // MARK: - Display helpers

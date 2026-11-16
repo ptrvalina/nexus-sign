@@ -61,6 +61,15 @@ class RecoveryPhraseTest {
     }
 
     @Test
+    fun `Unicode spaces separate words as on iOS (D-10)`() {
+        for (space in listOf("\u00A0", "\u3000", "\u2009", "\u202F", "\u2028", "\u0085")) {
+            assertEquals(space, allZero, RecoveryPhrase.normalized(listOf(allZero.joinToString(space))))
+        }
+        // Not White_Space: the zero-width space and the BOM stay inside a word.
+        assertFalse(RecoveryPhrase.isWellFormed(wordlist, listOf(allZero.joinToString("\u200B"))))
+    }
+
+    @Test
     fun `the recovery seed ignores formatting differences`() {
         val salt = ByteArray(16) { it.toByte() }
         val expected = RecoveryProtocol.seed(allZero, salt, 1_000)

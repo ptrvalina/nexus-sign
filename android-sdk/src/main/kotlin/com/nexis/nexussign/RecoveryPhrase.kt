@@ -32,9 +32,14 @@ internal object RecoveryPhrase {
      * (`auth-core/test-vectors/recovery-v2.json`).
      */
     fun normalized(phrase: List<String>): List<String> =
-        phrase.flatMap { it.trim().split(Regex("\\s+")) }
+        phrase.flatMap { it.split(WHITE_SPACE) }
             .filter { it.isNotEmpty() }
             .map { it.lowercase() }
+
+    /** The Unicode White_Space characters, which Swift's `isWhitespace` splits
+     * on. Java's `\s` is ASCII only: a phrase pasted with a no-break or
+     * ideographic space was accepted on iOS and refused on Android (D-10). */
+    private val WHITE_SPACE = Regex("[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+")
 
     /**
      * True if the phrase has 12 known words and a valid checksum. This is a

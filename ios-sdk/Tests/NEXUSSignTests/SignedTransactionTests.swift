@@ -78,6 +78,15 @@ final class SignedTransactionTests: XCTestCase {
                 XCTAssertEqual((error as? SignedPayload.Rejected)?.reason, "response_mismatch")
             }
         }
+
+        // Finding D-05: a canonically equivalent but different string is a
+        // mismatch (Swift's String == would call it equal).
+        let precomposed = "Caf\u{00E9}", decomposed = "Cafe\u{0301}"
+        XCTAssertEqual(precomposed, decomposed, "Swift String equality is canonical equivalence")
+        XCTAssertFalse(SignedPayload.sameCodeUnits(precomposed, decomposed))
+        XCTAssertFalse(SignedPayload.sameCodeUnits(["name": precomposed], ["name": decomposed]))
+        XCTAssertFalse(SignedPayload.sameCodeUnits([precomposed: "x"], [decomposed: "x"]))
+        XCTAssertTrue(SignedPayload.sameCodeUnits(["name": precomposed, "iban": "DE89"], ["iban": "DE89", "name": precomposed]))
     }
 
     func testAmountsAreFormattedWithIntegerArithmetic() throws {
