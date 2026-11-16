@@ -33,13 +33,11 @@ export interface CredentialKeys {
   enrolmentEvidenceId: string | null;
 }
 
-interface VerifiedEnrolment {
-  evidenceHash: string;
-  keys: { signingPublicKeyPem: string; authPublicKeyPem: string | null; offlinePublicKeyPem: string | null };
-}
+type EnrolmentKeys = { signingPublicKeyPem: string; authPublicKeyPem: string | null; offlinePublicKeyPem: string | null };
 
 const CACHE_LIMIT = 10_000;
-const verifiedEnrolments = new Map<string, VerifiedEnrolment>();
+/** Enrolment evidence ID → the hash, key and signature whose seal verified. */
+const verifiedEnrolments = new Map<string, string>();
 let keyring: { hsm: HsmAdapter; retired: Map<string, string> } | null = null;
 
 /** Called once at startup with the HSM adapter whose key seals evidence. */
@@ -54,39 +52,77 @@ export async function evidencePublicKeys(): Promise<Record<string, string>> {
   return { ...Object.fromEntries(keyring.retired), [await keyring.hsm.evidenceKeyId()]: await keyring.hsm.evidencePublicKeyPem() };
 }
 
+/** Audit writes postponed until a caller's transaction has ended. */
+export type DeferredAudits = Array<() => Promise<unknown>>;
+
 /**
  * Checks the credential's keys against its sealed enrolment and returns the
  * enrolment's evidence hash (an AUTHORIZATION record refers to it).
+ *
+ * A caller that holds row locks in `runner` passes `deferred`: the security
+ * event is then queued instead of written through a second pool connection
+ * while the locks are held.
  */
-export async function assertCredentialIntegrity(credential: CredentialKeys, runner: Pick<PoolClient, 'query'> = pool): Promise<string> {
+export async function assertCredentialIntegrity(credential: CredentialKeys, runner: Pick<PoolClient, 'query'> = pool, deferred?: DeferredAudits): Promise<string> {
   const failure = async (reason: string): Promise<never> => {
-    await recordAuditEvent('integrity_violation', { nexusId: credential.nexusId },
+    const audit = () => recordAuditEvent('integrity_violation', { nexusId: credential.nexusId },
       { credentialId: credential.credentialId, reason }).catch(() => undefined);
+    if (deferred) deferred.push(audit); else await audit();
     throw new CredentialIntegrityError(`Credential integrity check failed: ${reason}`);
   };
   if (!credential.enrolmentEvidenceId) return failure('the credential has no sealed enrolment record');
 
-  let enrolment = verifiedEnrolments.get(credential.enrolmentEvidenceId);
-  if (!enrolment) {
-    const record = await getEvidenceRecord(runner, credential.enrolmentEvidenceId);
-    if (!record) return failure('the sealed enrolment record does not exist');
-    const problem = await sealProblem(record);
-    if (problem) return failure(problem);
-    const payload = record.sealedPayload as { recordType?: string; credentialId?: string; nexusId?: string; keys?: VerifiedEnrolment['keys'] };
-    if (payload.recordType !== 'CREDENTIAL_ENROLLED' || !payload.keys) return failure('the referenced record is not a credential enrolment');
-    if (payload.credentialId !== credential.credentialId || payload.nexusId !== credential.nexusId) {
-      return failure('the sealed enrolment belongs to another credential');
-    }
-    enrolment = { evidenceHash: record.evidenceHash, keys: payload.keys };
-    if (verifiedEnrolments.size >= CACHE_LIMIT) verifiedEnrolments.clear();
-    verifiedEnrolments.set(credential.enrolmentEvidenceId, enrolment);
+  // The row is read every time: its columns and payload are checked on each
+  // use. Only the ECDSA verification of the seal is cached, keyed by
+  // the exact hash and signature it was computed over.
+  const record = await getEvidenceRecord(runner, credential.enrolmentEvidenceId);
+  if (!record) return failure('the sealed enrolment record does not exist');
+  const sealKey = `${credential.enrolmentEvidenceId}:${record.evidenceHash}:${record.sealKeyId}:${record.hsmSignature}`;
+  const cachedSeal = verifiedEnrolments.get(credential.enrolmentEvidenceId) === sealKey
+    && record.schemaVersion === '3' && evidenceHash(record.sealedPayload) === record.evidenceHash;
+  const problem = (cachedSeal ? null : await sealProblem(record)) ?? recordMetadataProblem(record);
+  if (problem) return failure(problem);
+  const payload = record.sealedPayload as { recordType?: string; credentialId?: string; nexusId?: string; keys?: EnrolmentKeys };
+  if (payload.recordType !== 'CREDENTIAL_ENROLLED' || !payload.keys) return failure('the referenced record is not a credential enrolment');
+  if (payload.credentialId !== credential.credentialId || payload.nexusId !== credential.nexusId) {
+    return failure('the sealed enrolment belongs to another credential');
   }
+  if (!cachedSeal) {
+    if (verifiedEnrolments.size >= CACHE_LIMIT) verifiedEnrolments.clear();
+    verifiedEnrolments.set(credential.enrolmentEvidenceId, sealKey);
+  }
+  const enrolment = { evidenceHash: record.evidenceHash, keys: payload.keys };
   if (!sameKey(enrolment.keys.signingPublicKeyPem, credential.publicKeyPem)
     || !sameKey(enrolment.keys.authPublicKeyPem, credential.authPublicKeyPem)
     || !sameKey(enrolment.keys.offlinePublicKeyPem, credential.offlinePublicKeyPem)) {
     return failure('the credential keys differ from the sealed enrolment');
   }
   return enrolment.evidenceHash;
+}
+
+/**
+ * the columns of an evidence row that repeat values of its sealed
+ * payload must equal them exactly. A valid seal proves the payload, not the
+ * row around it; queries select and group records by these columns (by
+ * authorization, by identity's chain, by credential), so a row whose columns
+ * disagree with what was sealed is refused wherever it is used. Null when
+ * all agree.
+ */
+export function recordMetadataProblem(record: SealedEvidence): string | null {
+  const p = record.sealedPayload as Record<string, unknown>;
+  const pairs: Array<[string, unknown, unknown]> = [
+    ['recordType', record.recordType, p.recordType],
+    ['nexusId', record.nexusId, p.nexusId],
+    ['credentialId', record.credentialId, p.credentialId],
+    ['chainSequence', record.chainSequence, p.chainSequence],
+    ['previousEvidenceHash', record.previousEvidenceHash ?? null, p.previousEvidenceHash ?? null],
+    ['sealKeyId', record.sealKeyId, p.sealKeyId],
+    ['schemaVersion', record.schemaVersion, p.schemaVersion],
+  ];
+  // AUTHORIZATION records name their authorization; the others have none.
+  pairs.push(['authorizationId', record.authorizationId ?? null, record.recordType === 'AUTHORIZATION' ? p.authorizationId ?? null : null]);
+  const differs = pairs.filter(([, column, sealed]) => column !== sealed).map(([name]) => name);
+  return differs.length ? `the record metadata does not match the sealed payload (${differs.join(', ')})` : null;
 }
 
 /** Checks the hash and HSM seal of a stored record; null when both hold. */

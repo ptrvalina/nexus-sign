@@ -27,7 +27,7 @@ Auth Core creates a verification plan in the same database transaction as the au
 |---|---|
 | `requireAudio`, `requireVideo` | Minimum factor for this authorization |
 | `highAmountThresholdMinor` | Amounts at or above it require at least AUDIO |
-| `audioAvailable`, `videoAvailable` | Whether the bank operates the channel (default: yes). A required channel is always enabled. |
+| `audioAvailable`, `videoAvailable` | `false` leaves the channel out for this authorization. A channel is available only if the bank can verify it: a provider key registered for it or operator verification enabled for it (`cli/verificationSetup.js`). A requirement no available channel meets is refused (409 `VERIFICATION_CHANNEL_UNAVAILABLE`). |
 | `pushTimeoutSeconds` | 10–300 s, default 30 |
 | `clientEscalationAllowed` | Whether the customer may ask for a stronger check from the app |
 
@@ -55,7 +55,7 @@ Only one session per authorization is open at a time; opening a new one supersed
 2. The level can only increase. An idempotent replay of the create request returns the original plan, even if it carries a weaker policy.
 3. The client cannot select a weaker path for itself.
 4. An audio or video session is bound to the `authorization_id`, NEXUS ID, policy version and a one-time nonce.
-5. Audio and video results are accepted only through the trusted provider or gateway path (mTLS). The mobile client cannot report itself as verified.
+5. Audio and video results are accepted only as a provider result token that Auth Core verifies itself ([verification result v1](../protocol/verification-result-v1.md)), or as the decision of an authenticated bank operator in the admin console. The bank gateway only relays tokens; neither it nor the mobile client can report a session as verified.
 6. Sessions have a short TTL and are single-use.
 7. After any additional verification, the device must still sign the same canonical payload.
 8. A bank commit is allowed only for a `VERIFIED` authorization.

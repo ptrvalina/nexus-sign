@@ -20,7 +20,9 @@ async function api(path, options = {}) {
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.error || `Request failed (HTTP ${response.status})`);
+    const error = new Error(body.error || `Request failed (HTTP ${response.status})`);
+    error.status = response.status;
+    throw error;
   }
   return body;
 }
@@ -312,7 +314,7 @@ async function loadStats() {
 }
 
 async function loadEverything() {
-  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries()]);
+  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries(), loadCalls()]);
 }
 
 function reportError(error) {

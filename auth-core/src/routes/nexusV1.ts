@@ -5,6 +5,8 @@ import { createNexusIdentity, getNexusIdentityForClient } from '../services/nexu
 import { getCredentialForClient, revokeCredentialForClient } from '../services/credentialService';
 import { createAuthorization } from '../services/authorizationService';
 import { getAuthorizationForClient } from '../services/authorizationRecord';
+import { reportedState } from '../services/authorizationExpiry';
+import { confirmationView } from '../services/authorizationEvidenceCheck';
 import { confirmAuthorizationOffline, getOfflineChallenge, verifyAuthorization } from '../services/authorizationConfirmation';
 import { finalizeBankTransaction, getBankTransactionState, requestCommit } from '../services/bankTransactionService';
 import { completeVerificationSession, escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
@@ -196,6 +198,11 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
       const auth = await getAuthorizationForClient(uuidSchema.parse(req.params.authorizationId), clientIdOf(req));
       res.json({
         ...auth,
+        state: reportedState(auth),
+        // True only for VERIFIED with sealed evidence that verifies now (HSM
+        // seal, binding, terms, device signature with the enrolment key): the
+        // state column alone does not set it. OFFLINE_PROVISIONAL never.
+        ...(await confirmationView(auth.authorizationId, clientIdOf(req), reportedState(auth))),
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,
@@ -266,18 +273,15 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
     } catch (e) { next(e); }
   });
 
-  /** Result of an audio/video check, reported by the bank's verification
-   * gateway. Requires gateway mTLS whenever REQUIRE_MTLS_HEADER is set. */
+  /** Result of an audio/video check: a result token (JWS) signed by a
+   * verification provider registered for this bank, relayed by the
+   * bank's verification gateway. Requires gateway mTLS whenever
+   * REQUIRE_MTLS_HEADER is set. */
   router.post('/v1/authorizations/:authorizationId/verification-sessions/:sessionId/complete', requireGatewayMtls, async (req: AuthenticatedRequest, res, next) => {
     try {
-      const body = z.object({
-        sessionNonce: z.string().min(20).max(128),
-        result: z.enum(['VERIFIED', 'FAILED']),
-        providerReference: z.string().min(1).max(128),
-        assertion: z.string().min(1).max(4096),
-      }).parse(req.body);
+      const body = z.object({ resultToken: z.string().min(1).max(8192) }).strict().parse(req.body);
       res.json(await completeVerificationSession(uuidSchema.parse(req.params.authorizationId), clientIdOf(req),
-        uuidSchema.parse(req.params.sessionId), body.sessionNonce, body.result, body.providerReference, body.assertion));
+        uuidSchema.parse(req.params.sessionId), body.resultToken));
     } catch (e) { next(e); }
   });
 

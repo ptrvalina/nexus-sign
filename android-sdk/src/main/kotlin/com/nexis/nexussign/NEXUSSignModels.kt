@@ -105,6 +105,9 @@ class NexusOfflineChallenge internal constructor(
     /** The transaction exactly as it is confirmed; render the screen from this. */
     val transaction: NexusSignedTransaction,
     internal val canonicalPayload: ByteArray,
+    /** Offline confirmation v2 (QR `NXS2.`): [NEXUSSignSDK.confirmOffline]
+     * also signs the transaction and keeps the signature for upload. */
+    val requiresDeviceSignature: Boolean = false,
 )
 
 enum class NEXUSVerificationOutcome { VERIFIED, FAILED, EXPIRED }
@@ -113,4 +116,4 @@ enum class NEXUSVerificationOutcome { VERIFIED, FAILED, EXPIRED }
 internal data class VerifyResponse(val status: String, val reason: String? = null)
 
 @Serializable
-internal data class ErrorResponse(val error: String? = null, val serverTime: Long? = null)
+internal data class ErrorResponse(val error: String? = null, val serverTime: Long? = null, val code: String? = null)

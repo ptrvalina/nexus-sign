@@ -1,6 +1,6 @@
--- 016: audit attribution and append-only audit log (NXS-010), admin scope,
--- MFA and four-eyes approvals (NXS-011), bank client certificate binding
--- (NXS-012).
+-- 016: audit attribution and append-only audit log, admin scope,
+-- MFA and four-eyes approvals, bank client certificate binding
+--.
 
 -- Audit log: who acted and for which bank. Existing rows keep NULL client and
 -- actor where they cannot be derived; the actor recorded in details is copied.
@@ -32,7 +32,7 @@ CREATE TRIGGER audit_logs_no_truncate BEFORE TRUNCATE ON audit_logs
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS client_id TEXT REFERENCES bank_clients(client_id);
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_secret_encrypted TEXT;
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT;
--- Bumped whenever the password or TOTP secret is reset; older sessions end (NXS-032).
+-- Bumped whenever the password or TOTP secret is reset; older sessions end.
 ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 1;
 
 -- Revocation and reactivation need a second admin.

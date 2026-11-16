@@ -97,10 +97,17 @@ final class SignedTransactionTests: XCTestCase {
         XCTAssertEqual(SignedPayload.fractionDigits(currency: "CLF"), 4)
     }
 
-    func testConfirmationTextIsBuiltFromSignedValues() throws {
+    func testPromptTextAndBeneficiaryDisplayMatchTheSharedVectors() throws {
+        let valid = try XCTUnwrap(try loadVectors()["valid"] as? [[String: Any]])
+        for vector in valid {
+            let name = vector["name"] as? String ?? "?"
+            let signed = try SignedPayload.parse(try bytes(vector["canonical_base64"]))
+            XCTAssertEqual(signed.beneficiaryDisplay, vector["beneficiary_display"] as? String, name)
+            XCTAssertEqual(signed.confirmationText, vector["confirmation_text"] as? String, name)
+        }
         let block = try XCTUnwrap(try loadVectors()["response_mismatch"] as? [String: Any])
         let signed = try SignedPayload.parse(try bytes(block["base_canonical_base64"]))
-        XCTAssertEqual(signed.confirmationText, "transfer: 1250.00 PLN → Jan Kowalski · PL61109010140000071219812874 • BANK-2026-000001")
+        XCTAssertEqual(signed.confirmationText, "1250.00 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001")
     }
 
     /// Auth Core sends timestamps with milliseconds, which JSONDecoder's default

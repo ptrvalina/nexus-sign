@@ -41,6 +41,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     private val attestationProvider = AttestationProvider(appContext, config.playIntegrityCloudProjectNumber)
     private val networkClient = NetworkClient(config)
     private val pushKeys by lazy { PushKeyStore(appContext, config.bankId) }
+    private val offlineSignatures by lazy { OfflineSignatureQueue(SharedPreferencesSignatureStorage(appContext, config.bankId)) }
 
     init {
         useDeviceAuthentication(state.registeredCredentialId())
@@ -53,6 +54,17 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     fun isRegistered(): Boolean = state.registeredCredentialId() != null && keyManager.hasExistingKey()
 
     /** True when this device can confirm transactions from a QR code without network. */
+    /**
+     * Fingerprint of this device's signing key: hex SHA-256 of its DER
+     * SubjectPublicKeyInfo, computed here from the key in the Keystore, not
+     * taken from any Auth Core response. After enrolment, replacement or
+     * recovery the app sends it with the credential ID to the bank's own
+     * backend, which approves exactly this key for the customer
+     * (docs/protocol/bank-credential-trust-v1.md). Null when not registered.
+     */
+    fun signingKeyFingerprint(): String? =
+        if (!isRegistered()) null else keyManager.activeSigningPublicKeyInfo()?.let(DeviceProtocol::signingKeyFingerprint)
+
     fun isOfflineConfirmationAvailable(): Boolean = isRegistered() && keyManager.hasOfflineKey()
 
     /** The credential ID confirmed by Auth Core, if the device is registered. */
@@ -110,6 +122,35 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      * canonical bytes and submits the signature. Call from the main thread's
      * lifecycle scope of [activity].
      */
+    /**
+     * Opens an audio or video verification session for [authorization], when
+     * the bank's verification plan asks for one (ADR 0017). The signed bytes
+     * are verified first, so the terms shown during the call
+     * ([NexusSignedTransaction.confirmationText]) are the ones the operator
+     * sees and the device will sign. Auth Core binds the session to this
+     * authorization and this device's credential. At most three sessions per
+     * channel and authorization.
+     *
+     * Run the call with [callSignalling] and a media engine
+     * (nexus-sign-android-calls). The call never confirms the payment: after
+     * a VERIFIED decision, call [approve] as usual.
+     */
+    suspend fun openVerificationCall(authorization: NexusAuthorization, channel: VerificationChannel): VerificationSession {
+        val signed = authorization.signedTransaction()
+        requireNotExpired(signed)
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        if (signed.credentialId != state.registeredCredentialId()) {
+            throw NEXUSSignError.AuthorizationPayloadInvalid("wrong_device", "the authorization is for another device")
+        }
+        return CallWire.decodeSession(networkClient.openVerificationSession(authorization.authorizationId, channel), authorization.authorizationId)
+    }
+
+    /** Device-signed signalling of one verification session. */
+    fun callSignalling(session: VerificationSession): CallSignalling {
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        return DeviceCallSignalling(session.sessionId, networkClient)
+    }
+
     suspend fun approve(authorization: NexusAuthorization, activity: FragmentActivity): NEXUSVerificationOutcome {
         // Expiry, prompt text and the signed bytes all come from the one
         // verified canonical payload, never from the JSON convenience fields.
@@ -258,6 +299,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      * [NexusOfflineChallenge.transaction].
      */
     fun readOfflineChallenge(qrPayload: String): NexusOfflineChallenge {
+        val version = DeviceProtocol.qrPayloadVersion(qrPayload)
         val bytes = DeviceProtocol.qrPayloadBytes(qrPayload)
         val transaction = try {
             SignedPayload.parse(bytes)
@@ -268,19 +310,47 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw NEXUSSignError.AuthorizationPayloadInvalid("wrong_device", "the QR code is for another device")
         }
         requireNotExpired(transaction)
-        return NexusOfflineChallenge(transaction, bytes)
+        return NexusOfflineChallenge(transaction, bytes, requiresDeviceSignature = version == 2)
     }
 
     /**
      * Asks for biometric confirmation showing the transaction and returns the
      * 8-digit code the customer types on the bank's screen. Works without
      * network. The code is valid only for this exact transaction.
+     *
+     * Offline confirmation v2 ([NexusOfflineChallenge.requiresDeviceSignature]):
+     * first the signing key signs the transaction (its own prompt: Android
+     * binds one key to one prompt) and the signature is stored; only then is
+     * the code computed (second prompt). Auth Core confirms the payment when
+     * the signature arrives: call [submitPendingOfflineSignatures] whenever
+     * the app is online.
      */
     suspend fun confirmOffline(challenge: NexusOfflineChallenge, activity: FragmentActivity): String {
         if (state.registeredCredentialId() == null) throw NEXUSSignError.NotRegistered
         if (!keyManager.hasOfflineKey()) throw NEXUSSignError.OfflineConfirmationUnavailable
         requireNotExpired(challenge.transaction)
         requireBiometrics(activity)
+
+        if (challenge.requiresDeviceSignature) {
+            val authorizationId = challenge.transaction.authorizationId
+            if (!UUID_PATTERN.matches(authorizationId)) throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_qr", "authorization ID is not a UUID")
+            val signature = try {
+                keyManager.signatureForAuthorization()
+            } catch (e: NEXUSSignError.CredentialInvalidated) {
+                forgetRegistration()
+                throw e
+            }
+            val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), challenge.transaction.confirmationText())
+                .cryptoObject?.signature ?: signature
+            val signatureDer = try {
+                authorized.update(challenge.canonicalPayload)
+                authorized.sign()
+            } catch (e: Exception) {
+                throw NEXUSSignError.KeyOperationFailed(e)
+            }
+            // Stored before the code exists: no code without its signature.
+            offlineSignatures.add(authorizationId, Base64.getEncoder().encodeToString(signatureDer))
+        }
 
         val mac = try {
             keyManager.offlineMac()
@@ -297,6 +367,27 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw NEXUSSignError.KeyOperationFailed(e)
         }
         return DeviceProtocol.offlineCode(tag)
+    }
+
+    /**
+     * Offline confirmation v2: uploads the signatures made by [confirmOffline]
+     * that Auth Core does not have yet. Call it when the app starts and
+     * whenever it regains a connection. Signatures Auth Core accepted, or can
+     * never accept (the payment was finalized otherwise, or the signature is
+     * not valid for it), are removed; the others are kept for the next call.
+     */
+    suspend fun submitPendingOfflineSignatures(): OfflineSignatureDelivery {
+        if (state.registeredCredentialId() == null) return OfflineSignatureDelivery(0, 0, offlineSignatures.pending().size)
+        return offlineSignatures.deliver { item ->
+            if (!UUID_PATTERN.matches(item.authorizationId)) return@deliver UploadOutcome.Refused(0)
+            try {
+                UploadOutcome.ofStatus(networkClient.uploadDeferredSignature(item.authorizationId, item.signature))
+            } catch (e: NEXUSSignError.ServerError) {
+                UploadOutcome.ofStatus(e.statusCode)
+            } catch (e: NEXUSSignError.NetworkUnavailable) {
+                UploadOutcome.Retry
+            }
+        }
     }
 
     // --- Secure push (bank push mode NEXUS) ---
@@ -414,7 +505,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         confirmed: (T) -> Registration,
     ): T = replacementLock.withLock {
         // Without a screen lock the authentication key would need no user at
-        // all: enrolment requires a secure lock screen (NXS-027).
+        // all: enrolment requires a secure lock screen.
         val keyguard = appContext.getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
         if (!keyguard.isDeviceSecure) throw NEXUSSignError.NoAuthenticationMethodEnrolled
         // One attempt at a time per process: two attempts would share the

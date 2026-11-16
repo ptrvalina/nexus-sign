@@ -10,15 +10,18 @@ Column `authorization_requests.state`, trigger `authorization_lifecycle`.
 
 | From | Permitted to |
 |---|---|
-| `PENDING_USER` | `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED` |
-| `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED` | none (final) |
+| `PENDING_USER` | `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED`, `OFFLINE_PROVISIONAL` |
+| `OFFLINE_PROVISIONAL` (migration 022) | `VERIFIED`, `OFFLINE_UNSIGNED` |
+| `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED`, `OFFLINE_UNSIGNED` | none (final) |
 
 Further rules in the same trigger:
 
 | Rule | Columns |
 |---|---|
-| Never change | `authorization_id`, `client_id`, `nexus_id`, `credential_id`, `transaction_reference`, `operation_type`, `amount_minor`, `currency`, `beneficiary`, `canonical_payload_hash`, `nonce`, `issued_at`, `created_at` |
-| Change only in the update that moves the state from `PENDING_USER` to `VERIFIED` | `signature`, `signature_format`, `confirmation_method`, `verified_at` |
+| Never change | `authorization_id`, `client_id`, `nexus_id`, `credential_id`, `transaction_reference`, `operation_type`, `amount_minor`, `currency`, `beneficiary`, `policy_reference`, `policy_version` (since 022), `canonical_payload_hash`, `nonce`, `issued_at`, `created_at` |
+| Change only in the update that moves the state from `PENDING_USER` or `OFFLINE_PROVISIONAL` to `VERIFIED` | `signature`, `signature_format`, `confirmation_method`, `verified_at` |
+| Set once, from `PENDING_USER` to `VERIFIED` or `OFFLINE_PROVISIONAL` | `offline_code_tag`, `offline_code_accepted_at`, `offline_signature_deadline` (all three required for `OFFLINE_PROVISIONAL`) |
+| Set once, from `OFFLINE_PROVISIONAL` to `OFFLINE_UNSIGNED` (required then) | `offline_unsigned_reason` |
 | Must be set when the state is `VERIFIED` | `signature`, `verified_at` |
 | Change only while the state is `PENDING_USER` | `expires_at` |
 
@@ -29,6 +32,9 @@ Auth Core inserts every authorization in `PENDING_USER` (`authorizationService.t
 | Transition | Performed by |
 |---|---|
 | `PENDING_USER` → `VERIFIED` | `authorizationConfirmation.ts` (`transitionTerminal`): a valid device signature or offline code, under a row lock, after re-checking the plan, expiry, credential state and key, and the canonical bytes; seals the `AUTHORIZATION` evidence record in the same transaction |
+| `PENDING_USER` → `OFFLINE_PROVISIONAL` | `authorizationConfirmation.ts` (`acceptOfflineCode`): a correct offline code with `OFFLINE_CONFIRMATION_MODE=deferred_signature` and no stored device signature |
+| `OFFLINE_PROVISIONAL` → `VERIFIED` | `authorizationConfirmation.ts` (`submitDeferredSignature`): the device's signature from the bound credential, before the deadline, under the row lock; seals the evidence |
+| `OFFLINE_PROVISIONAL` → `OFFLINE_UNSIGNED` | `expireUnsignedOfflineConfirmations` (expiry worker): deadline passed, or credential or identity no longer `ACTIVE` |
 | `PENDING_USER` → `EXPIRED` | `authorizationConfirmation.ts`, when a confirmation arrives after `expires_at` |
 | `PENDING_USER` → `REJECTED` | `authorizationConfirmation.ts` (signature or code attempt limit reached); `adaptiveVerificationService.ts` (verification plan failed) |
 | `PENDING_USER` → `CANCELLED` | `credentialService.ts` (credential revoked or replaced); `recoveryService.ts` (recovery completed); `nexusIdentityService.ts` (identity suspended or revoked) |

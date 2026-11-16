@@ -4,6 +4,8 @@ import { base32Encode, generateTotpSecret, totpUri } from '../crypto/totp';
 import { env } from '../config/env';
 import { pool } from '../db/pool';
 import { redis } from '../db/redis';
+import { loadMasterKeys } from '../crypto/masterKeyVault';
+import { masterKeyConfigured } from '../config/productionPosture';
 
 /**
  * Creates (or resets) an admin dashboard account. Not an HTTP endpoint;
@@ -22,6 +24,7 @@ import { redis } from '../db/redis';
  * --keep-totp keeps the existing one.
  */
 async function main(): Promise<void> {
+  await loadMasterKeys(); // MASTER_KEY_SOURCE=hsm: unwrap in the HSM
   const args = process.argv.slice(2);
   const options = args.filter((a) => a.startsWith('--'));
   const [username, role] = args.filter((a) => !a.startsWith('--'));
@@ -39,7 +42,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  if (!keepTotp && !env.ADMIN_SECRET_ENCRYPTION_KEY) {
+  if (!keepTotp && !masterKeyConfigured(env, 'ADMIN_SECRET_ENCRYPTION_KEY')) {
     console.error('ADMIN_SECRET_ENCRYPTION_KEY is required to enrol the account\'s TOTP secret');
     process.exitCode = 1;
     return;

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPOSITORY = join(here, '..', '..');
-export const SHARED_VECTORS = ['signed-payload-v1.json', 'device-protocols-v1.json', 'secure-push-v1.json', 'recovery-v2.json'];
+export const SHARED_VECTORS = ['signed-payload-v1.json', 'device-protocols-v1.json', 'secure-push-v1.json', 'recovery-v2.json', 'bank-trust-v1.json'];
 export const IOS_RESOURCES = join(REPOSITORY, 'ios-sdk', 'Tests', 'NEXUSSignTests', 'Resources');
 
 /** Writes a vector file and its iOS copy. */

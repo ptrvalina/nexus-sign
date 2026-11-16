@@ -11,7 +11,9 @@ describe('security invariants', { skip: skipWithoutServices }, () => {
   let server; let bankA; let bankB; let deviceA; let deviceB;
 
   before(async () => {
-    server = await startAuthCore();
+    // Offline confirmation v1 for the concurrent-code invariant; the v2
+    // equivalent is in offline-deferred-signature.test.mjs.
+    server = await startAuthCore({ env: { OFFLINE_CONFIRMATION_MODE: 'immediate' } });
     bankA = await bankSession(server, await server.registerBank('bank-a'));
     bankB = await bankSession(server, await server.registerBank('bank-b'));
     deviceA = await bankA.enrolDevice((await bankA.createIdentity()).nexusId);
@@ -143,7 +145,7 @@ describe('security invariants', { skip: skipWithoutServices }, () => {
     assert.equal(duplicate.status, 409, duplicate.text);
   });
 
-  test('NXS-030: a confirmation cannot be committed after the identity is suspended or when it is too old', async () => {
+  test('A confirmation cannot be committed after the identity is suspended or when it is too old', async () => {
     const auth = await bankA.createAuthorization(deviceA);
     const { signature } = await deviceSignature(server, deviceA, auth.authorizationId);
     assert.equal((await submitSignature(server, deviceA, auth.authorizationId, signature)).json.status, 'VERIFIED');

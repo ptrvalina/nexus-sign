@@ -4,6 +4,7 @@ import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { pool } from '../db/pool';
 import { canonicalJson } from './canonicalAuthorization';
 import { NotFoundError } from './errors';
+import { enqueueWebhook } from './webhookService';
 
 /**
  * Evidence, schema version 3 (docs/protocol/evidence-format.md, ADR 0009).
@@ -61,8 +62,13 @@ export interface AuthorizationEvidenceInput {
   signatureAlgorithm: string;
   /** DEVICE_SIGNATURE: ECDSA by the device signing key, verifiable by anyone.
    * OFFLINE_CODE: HMAC with a key shared by device and Auth Core; proves the
-   * device produced the code but is not verifiable by a third party. */
-  confirmationMethod: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE';
+   * device produced the code but is not verifiable by a third party.
+   * OFFLINE_SIGNED (offline confirmation v2): the accepted code and the
+   * device's ECDSA signature over the same bytes, uploaded later; the
+   * signature is verifiable like DEVICE_SIGNATURE. */
+  confirmationMethod: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE' | 'OFFLINE_SIGNED';
+  /** OFFLINE_SIGNED only: the accepted code's tag and the two times. */
+  offline?: { offlineCodeTag: string; offlineCodeAcceptedAt: string; deferredSignatureReceivedAt: string };
   keyVersion: number;
   policyReference: string;
   policyVersion: string;
@@ -200,17 +206,32 @@ async function appendRecord(
       columns.correlationId ?? null, previousEvidenceHash, hash, seal.signature.toString('base64'), seal.keyVersion, sealKeyId,
       EVIDENCE_SCHEMA_VERSION, JSON.stringify(columns.verificationFactors ?? []), JSON.stringify(sealedPayload)],
   );
+  // Every new chain head goes to the bank (transactional outbox), so
+  // the bank holds HSM-sealed checkpoints that Auth Core cannot take back;
+  // verify-evidence --heads detects records removed after any of them.
+  const owner = await tx.query<{ client_id: string }>(`SELECT client_id FROM nexus_identities WHERE nexus_id = $1`, [nexusId]);
+  if (owner.rows[0]) {
+    await enqueueWebhook(owner.rows[0].client_id, 'evidence.appended', {
+      nexusId, recordType, evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash,
+      previousEvidenceHash, sealKeyId, hsmSignature: seal.signature.toString('base64'),
+    }, tx);
+  }
   return { evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash };
 }
 
 /** Seals a confirmed authorization, in the transaction that consumes it. */
 export async function sealAuthorizationEvidence(tx: PoolClient, hsm: HsmAdapter, input: AuthorizationEvidenceInput): Promise<ChainPosition> {
-  const factors = await tx.query<{ channel: string; status: string; provider_reference: string | null; assertion_hash: string | null; completed_at: Date | null }>(
-    `SELECT channel, status, provider_reference, assertion_hash, completed_at
+  const factors = await tx.query<{ channel: string; status: string; provider_reference: string | null; assertion_hash: string | null; completed_at: Date | null; result_method: string | null; result_issuer: string | null }>(
+    `SELECT channel, status, provider_reference, assertion_hash, completed_at, result_method, result_issuer
      FROM verification_sessions WHERE authorization_id = $1 ORDER BY created_at ASC`, [input.authorizationId]);
+  // method: PROVIDER (signed result token; issuer "<providerId>/<keyId>",
+  // assertionHash = SHA-256 of the token) or OPERATOR (issuer = the bank
+  // operator's username). Sessions closed without a result have neither.
   const verificationFactors = factors.rows.map((row) => ({
     channel: row.channel,
     status: row.status,
+    method: row.result_method,
+    issuer: row.result_issuer,
     providerReference: row.provider_reference,
     assertionHash: row.assertion_hash,
     completedAt: row.completed_at?.toISOString() ?? null,
@@ -227,6 +248,7 @@ export async function sealAuthorizationEvidence(tx: PoolClient, hsm: HsmAdapter,
     signatureFormat: input.signatureFormat,
     signatureAlgorithm: input.signatureAlgorithm,
     confirmationMethod: input.confirmationMethod,
+    ...(input.offline ?? {}),
     keyVersion: input.keyVersion,
     policyReference: input.policyReference,
     policyVersion: input.policyVersion,
@@ -341,11 +363,13 @@ export async function getAuthorizationEvidencePosition(authorizationId: string):
   return row ? { evidenceId: row.evidence_id, chainSequence: Number(row.chain_sequence), evidenceHash: row.evidence_hash } : null;
 }
 
-interface EvidenceRow {
+export interface EvidenceRow {
   evidence_id: string; record_type: EvidenceRecordType; authorization_id: string | null; nexus_id: string; credential_id: string;
   chain_sequence: string; sealed_payload: Record<string, unknown> | null; evidence_hash: string; previous_evidence_hash: string | null;
   hsm_signature: string; hsm_key_version: number; seal_key_id: string | null; schema_version: string; created_at: Date;
 }
+
+export function mapEvidenceRow(row: EvidenceRow): SealedEvidence { return mapEvidence(row); }
 
 function mapEvidence(row: EvidenceRow): SealedEvidence {
   return {

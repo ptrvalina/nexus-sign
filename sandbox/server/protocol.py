@@ -30,9 +30,14 @@ FIELDS = frozenset({
 
 AMOUNT = re.compile(r'^(0|[1-9][0-9]{0,29})$')
 CURRENCY = re.compile(r'^[A-Z]{3}$')
+# Protocol v1 formats: lowercase UUIDs, 9-digit NEXUS ID, 32-byte nonce in lowercase hex.
+UUID_V1 = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+NEXUS_ID = re.compile(r'^[0-9]{9}$')
+NONCE = re.compile(r'^[0-9a-f]{64}$')
 BENEFICIARY_KEY = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 BENEFICIARY_MAX_FIELDS = 16
-BENEFICIARY_MAX_VALUE_LENGTH = 512
+# ISO 20022 Max140Text, in UTF-16 code units (; 512 until 2.0.0-rc.2).
+BENEFICIARY_MAX_VALUE_LENGTH = 140
 TIMESTAMP = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$')
 
 
@@ -131,6 +136,8 @@ def validate_beneficiary(beneficiary):
             return f'beneficiary.{key} must be a string'
         if len(value.encode('utf-16-le', 'surrogatepass')) // 2 > BENEFICIARY_MAX_VALUE_LENGTH:
             return f'beneficiary.{key} is longer than {BENEFICIARY_MAX_VALUE_LENGTH} characters'
+        if value == '' or unicodedata.category(value[0]) == 'Zs' or unicodedata.category(value[-1]) == 'Zs':
+            return f'beneficiary.{key} is empty or has leading or trailing space'
         if not is_display_safe(value):
             return f'beneficiary.{key} contains a control, format or separator character'
     return None
@@ -217,6 +224,12 @@ def parse_signed_payload(data):
         raise Rejected('invalid_value', 'currency')
     if not TIMESTAMP.match(obj['issued_at']) or not TIMESTAMP.match(obj['expires_at']):
         raise Rejected('invalid_value', 'timestamps')
+    if not UUID_V1.match(obj['authorization_id']) or not UUID_V1.match(obj['credential_id']):
+        raise Rejected('invalid_value', 'authorization_id/credential_id')
+    if not NEXUS_ID.match(obj['nexus_id']):
+        raise Rejected('invalid_value', 'nexus_id')
+    if not NONCE.match(obj['nonce']):
+        raise Rejected('invalid_value', 'nonce')
     for key in FIELDS - {'beneficiary'}:
         if not is_display_safe(obj[key]):
             raise Rejected('invalid_value', f'{key} contains a control, format or separator character')

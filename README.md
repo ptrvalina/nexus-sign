@@ -42,7 +42,7 @@ Transaction signing on a phone is established practice. NEXUS-SIGN concentrates 
 
 - Approval that a third party can verify. Each evidence record carries the exact bytes the customer's device displayed and signed, the device signature and public key, and the bank HSM's seal in a per-customer hash chain. An auditor checks all of it offline with a small script that contains no NEXUS-SIGN server code. The HSM key holder cannot fabricate a customer's signature, and a device key holder cannot insert a record into the sealed chain. ([evidence format](docs/protocol/evidence-format.md))
 - The phone refuses to sign what it did not show. The SDK parses the signed bytes strictly, rejects any non-canonical encoding and any disagreement with the displayed fields, and builds the confirmation screen and biometric prompt from those bytes only. The same test vectors run in Auth Core, the iOS SDK, the Android SDK and the sandbox. ([protocol](docs/protocol/authorization-protocol-v1.md))
-- Step-up checks that cannot be downgraded or skipped. Audio and video verification can only raise the required level, never replace the signature, and the completed factors are sealed into the evidence of that exact transaction. ([adaptive verification](docs/architecture/adaptive-verification.md))
+- Step-up checks that cannot be downgraded or skipped. Audio and video verification can only raise the required level, never replace the signature, and the completed factors are sealed into the evidence of that exact transaction. ([adaptive verification](docs/architecture/adaptive-verification.md)) Audio and video steps are in-app calls with a bank operator (WebRTC, [ADR 0017](docs/adr/0017-in-app-audio-video-calls.md); the SDK call modules are not yet built or tested on devices) or results of an external provider accepted only as signed tokens; a call shows a person but does not identify them, and no liveness or deepfake detection is claimed.
 - No tokens and no cloud after enrolment. The phone signs every request with its own hardware key, so there is no access token to steal or replay, and the bank backend is needed only once, to enrol the device. ([device authentication](docs/protocol/device-authentication-and-offline-confirmation.md))
 - Confirmation without network on the phone. At a branch, an ATM or in web banking the customer scans a QR code, sees the transaction on the phone and types an 8-digit code bound to exactly those terms. The same strict checks apply as online.
 - Push that nobody in between can read. A bank with its own push system keeps it and adds the signing layer. A bank without one lets Auth Core deliver authorization requests and its notifications (incoming payments, card spending) to its own app; each message is sealed for one device before it is stored, so Apple, Google and the database never see its text, and the phone confirms delivery with a receipt only it can compute. ([secure push](docs/protocol/secure-push.md))
@@ -56,6 +56,7 @@ Transaction signing on a phone is established practice. NEXUS-SIGN concentrates 
 | `ios-sdk/` | Native iOS SDK (Swift Package): Secure Enclave credential, App Attest, transaction signing |
 | `android-sdk/` | Native Android SDK (Kotlin library): Keystore / StrongBox credential, Play Integrity, transaction signing |
 | `sandbox/` | Sandbox for workshops and integration rehearsals (Python standard library only) |
+| `demo/` | iPhone and Android demo apps and a demo bank backend for trying enrolment and signing on a real phone ([demo/README.md](demo/README.md)) |
 | `docs/` | Architecture, protocol specification, security and operations documentation |
 | `.github/` | Continuous integration, issue and pull request templates, Dependabot |
 
@@ -78,6 +79,8 @@ npm install --ignore-scripts        # the native PKCS#11 module is only needed w
 docker compose exec -T postgres psql -U nexus -d nexus_sign -v ON_ERROR_STOP=1 < src/db/schema.sql
 npm run dev                         # http://localhost:8080/readyz
 ```
+
+To run everything on one machine in one step (fresh database, roles, a bank client, an admin account, the service): `cd auth-core && bash scripts/run-local.sh`. To try it on a real iPhone or Android phone, see [demo/README.md](demo/README.md).
 
 In Windows PowerShell, which has no `<` redirection, copy the schema into the container instead: `docker compose cp src/db/schema.sql postgres:/tmp/schema.sql`, then `docker compose exec postgres psql -U nexus -d nexus_sign -v ON_ERROR_STOP=1 -f /tmp/schema.sql`. Use `Copy-Item .env.example .env` for the first step.
 

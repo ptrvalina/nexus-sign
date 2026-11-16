@@ -23,6 +23,12 @@ Boolean variables are compared as exact, case-sensitive strings. Opt-in flags ar
 | `OAUTH_TOKEN_TTL_SECONDS` | `3600` | None | Integer from 60 to 86 400. Lifetime of bank backend access tokens issued by `POST /oauth/token`. |
 | `REQUIRE_IDEMPOTENCY_KEY` | on | None | Opt-out flag. When on, `POST /v1/authorizations` without an `Idempotency-Key` header is rejected with 400. |
 | `BANK_COMMIT_MAX_AGE_SECONDS` | `3600` | None | Integer from 60 to 604 800 (7 days). `POST /v1/authorizations/{id}/bank-commit-request` is refused with 409 `CONFIRMATION_TOO_OLD` when the customer's confirmation (`verified_at`) is older. |
+| `AUTHORIZATION_EXPIRY_SWEEP_MS` | `10000` | None | Integer from 500 to 300 000. Interval of the sweep that moves `PENDING_USER` authorizations past `expiresAt` to `EXPIRED` and sends `authorization.expired`. Read paths report `EXPIRED` immediately regardless. |
+| `SHUTDOWN_DRAIN_MS` | `15000` | None | Integer from 0 to 120 000. On `SIGTERM`/`SIGINT` Auth Core stops accepting connections and waits this long for requests in flight before closing them, the HSM sessions, the database pool and Redis. |
+| `WEBRTC_STUN_URLS` | none | None | Comma-separated STUN URLs given to the device and the operator console for in-app calls ([audio and video calls](audio-video-calls.md)). |
+| `WEBRTC_TURN_URLS` | none | None | Comma-separated TURN URLs of the bank's TURN server. Used only with `WEBRTC_TURN_SECRET`. |
+| `WEBRTC_TURN_SECRET` | none | Secret | coturn `static-auth-secret` (at least 16 characters); per-session TURN credentials are derived from it. |
+| `WEBRTC_TURN_CREDENTIAL_TTL_SECONDS` | `600` | None | Integer from 60 to 3600; TURN credentials also expire with the session. |
 
 ## Database and Redis
 
@@ -89,7 +95,17 @@ See [device authentication and offline confirmation](../protocol/device-authenti
 | Variable | Default | Production requirement | Purpose |
 |---|---|---|---|
 | `OFFLINE_CONFIRMATION_ENABLED` | off | None | Opt-in flag. Enables the offline challenge and confirmation endpoints and the storage of offline keys at enrolment. |
+| `OFFLINE_CONFIRMATION_MAX_AMOUNT` | none (no cap) | Production, when `OFFLINE_CONFIRMATION_ENABLED=true` | Highest amount per currency that an offline code may confirm, `CURRENCY:amountMinor` comma-separated (e.g. `PLN:100000,EUR:20000`). Currencies not listed are not offered offline; above the cap no QR challenge is issued (409 `OFFLINE_LIMIT_EXCEEDED`) and a code is refused without using an attempt. The cap exists because an offline code is an HMAC under a key Auth Core also holds ([ADR 0003](../adr/0003-offline-confirmation-hmac-codes.md)). New in 2.0.0. |
+| `OFFLINE_CONFIRMATION_MODE` | `deferred_signature` | Production: must be `deferred_signature` when `OFFLINE_CONFIRMATION_ENABLED=true` | Offline confirmation protocol. `deferred_signature` (v2): QR `NXS2.`; a correct code leaves the authorization `OFFLINE_PROVISIONAL` until the device's signature arrives ([offline confirmation v2](../protocol/offline-confirmation-v2-deferred-signature.md)). `immediate` (v1): QR `NXS1.`; a correct code is `VERIFIED` at once; for development and old SDKs only. New in 2.0.0 |
+| `OFFLINE_SIGNATURE_DEADLINE_HOURS` | 72 | None | v2: hours after an accepted code within which the device signature must arrive (1–720); afterwards `OFFLINE_UNSIGNED`. New in 2.0.0 |
+| `OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY` | none (no limit) | Production, when `OFFLINE_CONFIRMATION_ENABLED=true` | Most offline confirmations one credential may make in 24 hours (1–1000). Above it a code is refused without using an attempt and `offline_confirmation_limit_reached` is audited ([threat model](../security/offline-confirmation-threat-model.md)). New in 2.0.0 |
+| `DEVICE_NONCE_STORE` | `postgres` | Production: `postgres` | Where used device request nonces are remembered. `postgres`: table `device_request_nonces` (migration 021), deleted after their lifetime by the expiry sweep; `redis`: as before 2.0.0, a Redis failover or restore can forget nonces. New in 2.0.0 |
+| `METRICS_BEARER_TOKEN` | none (open) | Production, at least 32 characters | Bearer token the monitoring system sends to `GET /metrics`; without it, metrics are readable by every client that passes the gateway check. New in 2.0.0 |
 | `DEVICE_SECRET_ENCRYPTION_KEY` | none | Required when `OFFLINE_CONFIRMATION_ENABLED=true` or `PUSH_DELIVERY_ENABLED=true` (any environment) | AES-256-GCM master key for `credentials.offline_secret_encrypted` and `push_registrations.push_key_encrypted`. 32 bytes, base64. |
+| `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS`, `DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS`, `ADMIN_SECRET_ENCRYPTION_KEY_PREVIOUS` | none | During a master key rotation only | Previous master keys, comma-separated, accepted for decryption until `rotateSecretKeys.js` has re-encrypted the stored secrets ([key rotation](runbooks/key-rotation.md)). Each 32 bytes, base64, different from the current key. New in 2.0.0. |
+| `MASTER_KEY_SOURCE` | `env` | Production: `hsm` | `env`: master keys in base64 in the variables above. `hsm`: only wrapped keys are configured and Auth Core unwraps them in the HSM at startup; plaintext master key variables are then refused ([key management](../engineering/KEY_MANAGEMENT.md)). New in 2.0.0 |
+| `PKCS11_KEK_LABEL` | none | With `MASTER_KEY_SOURCE=hsm` | Label of the AES-256 key-encryption key on the token of `PKCS11_TOKEN_LABEL` (sensitive, not extractable, `CKA_DECRYPT`). Uses `PKCS11_MODULE_PATH` and `PKCS11_PIN` |
+| `WEBHOOK_/DEVICE_/ADMIN_SECRET_ENCRYPTION_KEY_WRAPPED`, `…_PREVIOUS_WRAPPED` | none | With `MASTER_KEY_SOURCE=hsm` | Wrapped master keys made with `node dist/cli/masterKeys.js generate|wrap|rewrap`; previous ones comma-separated during a rotation |
 
 ## Secure push
 

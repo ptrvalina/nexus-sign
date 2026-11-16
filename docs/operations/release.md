@@ -36,12 +36,12 @@ The Auth Core dependencies used for these runs were installed without a reviewed
 | CodeQL, CycloneDX SBOM, Trivy filesystem and image scans | `.github/workflows/security.yml` | Runs only on GitHub |
 | Image archive, SBOM and SLSA build provenance for a tag | `.github/workflows/release.yml`; verify with `gh attestation verify` | Runs only on GitHub, for `v*` tags |
 | Action pins | Workflows pin third-party actions to commit SHAs | Not exercised; review them when the workflows first run |
-| Gradle `distributionSha256Sum` and dependency verification metadata (NXS-039) | Android build environment | Needs services.gradle.org and Maven access |
-| Base images pinned by digest (NXS-040) | Dockerfiles | Needs container registry access |
+| Gradle `distributionSha256Sum` and dependency verification metadata | Android build environment | Needs services.gradle.org and Maven access |
+| Base images pinned by digest | Dockerfiles | Needs container registry access |
 | PKCS#11 against the bank's HSM model | Bank's test HSM with the vendor module | Only SoftHSM 2.7 was available |
 | Genuine App Attest and Play Integrity verdicts, Google's live attestation status list | Bank's attestation configuration and devices | Needs Apple and Google accounts and devices |
 | Gateway: overwrites `x-client-cert-verified` and `x-client-cert-sha256` on every request; who may reach `/metrics` | Bank's gateway | Deployment control outside Auth Core |
-| Redis deployment without failover to a lagging replica (NXS-021) | Bank's Redis | Infrastructure decision |
+| Redis deployment without failover to a lagging replica | Bank's Redis | Infrastructure decision |
 | Upgrade rehearsal (1.4.0 or 2.0.0-rc.1 to 2.0.0-rc.2) on a copy of production data | Bank's test environment | Needs the bank's data |
 | Independent penetration test | External | Not part of the build |
 
@@ -70,7 +70,7 @@ Completed by the release owner for every release, and by the bank before the fir
 - [ ] Lockfile generated with registry access, reviewed and committed; `npm audit --omit=dev --audit-level=high` reviewed.
 - [ ] All `ci.yml` and `security.yml` jobs green on the release commit, including both SDK jobs; CodeQL results (`codeql-sarif` artifact) and Trivy findings reviewed; SBOM archived.
 - [ ] Release tag built by `release.yml`; provenance verified; image archive SHA-256 recorded.
-- [ ] Gradle checksums (NXS-039) and image digests (NXS-040) added, or the gaps accepted in writing.
+- [ ] Gradle checksums and image digests added, or the gaps accepted in writing.
 - [ ] `CHANGELOG.md` entry and `VERSION` consistent (`npm run check:repository`).
 - [ ] `npm run smoke-test` passes against a deployed instance.
 

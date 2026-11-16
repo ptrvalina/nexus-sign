@@ -46,7 +46,7 @@ Nothing durable is lost: authorizations, credentials and evidence are in Postgre
 
 ### Do not restore Redis or fail over to a lagging replica
 
-Restoring a Redis snapshot, or promoting an asynchronous replica that missed recent writes, brings back state that was deliberately removed (NXS-021):
+Restoring a Redis snapshot, or promoting an asynchronous replica that missed recent writes, brings back state that was deliberately removed:
 
 - consumed BOOTSTRAP tokens, which enrol a device again, and with a stored `replacement` replace the customer's current device;
 - device request nonces that were recorded after the snapshot are missing, so those requests can be replayed;

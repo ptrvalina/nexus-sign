@@ -32,7 +32,7 @@ const CLAIM_LEASE_SECONDS = 30; // must exceed DELIVERY_TIMEOUT_MS
 type Runner = Pick<PoolClient, 'query'>;
 
 export async function enqueueWebhook(clientId: string, eventType: string, payload: Record<string, unknown>, runner: Runner = pool): Promise<void> {
-  if (!(await hasWebhookDestination(clientId))) return; // no webhook configured for this bank client
+  if (!(await hasWebhookDestination(clientId, runner))) return; // no webhook configured for this bank client
   await runner.query(
     `INSERT INTO webhook_deliveries (event_id, client_id, event_type, payload) VALUES ($1, $2, $3, $4)`,
     [randomUUID(), clientId, eventType, JSON.stringify(payload)],

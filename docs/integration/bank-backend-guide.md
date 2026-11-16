@@ -107,6 +107,16 @@ With `REQUIRE_VALID_ATTESTATION=true`, Android devices must send Keystore key at
 
 Enrolment seals a `CREDENTIAL_ENROLLED` record with the device's keys and its attestation in the identity's evidence chain. Before the keys are used, Auth Core compares them with that record; see [evidence and integrity](#12-retrieve-and-verify-evidence).
 
+### The bank's own approval of the device key (required)
+
+Every check above is made by Auth Core or reads what Auth Core reports. A compromised Auth Core can enrol a key the customer never had, or replace the key of a genuine credential, and seal it with the real evidence key ([bank credential trust](../protocol/bank-credential-trust-v1.md)). So the app also sends `signingKeyFingerprint()` with the credential ID: the SHA-256 of the signing key, computed on the device. The bank backend then:
+
+1. fetches the identity's chain (`GET /v1/nexus-identities/{nexusId}/evidence`), verifies it with its **pinned** evidence keys, and finds the credential's `CREDENTIAL_ENROLLED` record;
+2. checks that the record's signing key has exactly the fingerprint the app reported;
+3. signs an approval with the bank's own trust key and stores it in its registry (`scripts/bank-trust-statement.mjs approve` shows the format; in production the bank's backend signs with a key in its HSM).
+
+The same applies after a replacement and after recovery: approve the new credential, revoke the old one in the registry. A credential the bank did not approve is never used for execution, even when Auth Core reports it `ACTIVE` and `VERIFIED`.
+
 ### Device replacement
 
 Design: [device replacement](../architecture/device-replacement.md).
@@ -159,7 +169,7 @@ curl -s -X POST "$BASE/v1/authorizations" -H "Authorization: Bearer $TOKEN" \
 | `operationType` | 1-32 characters, for example `transfer` |
 | `amountMinor` | Decimal string in minor units, no leading zeros, at most 30 digits |
 | `currency` | `^[A-Z]{3}$` |
-| `beneficiary` | Up to 16 string fields; keys match `^[a-z][a-z0-9_]{0,63}$`; values up to 512 characters |
+| `beneficiary` | Up to 16 string fields; keys match `^[a-z][a-z0-9_]{0,63}$`; values of 1 to 140 characters (UTF-16 code units, ISO 20022 Max140Text), no leading or trailing space. Longer values are refused with 400 |
 | `policyReference`, `policyVersion` | The bank's policy, 1-128 and 1-64 characters |
 | `verificationPolicy` | Optional, see [adaptive verification](#11-adaptive-verification) |
 | `expiresInSeconds` | 30-900, default 120 |
@@ -245,10 +255,16 @@ The transition to `EXPIRED` is recorded when a confirmation is attempted. Until 
 
 ### Webhooks
 
-Webhooks report bank transaction state changes (step 9), device and recovery changes, and, in push mode `NEXUS`, push delivery. Auth Core sends `POST` requests with a JSON body to the registered URL. A receiver must accept event types it does not process; answering them with an error makes the delivery fail and be retried:
+Webhooks report the outcome of each authorization, bank transaction state changes (step 9), device and recovery changes, and, in push mode `NEXUS`, push delivery. Auth Core sends `POST` requests with a JSON body to the registered URL. A receiver must accept event types it does not process; answering them with an error makes the delivery fail and be retried:
 
 | `eventType` | Body fields besides `eventId`, `eventType` |
 |---|---|
+| `authorization.verified` | `authorizationId`, `nexusId`, `transactionReference`, `confirmationMethod`, `evidence` (`evidenceId`, `chainSequence`, `evidenceHash`), `evidenceHead`. Keep `evidenceHead`: a verifier given the latest head the bank holds (`verify-evidence.mjs --expect-head`) detects records removed from the end of the chain |
+| `authorization.rejected` | `authorizationId`, `nexusId`, `transactionReference`, `reason` (`signature_attempt_limit`, `verification_failed`, `REJECTED`) |
+| `authorization.expired` | `authorizationId`, `nexusId`, `transactionReference`, `expiresAt`. Sent once, when the authorization is moved to `EXPIRED` by a late confirmation attempt or by the periodic sweep (`AUTHORIZATION_EXPIRY_SWEEP_MS`). `GET /v1/authorizations/{id}` reports `EXPIRED` as soon as `expiresAt` has passed |
+| `authorization.offline_provisional` | `authorizationId`, `nexusId`, `transactionReference`, `offlineCodeAcceptedAt`, `signatureDeadline`. Offline confirmation v2: the code was correct, the device signature has not arrived. **Not a confirmation** (section 10) |
+| `authorization.offline_unsigned` | `authorizationId`, `nexusId`, `transactionReference`, `reason` (`deadline`, `credential_not_active`, `identity_not_active`). A code was accepted and no valid device signature arrived: a security event (section 10) |
+| `evidence.appended` | `nexusId`, `recordType`, `evidenceId`, `chainSequence`, `evidenceHash`, `previousEvidenceHash`, `sealKeyId`, `hsmSignature`. Sent for every record added to a customer's evidence chain (enrolment, recovery set-up, confirmation), in the same transaction. Keep these heads outside Auth Core: with them `verify-evidence.mjs --heads` detects records removed from the end of a chain, which the chain alone cannot show. The head is sealed by the evidence key, so the bank can check it came from Auth Core. New in 2.0.0 |
 | `authorization.bank_transaction.commit_requested` | `authorizationId`, `bankTransactionReference` |
 | `authorization.bank_transaction.committed` | `authorizationId`, `state`, `error` |
 | `authorization.bank_transaction.failed` | `authorizationId`, `state`, `error` |
@@ -309,6 +325,15 @@ The delivery worker polls every 2 seconds. `/admin/api/webhook-deliveries` in th
 
 The bank remains the system of record for the transaction. Auth Core records what the bank reports.
 
+**The bank's own check decides whether to execute, at one place: the execution boundary** ([`bank-integration/`](../../bank-integration/README.md), [trust boundary](../architecture/bank-trust-boundary.md)). Every path in the bank's backend that can move money for a NEXUS-SIGN payment calls `execute(paymentId)`, and only the payment gateway (its own process and database role) can reach the payment provider, for payments the boundary approved, after checking the approval again ([payment state machine](../architecture/payment-state-machine.md), [pilot execution pack](pilot-execution-pack.md)). No service's database role can write the bank's tables; every change is a function of the schema owner ([bank database authorization](../security/bank-database-authorization.md)). Webhook handlers, retries, operator and administrative actions included. The boundary makes the commit request, runs the decision below, re-checks the device under a lock, executes with an idempotency key and reconciles unknown outcomes. The decision itself: After the commit request was accepted (202) and before core banking moves money, run the bank's decision on the authorization's evidence export: `bankExecutionDecision` in `auth-core/scripts/lib/bankTrust.mjs`, or `node scripts/bank-execution-check.mjs` (exit 0: execute, 1: do not). It uses only the bank's inputs:
+
+- the pinned evidence keys;
+- the bank's trust keys and its registry of approvals and revocations;
+- the terms the bank asked for;
+- the chain heads the bank kept.
+
+`VERIFIED`, `confirmed: true` and the 202 are Auth Core's statements. A compromised Auth Core can produce all three for a key the bank never approved. If the check refuses, report `bank-commit-result` `CANCELLED` and treat the case as a security incident ([bank credential trust](../protocol/bank-credential-trust-v1.md)).
+
 Before requesting the commit, the bank backend reads the authorization (`GET /v1/authorizations/{id}`) and checks that `state` is `VERIFIED` and that `canonicalPayloadHash` equals the value it stored from the 201 creation response (step 6). The hash covers the transaction terms the customer signed; a different value means the authorization is not the one the bank created, and the bank does not commit. The database also refuses any change to the bound transaction fields of an authorization.
 
 ```bash
@@ -347,7 +372,7 @@ The customer confirms with a phone that has no network. Requirements: `OFFLINE_C
    ```
 
    ```json
-   { "authorizationId": "...", "qrPayload": "NXS1.eyJhbW91bnRfbWlub3Ii...", "codeDigits": 8, "expiresAt": "..." }
+   { "authorizationId": "...", "qrPayload": "NXS2.eyJhbW91bnRfbWlub3Ii...", "codeDigits": 8, "expiresAt": "..." }
    ```
 
 3. The customer scans it in the bank app, sees the transaction, passes the biometric prompt and reads an 8-digit code.
@@ -358,9 +383,12 @@ The customer confirms with a phone that has no network. Requirements: `OFFLINE_C
      -H 'Content-Type: application/json' -d '{"code":"40718266"}'
    ```
 
-The result has the same form as a signature submission: `{"status":"VERIFIED","evidence":{...}}`, or `FAILED` with `reason` and `attempts`, or 410 with `EXPIRED`. Wrong codes count toward the same five-attempt limit as wrong signatures. A correct code runs the same checks as a signature, including the verification plan, and seals evidence with `confirmationMethod: OFFLINE_CODE`.
+Wrong codes count toward the same five-attempt limit as wrong signatures; a correct code runs the same checks as a signature, including the verification plan. What a correct code returns depends on `OFFLINE_CONFIRMATION_MODE`:
 
-An offline code is computed with a key that Auth Core also holds. Auth Core can verify it; a third party cannot. The bank decides per payment type whether offline confirmation is acceptable ([what an offline code proves](../protocol/device-authentication-and-offline-confirmation.md#what-an-offline-code-proves)).
+- **`deferred_signature` (v2, default, required in production; QR `NXS2.`):** `{"status":"PROVISIONAL","signatureDeadline":"..."}` and the webhook `authorization.offline_provisional`. **This is not a confirmation.** While offline the phone also signed the transaction with its device key; when it is online again it uploads that signature, the authorization becomes `VERIFIED` (`confirmationMethod: OFFLINE_SIGNED`, webhook `authorization.verified` with evidence). If the phone had already uploaded the signature when the code arrives, the answer is `VERIFIED` at once. Without a signature by the deadline (default 72 hours), or when the credential is revoked first, the authorization becomes `OFFLINE_UNSIGNED` and `authorization.offline_unsigned` is sent: treat it as a security event (a code was accepted that the device never signed).
+- **`immediate` (v1, development only; QR `NXS1.`):** `{"status":"VERIFIED","evidence":{...}}`, evidence `confirmationMethod: OFFLINE_CODE`.
+
+**`OFFLINE_PROVISIONAL` is not an authorization to execute** (owner decision, phase 9). `OFFLINE_UNSIGNED` is not either. `confirmed: true` in `GET` means that Auth Core found valid sealed evidence when it answered; it is not itself proof, and it is not a substitute for the commit request. Execute a payment only after `bank-commit-request` was accepted (202), exactly once per `bankTransactionReference`, and report the result with `bank-commit-result`. The evidence check and the state change of the commit request happen in one transaction under the authorization's row lock, so nothing can change between them inside Auth Core; what happens after the 202 is the bank's responsibility. Before it accepts, Auth Core re-verifies the sealed evidence — HSM seal, the stored terms and the device signature with the enrolment-sealed key — and refuses (409 `EVIDENCE_INVALID`) a `VERIFIED` row without valid evidence and, on a v2 deployment, a code-only (`OFFLINE_CODE`) record. A code is an HMAC under a key Auth Core also holds, so whoever controls Auth Core could compute it ([threat model](../security/offline-confirmation-threat-model.md)); for that reason the bank should also verify the evidence itself (`verify-evidence.mjs --reject-offline-code` with evidence keys obtained out of band). Evidence verifiers must be of this release to accept `OFFLINE_SIGNED`; after switching to v2, run them with `--reject-offline-code` so that no code-only record is accepted ([offline confirmation v2](../protocol/offline-confirmation-v2-deferred-signature.md)).
 
 ## 11. Adaptive verification
 
@@ -370,7 +398,7 @@ An offline code is computed with a key that Auth Core also holds. Auth Core can 
 |---|---|
 | `requireAudio`, `requireVideo` | Minimum factor AUDIO or VIDEO |
 | `highAmountThresholdMinor` | `amountMinor` at or above this value requires AUDIO |
-| `audioAvailable`, `videoAvailable` | Whether the bank operates the channel (default `true`); a required channel is always enabled |
+| `audioAvailable`, `videoAvailable` | Set `false` to leave out a channel for this authorization. A channel is offered only if the bank can verify it: a provider key registered for it, or operator verification enabled for it (`cli/verificationSetup.js`, below). A requirement no enabled channel can meet is refused with 409 `VERIFICATION_CHANNEL_UNAVAILABLE` |
 | `clientEscalationAllowed` | Whether the customer may request a stronger check from the app (default `true`) |
 | `pushTimeoutSeconds` | 10-300, default 30, informational |
 
@@ -392,15 +420,28 @@ curl -s -X POST "$BASE/v1/authorizations/$AUTHORIZATION_ID/verification-sessions
   -H 'Content-Type: application/json' -d '{"channel":"AUDIO"}'
 ```
 
-The bank's verification gateway reports the provider's result. With `REQUIRE_MTLS_HEADER=true` this call requires gateway mTLS like every bank endpoint.
+Who may close a session is configured by the Auth Core operator, not through the bank API, so a compromised bank backend cannot register a verifier of its own:
+
+```bash
+# A verification provider's ES256 public key, for the channels it verifies
+node dist/cli/verificationSetup.js provider-add <clientId> <providerId> <keyId> AUDIO,VIDEO provider-public.pem
+# Calls answered by the bank's operators in the admin console
+node dist/cli/verificationSetup.js operator <clientId> AUDIO,VIDEO
+```
+
+**Provider result.** The provider signs a verification result v1 token ([specification](../protocol/verification-result-v1.md)) that names this bank, the session, the authorization, the transaction terms (`canonical_payload_hash`), the device credential and the SHA-256 of the session nonce. The bank's verification gateway relays it unchanged; with `REQUIRE_MTLS_HEADER=true` this call requires gateway mTLS like every bank endpoint:
 
 ```bash
 curl -s -X POST "$BASE/v1/authorizations/$AUTHORIZATION_ID/verification-sessions/$SESSION_ID/complete" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"sessionNonce":"'"$SESSION_NONCE"'","result":"VERIFIED","providerReference":"prov-5521","assertion":"<provider JWS>"}'
+  -d '{"resultToken":"'"$PROVIDER_RESULT_JWS"'"}'
 ```
 
-Auth Core stores the SHA-256 of `assertion` and includes the factor in the evidence. Auth Core does not verify the assertion: the AUDIO or VIDEO factor in the evidence is the bank's (or its provider's) statement, bound to the session nonce, not a cryptographic proof that Auth Core checked (NXS-019, open). Validating the provider's assertion is the gateway's task. A failed AUDIO check escalates to VIDEO when VIDEO is enabled; a failed last factor sets the plan to `FAILED` and the authorization to `REJECTED`. The model is specified in [adaptive verification](../architecture/adaptive-verification.md).
+Auth Core verifies the signature with the registered key, every binding, the lifetime (at most 600 s) and that the token's `jti` was not used before. A token that fails any check returns 403, is written to the audit log (`verification_result_rejected`) and leaves the session open. The evidence lists the factor with `method: PROVIDER`, the issuing key (`issuer`, `<providerId>/<keyId>`) and the SHA-256 of the token, so an auditor can obtain the token from the provider and check it.
+
+**Operator result.** With operator verification enabled, the customer's in-app call is answered in the admin console by an operator of the bank (password and TOTP), who records the outcome; the evidence lists `method: OPERATOR` and the operator's username.
+
+A failed AUDIO check escalates to VIDEO when VIDEO is enabled; a failed last factor sets the plan to `FAILED` and the authorization to `REJECTED`. The model is specified in [adaptive verification](../architecture/adaptive-verification.md).
 
 ## 12. Retrieve and verify evidence
 
@@ -440,7 +481,7 @@ node scripts/verify-evidence.mjs record.json --public-keys=evidence-keys.pem
 | `--public-keys=<file>` | PEM file with every evidence public key, obtained out of band from the deployment's key ceremony record. Without it the script trusts the keys in the export, which Auth Core supplied |
 | `--expect-head=<chainSequence>:<evidenceHash>` | A head the bank stored. The check fails with `records missing at the end of the chain` when the chain ends before it, and with `differs from the head the bank received` when the record at that position was replaced |
 
-The verifier checks each record's hash and HSM seal, the chain numbering and links, that every authorization was signed with the key sealed at its credential's enrolment, and the customer's signature over the signed bytes. It runs from a checkout of the release (`auth-core/scripts/`), needs Node.js only and makes no network calls. A failure is handled with the [evidence verification runbook](../operations/runbooks/evidence-verification-failure.md).
+For execution, the bank uses its own decision (step 9, `scripts/bank-execution-check.mjs`), which runs this verifier with the pinned keys and adds the bank's approvals, revocations and terms. The verifier checks each record's hash and HSM seal, that the record's own fields (`nexusId`, `credentialId`, `authorizationId`, `recordType`, `chainSequence`, `previousEvidenceHash`, `sealKeyId`, `schemaVersion`) equal the sealed values, the chain numbering and links, that every authorization was signed with the key sealed at its credential's enrolment, and the customer's signature over the signed bytes. It cannot tell whether the bank accepted that credential: compare the `credentialId` with the credentials the bank itself accepted for the customer in [step 5](#5-the-app-enrols-the-device); an enrolment the bank did not accept is a security incident, because whoever controls Auth Core can seal one. It runs from a checkout of the release (`auth-core/scripts/`), needs Node.js only and makes no network calls. A failure is handled with the [evidence verification runbook](../operations/runbooks/evidence-verification-failure.md).
 
 Records sealed by Auth Core 1.4 or earlier verify, but carry no sealed key provenance; the summary counts them as `legacy_records`. The keys of credentials enrolled before 2.0 were sealed once during the upgrade (reason `BASELINE`); such a record states the keys the database held at that time.
 
@@ -471,7 +512,7 @@ The customer has a new phone and the recovery phrase. The phrase must have been 
    | `expiresAt` | 600 seconds after creation |
 
 3. The bank backend hands the whole response to the app, unchanged, and the app calls `recoverIdentity` with it and the phrase. The device opens `wrappedRecoveryKey` with the phrase and signs the session, the nonce, the identity and its new signing key. A wrong phrase fails on the device and uses no attempt on the server.
-4. On success Auth Core revokes all credentials of the NEXUS ID, cancels its `PENDING_USER` authorizations, registers the new key, seals its enrolment with reason `RECOVERY` and sends the `identity.recovered` webhook. The app sends the new credential ID to the bank backend, which checks it as in step 5.
+4. On success Auth Core revokes all credentials of the NEXUS ID, cancels its `PENDING_USER` authorizations, registers the new key, seals its enrolment with reason `RECOVERY` and sends the `identity.recovered` webhook. The app sends the new credential ID and `signingKeyFingerprint()` to the bank backend, which checks and approves it as in step 5 and revokes the earlier credentials in its registry.
 
 Five failed proofs lock the session; the bank opens a new one. A session is single use. Opening a session is refused with 409 and a `code` when:
 
@@ -497,7 +538,7 @@ curl -s -X POST "$BASE/v1/credentials/$CREDENTIAL_ID/revoke" -H "Authorization: 
 
 The credential becomes `REVOKED` at once. Its `PENDING_USER` authorizations are `CANCELLED`, device-signed requests of that credential are refused, offline codes for it are rejected, and commit requests for authorizations it confirmed are refused with 409 `CREDENTIAL_NOT_ACTIVE`. A second revoke of the same credential returns 404.
 
-The customer then enrols a new device with a `BOOTSTRAP` token (step 4), which no longer needs `replacement` because no enrolled credential is left, or through recovery (step 13) when the bank requires the phrase.
+Record the revocation in the bank's own registry first (`scripts/bank-trust-statement.mjs revoke`): from then on the bank's check refuses the credential whatever Auth Core reports. The customer then enrols a new device with a `BOOTSTRAP` token (step 4), which no longer needs `replacement` because no enrolled credential is left, or through recovery (step 13) when the bank requires the phrase. The new credential needs the bank's approval (step 5).
 
 Actions on a whole NEXUS ID are taken by operators in the admin console, not by the bank API:
 

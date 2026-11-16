@@ -1,5 +1,5 @@
--- 017: lifecycle state machines enforced by the database (NXS-014), and at
--- most one ACTIVE credential per identity (NXS-044).
+-- 017: lifecycle state machines enforced by the database, and at
+-- most one ACTIVE credential per identity.
 --
 -- The application already performs only these transitions; the triggers make
 -- any other write (a defect, or a direct write by an application-role

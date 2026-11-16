@@ -290,7 +290,13 @@ paths:
     post:
       tags: [Offline confirmation]
       summary: Submit the code the customer read from the phone
-      description: A wrong code counts towards the same five-attempt limit as a wrong signature. The evidence record is sealed with confirmationMethod OFFLINE_CODE.
+      description: >-
+        A wrong code counts towards the same five-attempt limit as a wrong signature. With
+        OFFLINE_CONFIRMATION_MODE=deferred_signature (v2, default, required in production) a correct code returns
+        PROVISIONAL and the authorization becomes VERIFIED (confirmationMethod OFFLINE_SIGNED) only when the device has
+        uploaded its signature over the same bytes; webhooks authorization.offline_provisional, authorization.verified,
+        authorization.offline_unsigned. With immediate (v1) a correct code returns VERIFIED and the evidence is sealed
+        with confirmationMethod OFFLINE_CODE.
       requestBody:
         required: true
         content:
@@ -386,20 +392,23 @@ paths:
       - { in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }
     post:
       tags: [Adaptive verification]
-      summary: Record the provider's result (bank verification gateway, mTLS)
-      description: A failed AUDIO check escalates to VIDEO when enabled; a failed final factor fails the plan and rejects the authorization. The assertion is stored as a SHA-256 hash in the evidence.
+      summary: Record a provider's signed result (relayed by the bank verification gateway, mTLS)
+      description: |
+        `resultToken` is a verification result v1 token (compact JWS, ES256) signed by a provider key registered for this bank with
+        `cli/verificationSetup.js` (docs/protocol/verification-result-v1.md). Auth Core verifies the signature, the binding to this bank,
+        session, authorization, transaction terms (`canonical_payload_hash`), device credential and session nonce, freshness (lifetime at
+        most 600 s) and single use (`jti`). A refused token returns 403 and leaves the session open. A failed AUDIO check escalates to VIDEO
+        when enabled; a failed final factor fails the plan and rejects the authorization. The SHA-256 of the token is kept in the evidence.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [sessionNonce, result, providerReference, assertion]
+              additionalProperties: false
+              required: [resultToken]
               properties:
-                sessionNonce: { type: string, minLength: 20, maxLength: 128 }
-                result: { type: string, enum: [VERIFIED, FAILED] }
-                providerReference: { type: string, minLength: 1, maxLength: 128 }
-                assertion: { type: string, minLength: 1, maxLength: 4096, description: Provider assertion as received (e.g. a signed JWS) }
+                resultToken: { type: string, minLength: 1, maxLength: 8192 }
       responses:
         '200':
           description: Updated plan
@@ -634,6 +643,76 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/VerificationSession' } } }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /v1/mobile/verification-sessions/{sessionId}/call:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: ICE servers and state of an in-app audio/video call of this device (ADR 0017)
+      description: Only the enrolled device of the session's authorization. TURN credentials are derived per session and expire with it.
+      responses:
+        '200':
+          description: Call
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId: { type: string, format: uuid }
+                  channel: { type: string, enum: [AUDIO, VIDEO] }
+                  expiresAt: { type: string, format: date-time }
+                  operatorJoined: { type: boolean }
+                  iceServers: { type: array, items: { $ref: '#/components/schemas/IceServer' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/mobile/verification-sessions/{sessionId}/signals:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Send a WebRTC signalling message to the operator
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalRequest' } } }
+      responses:
+        '201': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '200': { description: 'A message with this messageId was already accepted; nothing is relayed again', content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 'Session closed, or the message breaks the signalling order (an offer while one is unanswered, a candidate before the offer, anything after bye)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '410': { $ref: '#/components/responses/Gone' }
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Signalling messages from the operator (long poll)
+      parameters:
+        - { in: query, name: after, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: waitMs, schema: { type: integer, minimum: 0, maximum: 20000, default: 0 } }
+      responses:
+        '200':
+          description: Messages with seq greater than `after`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next: { type: integer }
+                  signals: { type: array, items: { $ref: '#/components/schemas/CallSignal' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/verification-sessions/{sessionId}/cancel:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer ends or declines the call (session CANCELLED, plan back to PENDING)
+      responses:
+        '204': { description: Cancelled }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /v1/mobile/push-registration:
     post:
       tags: [Mobile SDK]
@@ -724,6 +803,47 @@ paths:
           description: Authorization expired
           content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/authorizations/{authorizationId}/deferred-signature:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Upload the signature made during an offline confirmation (offline confirmation v2)
+      description: >-
+        The device's ECDSA signature over the canonical bytes it confirmed offline (QR prefix NXS2.). Only from the
+        credential the authorization names. The signature never confirms an authorization by itself.
+        docs/protocol/offline-confirmation-v2-deferred-signature.md.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SignatureRequest' } } }
+      responses:
+        '200':
+          description: VERIFIED (the code had been accepted) or ALREADY_RECORDED (repeat delivery)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [VERIFIED, ALREADY_RECORDED] }
+                  evidence: { $ref: '#/components/schemas/ChainPosition' }
+        '202':
+          description: RECEIVED; the code has not been submitted yet and will finalize when it is
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [RECEIVED] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: NOT_AWAITING_SIGNATURE (final state, deadline passed, or v1 deployment); discard the signature
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: INVALID_DEFERRED_SIGNATURE; the signature does not verify over this authorization
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   /v1/recovery/sessions:
     post:
@@ -871,6 +991,34 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    IceServer:
+      type: object
+      required: [urls]
+      properties:
+        urls: { type: array, items: { type: string } }
+        username: { type: string }
+        credential: { type: string }
+    CallSignalRequest:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [offer, answer, candidate, bye] }
+        payload: { description: '`{ sdp }` for offer and answer (at most 16 384 characters), an RTCIceCandidateInit for candidate (at most 2 048), `{ reason }` for bye' }
+        messageId: { type: string, format: uuid, description: 'Chosen by the sender; a retry with the same messageId is accepted once (200) and not relayed again' }
+    CallSignalAccepted:
+      type: object
+      properties:
+        seq: { type: integer }
+        duplicate: { type: boolean }
+    CallSignal:
+      type: object
+      properties:
+        seq: { type: integer }
+        from: { type: string, enum: [device, operator, server], description: '`server`: the session or authorization was closed (bye with the reason)' }
+        type: { type: string, enum: [offer, answer, candidate, bye] }
+        payload: {}
+        at: { type: string, format: date-time }
     Error:
       type: object
       required: [error]
@@ -945,8 +1093,8 @@ components:
         beneficiary:
           type: object
           maxProperties: 16
-          description: Keys match ^[a-z][a-z0-9_]{0,63}$; string values up to 512 characters.
-          additionalProperties: { type: string, maxLength: 512 }
+          description: Keys match ^[a-z][a-z0-9_]{0,63}$; at most 16 fields; string values of 1 to 140 UTF-16 code units, without leading or trailing space separators.
+          additionalProperties: { type: string, minLength: 1, maxLength: 140 }
           example: { name: Jan Kowalski, iban: PL61109010140000071219812874 }
         policyReference: { type: string, maxLength: 128 }
         policyVersion: { type: string, maxLength: 64 }
@@ -1048,10 +1196,22 @@ components:
         cid: { type: string, format: uuid, description: Credential ID }
         iv: { type: string, description: base64url, 12 bytes }
         ct: { type: string, description: base64url ciphertext followed by the 16-byte tag }
-    AuthorizationState: { type: string, enum: [PENDING_USER, VERIFIED, EXPIRED, REJECTED, CANCELLED] }
+    AuthorizationState:
+      type: string
+      description: >-
+        OFFLINE_PROVISIONAL (offline confirmation v2): the code was accepted, the device signature has not arrived;
+        not confirmed. OFFLINE_UNSIGNED (final): a code was accepted and no valid device signature arrived before
+        the deadline, or the credential stopped being ACTIVE; treat as a security event.
+      enum: [PENDING_USER, VERIFIED, EXPIRED, REJECTED, CANCELLED, OFFLINE_PROVISIONAL, OFFLINE_UNSIGNED]
     Authorization:
       type: object
       properties:
+        confirmed:
+          type: boolean
+          description: True only when state is VERIFIED and the sealed evidence verifies now (HSM seal, binding to this authorization and its terms, device signature with the enrolment-sealed key). OFFLINE_PROVISIONAL is never confirmed. Derived by Auth Core, not a cryptographic fact by itself; verify the exported evidence for that.
+        evidenceProblem:
+          type: string
+          description: Present when state is VERIFIED but the evidence does not verify (confirmed is false).
         authorizationId: { type: string, format: uuid }
         nexusId: { $ref: '#/components/schemas/NexusId' }
         credentialId: { type: string, format: uuid }
@@ -1088,7 +1248,11 @@ components:
       type: object
       required: [status]
       properties:
-        status: { type: string, enum: [VERIFIED, FAILED, EXPIRED] }
+        status:
+          type: string
+          description: PROVISIONAL only for an offline code with OFFLINE_CONFIRMATION_MODE=deferred_signature; it is not a confirmation.
+          enum: [VERIFIED, PROVISIONAL, FAILED, EXPIRED]
+        signatureDeadline: { type: string, format: date-time, description: 'PROVISIONAL: until when the device signature may arrive' }
         reason: { type: string, example: signature_verification_failed }
         attempts: { type: integer, description: Invalid attempts so far (limit 5) }
         evidence: { $ref: '#/components/schemas/ChainPosition' }

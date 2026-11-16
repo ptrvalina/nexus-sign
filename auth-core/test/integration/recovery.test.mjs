@@ -1,4 +1,4 @@
-// Recovery protocol 2 (NXS-003): recovery needs the phrase, and nothing in
+// Recovery protocol 2: recovery needs the phrase, and nothing in
 // the database is enough to complete it.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -176,7 +176,7 @@ describe('recovery protocol 2', { skip: skipWithoutServices }, () => {
     assert.equal(locked.json.code, 'RECOVERY_LOCKED');
   });
 
-  test('an identity still on protocol 1 must set up a new phrase, whatever the environment says (NXS-003)', async () => {
+  test('an identity still on protocol 1 must set up a new phrase, whatever the environment says', async () => {
     const { nexusId, bankCustomerRef } = await customer();
     await server.db.query(`UPDATE nexus_identities SET recovery_protocol = 1, recovery_kdf_salt = $2, recovery_kdf_iterations = 210000 WHERE nexus_id = $1`,
       [nexusId, Buffer.alloc(16, 2)]);

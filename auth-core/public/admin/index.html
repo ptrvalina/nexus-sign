@@ -116,6 +116,34 @@
 <main id="app-main">
   <div class="stats" id="stats"></div>
 
+  <section id="calls-section">
+    <div class="section-header">
+      <h2>Verification calls</h2>
+      <button class="ghost" id="calls-refresh-btn">Refresh</button>
+    </div>
+    <div class="body">
+      <div id="calls-table"></div>
+      <div id="call-active" style="display:none; margin-top:12px;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;">
+          <video id="call-remote" autoplay playsinline style="width:360px; max-width:100%; background:#000; border-radius:6px;"></video>
+          <video id="call-local" autoplay playsinline muted style="width:160px; background:#000; border-radius:6px;"></video>
+          <audio id="call-remote-audio" autoplay></audio>
+          <div style="flex:1; min-width:240px;">
+            <div class="muted" style="margin-bottom:6px;">Confirm with the customer:</div>
+            <div id="call-terms"></div>
+            <div style="margin-top:10px;"><span class="badge PENDING" id="call-indicators">Camera and microphone off</span> <span class="muted" id="call-state"></span></div>
+            <div class="identity-actions">
+              <button class="primary" id="call-verified-btn">Verified</button>
+              <button class="danger" id="call-failed-btn">Failed</button>
+              <button class="ghost" id="call-hangup-btn">Hang up</button>
+            </div>
+            <div class="muted" style="margin-top:8px; font-size:12px;">Nothing of the call is recorded. Your decision and your username are written to the evidence of this transaction.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section>
     <div class="section-header"><h2>Identity lookup</h2></div>
     <div class="body">
@@ -170,5 +198,6 @@
 </main>
 
 <script src="/admin/admin.js"></script>
+<script src="/admin/calls.js"></script>
 </body>
 </html>

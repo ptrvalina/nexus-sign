@@ -15,10 +15,11 @@ Native Android SDK embedded into the bank's existing mobile application.
 1. The bank backend creates a NEXUS ID for the customer.
 2. When `bootstrap()` asks for a token, the host app gets one from its own backend, which calls Auth Core `POST /v1/mobile/sessions` with `{ nexusId, purpose: "BOOTSTRAP" }`.
 3. `NEXUSSignSDK.bootstrap()` requests a `BOOTSTRAP` token and creates the signing and request-authentication keys in the Keystore, plus the key material for offline confirmation. One Play Integrity token covers all of them. The signing and authentication keys are generated with a Keystore attestation challenge derived from the enrolment challenge, and their attestation chains are sent automatically (`keyAttestation`); the host app does nothing for this ([Android key attestation](../docs/security/attestation.md#android-key-attestation)). From then on the SDK signs every request with the authentication key; it holds no token.
-4. The bank backend creates a transaction authorization.
-5. The SDK fetches the exact authorization object and verifies it.
-6. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
-7. Auth Core verifies the signature and consumes the authorization atomically.
+4. The host app sends the credential ID and `signingKeyFingerprint()` (the SHA-256 of the signing key, computed on the device) to its own backend, which approves exactly that key for the customer before it executes anything confirmed with it; the same after replacement and recovery ([bank credential trust](../docs/protocol/bank-credential-trust-v1.md)).
+5. The bank backend creates a transaction authorization.
+6. The SDK fetches the exact authorization object and verifies it.
+7. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
+8. Auth Core verifies the signature and consumes the authorization atomically. The bank executes only after its own check of the evidence.
 
 ## Configuration
 
@@ -43,6 +44,7 @@ val sdk = NEXUSSignSDK(context, NEXUSSignConfig(
 | `recoverySetupPromptText` | `"Confirm your new recovery phrase"` | Description of the biometric prompt shown by `generateRecoveryPhrase()`. New in 2.0 |
 | `allowEmulatorHostHttp` | `false` | Development only: accept `http://10.0.2.2`, the emulator's alias for the developer's machine. New in 2.0; leave it off in release builds |
 | `requestTimeoutMillis` | `10_000` | Network request timeout |
+| `certificatePins` | empty | Public-key pins for the host of `baseUrl`, `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` (OkHttp `CertificatePinner`). Empty relies on the platform's certificate validation only. When set: at least two distinct pins (current key and a backup key kept offline), https only; a chain matching none of them fails the request. New in 2.0.0 |
 | `playIntegrityCloudProjectNumber` | `null` | The bank's Google Cloud project number for Play Integrity; without it no integrity token is sent |
 
 | Token purpose | Lifetime | Used by |
@@ -57,6 +59,10 @@ If a device-signed request is rejected because the phone's clock is off, the SDK
 
 `isRegistered()` is true only when Auth Core has confirmed the credential (after `bootstrap()` or `recoverIdentity`) and the key is still in the Keystore. A customer who already has an enrolled device can be enrolled again only with a `BOOTSTRAP` token that the bank backend requested with a replacement authorization after re-identifying the customer; otherwise `bootstrap()` fails with `ServerError(409, ...)` (`ACTIVE_CREDENTIAL_EXISTS`). If enrolment fails, the current keys stay in place.
 
+## Audio and video verification calls
+
+When the bank's verification plan asks for an AUDIO or VIDEO step, the customer talks to a bank operator in the app before signing ([ADR 0017](../docs/adr/0017-in-app-audio-video-calls.md)). This SDK opens the session (`openVerificationCall`), signs the signalling (`callSignalling`) and runs the call state machine (`VerificationCallController`); the media, permissions and call screen are in the optional module [android-sdk-calls](../android-sdk-calls/README.md). The call never confirms the payment: after the operator's VERIFIED, call `approve` as usual.
+
 ## Offline confirmation
 
 When the bank has enabled it, the customer can confirm a transaction shown as a QR code (branch, ATM, web banking) with no network on the phone:
@@ -64,8 +70,13 @@ When the bank has enabled it, the customer can confirm a transaction shown as a 
 ```kotlin
 val challenge = sdk.readOfflineChallenge(scannedText)        // verifies the bytes, no network
 show(challenge.transaction)                                   // same fields as online
-val code = sdk.confirmOffline(challenge, activity)            // biometric prompt, then 8 digits
+val code = sdk.confirmOffline(challenge, activity)            // biometric prompt(s), then 8 digits
+
+// Offline confirmation v2: whenever the app starts and when the connection returns
+lifecycleScope.launch { sdk.submitPendingOfflineSignatures() }
 ```
+
+With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default on Auth Core 2.0.0) the SDK first signs the transaction with the signing key — its own biometric prompt, because Android binds a key to one prompt — and stores the signature, then shows the second prompt for the code. Auth Core confirms the payment when the signature arrives; `submitPendingOfflineSignatures()` uploads what is pending and keeps what could not be delivered ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). Pending signatures are kept in `com.nexis.nexussign.<bankId>.offline`; exclude it from backup like the keys file.
 
 The offline key is an HMAC key in the Keystore that can only be used through the `BiometricPrompt` showing the transaction (`CryptoObject(Mac)`); it works from Android 9. Check `isOfflineConfirmationAvailable()` before offering it. See [docs/architecture/device-authentication-and-offline-confirmation.md](../docs/protocol/device-authentication-and-offline-confirmation.md).
 
@@ -122,13 +133,16 @@ The first registration for a credential agrees the push key with Auth Core; late
 val authorization = sdk.fetchAuthorization(id)
 val tx = authorization.signedTransaction()
 amountView.text = "${tx.formattedAmount()} ${tx.currency}"   // e.g. "1250.00 PLN"
-beneficiaryView.text = tx.beneficiaryDisplay()                // e.g. "Jan Kowalski · PL61…"
+beneficiaryView.text = tx.beneficiaryDisplay()                // e.g. "PL61109010140000071219812874 · Jan Kowalski"
 referenceView.text = tx.transactionReference
 
 val outcome = sdk.approve(authorization, activity)
 ```
 
 `approve()` re-verifies the payload, takes the expiry from the signed bytes, shows `tx.confirmationText()` as the `BiometricPrompt` description (with explicit confirmation required) and signs those same bytes. It switches to the main thread for the prompt itself, so it can be called from any coroutine scope tied to the activity. If the payload does not verify, both calls throw `NEXUSSignError.AuthorizationPayloadInvalid` and nothing is signed — treat it as a security event, not as a retryable network error.
+
+
+Since 2.0.0 the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
 
 ## Recovery
 

@@ -38,8 +38,25 @@ async function allocateNexusId(client: { query: Function }): Promise<string> {
 }
 
 export async function createNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord> {
-  try {
-    return await withTransaction(async (client) => {
+  // allocateNexusId checks before inserting, so two concurrent requests can
+  // still draw the same random ID; the primary key then rejects one of them,
+  // which retries with a new ID. Only the customer-reference index
+  // means a duplicate customer.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await insertNexusIdentity(clientId, bankCustomerRef);
+    } catch (error: unknown) {
+      const pg = error as { code?: string; constraint?: string };
+      if (pg?.code !== '23505') throw error;
+      if (pg.constraint === 'nexus_identities_pkey' && attempt < 3) continue;
+      if (pg.constraint === 'nexus_identities_pkey') throw new Error('Unable to allocate a unique 9-digit NEXUS ID');
+      throw new DuplicateBankCustomerError(bankCustomerRef);
+    }
+  }
+}
+
+async function insertNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord> {
+  return withTransaction(async (client) => {
     const duplicate = await client.query(
       `SELECT nexus_id FROM nexus_identities WHERE client_id = $1 AND bank_customer_ref = $2 AND status <> 'REVOKED' FOR UPDATE`,
       [clientId, bankCustomerRef],
@@ -57,13 +74,7 @@ export async function createNexusIdentity(clientId: string, bankCustomerRef: str
     if (!row) throw new Error('NEXUS identity insert returned no row');
     await recordAuditEvent('identity_created', { nexusId }, {}, client);
     return map(row);
-    });
-  } catch (error: unknown) {
-    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === '23505') {
-      throw new DuplicateBankCustomerError(bankCustomerRef);
-    }
-    throw error;
-  }
+  });
 }
 
 export async function getNexusIdentityForClient(nexusId: string, clientId: string): Promise<NexusIdentityRecord> {

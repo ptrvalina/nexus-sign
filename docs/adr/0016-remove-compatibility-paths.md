@@ -13,7 +13,7 @@ Accepted
 Release 2.0.0-rc.1 still contained paths that existed only for development or for data and devices from 1.x:
 
 - Bank-side credential provisioning and rotation (`POST /v1/nexus-identities/{nexusId}/credentials`, `POST /v1/credentials/{credentialId}/rotate`) registered device keys that no device attestation covered. They were refused with `REQUIRE_VALID_ATTESTATION`, but remained an enrolment path without attestation in every other configuration.
-- Recovery protocol 1 kept the stored verifiers in `nexus_identities.recovery_verifier`. A verifier is the HMAC key of the protocol 1 proof, so it works as a password for anyone who can read it (NXS-003). `RECOVERY_V1_ACCEPTED` could turn protocol 1 back on.
+- Recovery protocol 1 kept the stored verifiers in `nexus_identities.recovery_verifier`. A verifier is the HMAC key of the protocol 1 proof, so it works as a password for anyone who can read it. `RECOVERY_V1_ACCEPTED` could turn protocol 1 back on.
 - `SESSION` tokens gave devices enrolled by SDKs before 1.2 a bearer token for the mobile API, so a token that could be copied and replayed still existed for some enrolled devices.
 - The schema permitted states and tables that Auth Core never wrote: authorization states `CREATED`, `DELIVERING`, `SIGNED`, `CONSUMED`, credential states `PENDING`, `SUSPENDED`, the column `credentials.suspended_at` and the tables `attestation_records` and `policy_decisions`.
 

@@ -11,13 +11,15 @@ import { recordAuditEvent } from '../services/auditService';
 import { enrolmentAttestation, platformMatches, verifyDeviceAttestation } from '../services/attestationVerificationService';
 import { env } from '../config/env';
 import { authorizationObjectOf, getAuthorizationForClient, type AuthorizationRecord } from '../services/authorizationRecord';
-import { verifyAuthorization } from '../services/authorizationConfirmation';
+import { submitDeferredSignature, verifyAuthorization } from '../services/authorizationConfirmation';
 import { canonicalizeAuthorization } from '../services/canonicalAuthorization';
+import { reportedState } from '../services/authorizationExpiry';
 import { beginRecoverySetup, completeRecoverySetup } from '../services/recoveryService';
 import { escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
 import { buildAttestationBinding } from '../services/attestationBinding';
 import { registerPushDevice, unregisterPushDevice, type DeviceContext } from '../services/pushRegistrationService';
 import { getPushEnvelopeForDevice, recordPushReceipt } from '../services/pushService';
+import { deviceCancel, deviceJoin, deviceSignal, deviceSignals } from '../services/verificationCall';
 import { byIp, loginThrottle } from '../middleware/bruteForceProtection';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../services/errors';
 
@@ -257,7 +259,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
         nonce: auth.nonce,
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
-        state: auth.state,
+        state: reportedState(auth),
         signatureAlgorithm: auth.signatureAlgorithm,
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,
         canonicalPayloadBase64: canonicalizeAuthorization(authorizationObjectOf(auth)).toString('base64'),
@@ -288,6 +290,45 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const auth = await authorizationInScope(req.params.authorizationId, s);
       const body = z.object({ channel: z.enum(['AUDIO', 'VIDEO']) }).parse(req.body);
       res.status(201).json(await openVerificationSession(auth.authorizationId, s.clientId, body.channel));
+    } catch (e) { next(e); }
+  });
+
+  // --- In-app audio/video call (ADR 0017): WebRTC signalling relay ---
+
+  const callDevice = async (req: MobileAuthenticatedRequest) => {
+    const device = await deviceInScope(req);
+    return { clientId: device.clientId, nexusId: device.nexusId, credentialId: device.credentialId };
+  };
+  const sessionParam = z.string().uuid();
+
+  /** ICE servers and state of an open session of this device's authorization. */
+  router.get('/v1/mobile/verification-sessions/:sessionId/call', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      res.json(await deviceJoin(sessionParam.parse(req.params.sessionId), await callDevice(req)));
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/verification-sessions/:sessionId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ type: z.string(), payload: z.unknown().optional(), messageId: z.string().uuid().optional() }).strict().parse(req.body);
+      const sent = await deviceSignal(sessionParam.parse(req.params.sessionId), await callDevice(req), body.type, body.payload ?? null, body.messageId);
+      res.status(sent.duplicate ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+
+  /** Signals from the operator with seq > after; waits up to waitMs (long poll). */
+  router.get('/v1/mobile/verification-sessions/:sessionId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const query = z.object({ after: z.coerce.number().int().nonnegative().default(0), waitMs: z.coerce.number().int().min(0).max(20_000).default(0) }).parse(req.query);
+      res.json(await deviceSignals(sessionParam.parse(req.params.sessionId), await callDevice(req), query.after, query.waitMs));
+    } catch (e) { next(e); }
+  });
+
+  /** The customer ends or declines the call; nothing is verified or failed. */
+  router.post('/v1/mobile/verification-sessions/:sessionId/cancel', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      await deviceCancel(sessionParam.parse(req.params.sessionId), await callDevice(req));
+      res.status(204).send();
     } catch (e) { next(e); }
   });
 
@@ -325,6 +366,22 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const result = await verifyAuthorization(hsmAdapter, auth.authorizationId, s.clientId, body.signature, body.signatureFormat,
         { ipAddress: req.ip, userAgent: req.header('user-agent') });
       res.status(result.status === 'EXPIRED' ? 410 : 200).json(result);
+    } catch (e) { next(e); }
+  });
+
+  /** Offline confirmation v2: the device's signature over the bytes
+   * it confirmed offline, uploaded once it has a connection. Only from the
+   * credential the authorization names. 200 VERIFIED or ALREADY_RECORDED,
+   * 202 RECEIVED (the code has not arrived yet), 409 NOT_AWAITING_SIGNATURE,
+   * 422 INVALID_DEFERRED_SIGNATURE. */
+  router.post('/v1/mobile/authorizations/:authorizationId/deferred-signature', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const auth = await authorizationInScope(req.params.authorizationId, device);
+      const body = signatureSchema.parse(req.body);
+      const result = await submitDeferredSignature(hsmAdapter, auth.authorizationId, device.clientId, device.credentialId,
+        body.signature, body.signatureFormat, { ipAddress: req.ip, userAgent: req.header('user-agent') });
+      res.status(result.status === 'RECEIVED' ? 202 : 200).json(result);
     } catch (e) { next(e); }
   });
 

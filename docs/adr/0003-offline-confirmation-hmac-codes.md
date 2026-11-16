@@ -28,3 +28,16 @@ Banks want customers to confirm a transaction shown on a branch screen, an ATM o
 - The phone cannot learn of a revocation while offline; Auth Core rejects codes for a revoked or suspended credential at confirmation.
 - Without `DEVICE_SECRET_ENCRYPTION_KEY` the stored offline keys cannot be decrypted; the affected devices have to enrol again for offline confirmation.
 - Shared vectors: `auth-core/test-vectors/device-protocols-v1.json`. Specification: [device authentication and offline confirmation](../protocol/device-authentication-and-offline-confirmation.md).
+
+## Amendment 2026-10-18 (2.0.0, )
+
+Whoever holds the database and `DEVICE_SECRET_ENCRYPTION_KEY` can compute a valid code for any pending authorization of an offline-enabled credential, and the resulting evidence record is sealed like any other. This is inherent in a short symmetric code and cannot be removed without giving up offline use. Mitigations:
+
+- **Amount cap set by the deployment:** `OFFLINE_CONFIRMATION_MAX_AMOUNT` (per currency, minor units), required in production when offline confirmation is enabled. Currencies not listed are not offered offline. The cap lives in the deployment configuration, not in the database, so a database change alone cannot raise it.
+- **Master key protection:** the key ring and re-encryption tool allow rotation; wrapping the master key in the HSM is still open.
+- **Evidence:** records keep `confirmationMethod: OFFLINE_CODE`; the verifier counts them separately. Banks that need non-repudiation require online confirmation (device signature) for that payment type.
+- **Option not implemented:** a deferred device signature, uploaded by the phone when it is online again, could upgrade an offline confirmation to a verifiable one. It needs a protocol and SDK change and an owner decision.
+
+## Amendment (2026-10-18)
+
+Superseded in part by [ADR 0018](0018-deferred-device-signature.md): with `OFFLINE_CONFIRMATION_MODE=deferred_signature` (default, required in production) a code no longer confirms an authorization by itself; the device's deferred signature over the same bytes is required. The code protocol of this ADR is unchanged and still used in both versions.

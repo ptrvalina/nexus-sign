@@ -53,7 +53,7 @@ Key columns: `nexus_id` (nine digits, primary key), `client_id`, `bank_customer_
 | `SUSPENDED` | Admin `suspend` | Open authorizations `CANCELLED`; mobile requests, new authorizations, confirmations and recovery refused |
 | `REVOKED` | Admin `revoke`, from `ACTIVE` or `SUSPENDED` | All credentials `REVOKED`, open authorizations `CANCELLED`; final |
 
-The stored values are not enough to complete a recovery without the phrase. Migration 018 dropped the protocol 1 verifiers (`recovery_verifier`), which worked as passwords (NXS-003); an identity on protocol 1 keeps `recovery_protocol = 1` and no recovery secret.
+The stored values are not enough to complete a recovery without the phrase. Migration 018 dropped the protocol 1 verifiers (`recovery_verifier`), which worked as passwords; an identity on protocol 1 keeps `recovery_protocol = 1` and no recovery secret.
 
 The trigger `identity_lifecycle` (migration 017) permits only `ACTIVE` to `SUSPENDED` or `REVOKED`, and `SUSPENDED` to `ACTIVE` or `REVOKED`; `REVOKED` is final. `nexus_id`, `client_id` and `bank_customer_ref` cannot change, and `recovery_evidence_id` cannot be cleared once set.
 

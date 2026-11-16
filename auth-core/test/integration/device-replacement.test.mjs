@@ -1,5 +1,5 @@
 // Enrolling a new device for an identity that already has one must not
-// silently take the identity over (NXS-002): it needs the bank's explicit
+// silently take the identity over: it needs the bank's explicit
 // replacement authorization, which is audited, sealed into the evidence
 // chain, reported by webhook and announced on the replaced device.
 import { after, before, describe, test } from 'node:test';

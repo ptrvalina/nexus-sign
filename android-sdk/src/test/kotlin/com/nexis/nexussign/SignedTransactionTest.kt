@@ -97,10 +97,16 @@ class SignedTransactionTest {
     }
 
     @Test
-    fun `confirmation text is built from signed values`() {
+    fun `prompt text and beneficiary display match the shared vectors`() {
+        for (raw in vectors["valid"] as List<*>) {
+            val v = raw as Map<*, *>
+            val signed = SignedPayload.parse(b64(v["canonical_base64"] as String))
+            assertEquals(v["name"].toString(), v["beneficiary_display"], signed.beneficiaryDisplay())
+            assertEquals(v["name"].toString(), v["confirmation_text"], signed.confirmationText())
+        }
         val block = vectors["response_mismatch"] as Map<*, *>
         val signed = SignedPayload.parse(b64(block["base_canonical_base64"] as String))
-        assertEquals("transfer: 1250.00 PLN → Jan Kowalski · PL61109010140000071219812874 • BANK-2026-000001", signed.confirmationText())
+        assertEquals("1250.00 PLN → PL61109010140000071219812874 · Jan Kowalski\ntransfer • BANK-2026-000001", signed.confirmationText())
     }
 
     private fun envelopeFor(s: NexusSignedTransaction, b64: String, sha: String) = AuthorizationEnvelope(

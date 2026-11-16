@@ -1,5 +1,5 @@
-// NXS-010 (audit attribution, append-only audit log), NXS-011 (admin bank
-// scope, TOTP, four-eyes approvals) and NXS-012 (bank tokens bound to the
+// (audit attribution, append-only audit log), (admin bank
+// scope, TOTP, four-eyes approvals) and (bank tokens bound to the
 // client certificate) against a live Auth Core and PostgreSQL.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -119,7 +119,7 @@ describe('admin console', { skip: skipWithoutServices }, () => {
     assert.equal((await approver.call('POST', `/admin/api/approvals/${id}/approve`)).status, 409, 'executed once');
   });
 
-  test('NXS-032: resetting the password ends existing sessions, and cross-origin state changes are refused', async () => {
+  test('Resetting the password ends existing sessions, and cross-origin state changes are refused', async () => {
     const account = await server.createAdmin('session-check', 'operator', { clientId: 'bank-a' });
     const session = await adminSession(server, account);
     assert.equal((await session.call('GET', '/admin/api/me')).status, 200);

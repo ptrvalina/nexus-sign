@@ -10,7 +10,10 @@ import { createHash, createHmac, hkdfSync } from 'node:crypto';
 const DEVICE_REQUEST_DOMAIN = 'NEXUS-SIGN/DEVICE-REQUEST/v1';
 export const OFFLINE_KDF_SALT = 'NEXUS-SIGN/OFFLINE/v1';
 export const OFFLINE_CODE_DOMAIN = 'NEXUS-SIGN/OFFLINE-CODE/v1';
-const OFFLINE_QR_PREFIX = 'NXS1.';
+/** v1: code only. v2: the device also signs the bytes (deferred signature,
+ * docs/protocol/offline-confirmation-v2-deferred-signature.md); SDKs up to
+ * 2.0.0 refuse it, so they cannot leave a payment provisional. */
+const OFFLINE_QR_PREFIX = { 1: 'NXS1.', 2: 'NXS2.' } as const;
 export const OFFLINE_CODE_DIGITS = 8;
 
 export interface DeviceRequestParts {
@@ -63,6 +66,6 @@ export function offlineCodeFromTag(tag: Buffer): string {
 }
 
 /** QR content: prefix + base64url(canonical bytes). */
-export function offlineQrPayload(canonicalPayload: Buffer): string {
-  return OFFLINE_QR_PREFIX + canonicalPayload.toString('base64url');
+export function offlineQrPayload(canonicalPayload: Buffer, version: 1 | 2 = 1): string {
+  return OFFLINE_QR_PREFIX[version] + canonicalPayload.toString('base64url');
 }

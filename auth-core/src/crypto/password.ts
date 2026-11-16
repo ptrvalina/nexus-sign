@@ -4,7 +4,7 @@ import { randomBytes, scrypt as scryptCallback, timingSafeEqual, type ScryptOpti
  * One-way hashing for secrets that only need to be verified. Secrets that
  * must be read back, such as webhook HMAC keys, use src/crypto/secretBox.ts.
  *
- * Two cost profiles (NXS-036):
+ * Two cost profiles:
  * - `password` (human-chosen admin passwords): scrypt N=2^17, r=8, p=1, the
  *   OWASP minimum for scrypt;
  * - `secret` (256-bit random bank client secrets, verified on every token

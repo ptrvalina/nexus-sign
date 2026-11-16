@@ -1,6 +1,6 @@
 import express, { type Express } from 'express';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import type { Logger } from 'pino';
@@ -40,7 +40,7 @@ export function buildApp(hsmAdapter: HsmAdapter, logger: Logger): Express {
   if (env.TRUSTED_PROXY_IPS.length > 0) {
     // Dual-stack sockets report IPv4 peers as ::ffff:a.b.c.d; without
     // normalising, the gateway would not be trusted and every client would
-    // share the gateway's address (and its rate limits) (NXS-029).
+    // share the gateway's address (and its rate limits).
     const trusted = env.TRUSTED_PROXY_IPS.map(normalizeIp);
     app.set('trust proxy', (ip: string) => trusted.includes(normalizeIp(ip) ?? ''));
   }
@@ -92,7 +92,17 @@ export function buildApp(hsmAdapter: HsmAdapter, logger: Logger): Express {
 
   app.use(requireGatewayMtls);
 
-  app.get('/metrics', async (_req, res) => {
+  app.get('/metrics', async (req, res) => {
+    // With METRICS_BEARER_TOKEN set, only the monitoring system reads
+    // metrics, not every client behind the gateway.
+    if (env.METRICS_BEARER_TOKEN) {
+      const given = Buffer.from(req.header('authorization') ?? '', 'utf8');
+      const expected = Buffer.from(`Bearer ${env.METRICS_BEARER_TOKEN}`, 'utf8');
+      if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+        res.status(401).json({ error: 'Metrics need the monitoring token' });
+        return;
+      }
+    }
     res.setHeader('Content-Type', registry.contentType);
     res.send(await registry.metrics());
   });

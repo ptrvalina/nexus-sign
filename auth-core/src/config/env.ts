@@ -34,6 +34,25 @@ const envSchema = z.object({
   /** Encrypts per-credential offline confirmation keys (32 bytes, base64).
    * Required when OFFLINE_CONFIRMATION_ENABLED is true. */
   DEVICE_SECRET_ENCRYPTION_KEY: z.string().optional(),
+  /** Where the master keys come from. `env` (default): the base64
+   * keys above. `hsm` (required in production): only wrapped keys are
+   * configured (`<NAME>_WRAPPED`, `<NAME>_PREVIOUS_WRAPPED`), made with the
+   * HSM key-encryption key PKCS11_KEK_LABEL and unwrapped in the HSM at
+   * startup (src/crypto/masterKeyVault.ts, cli/masterKeys.js). */
+  MASTER_KEY_SOURCE: z.enum(['env', 'hsm']).default('env'),
+  PKCS11_KEK_LABEL: z.string().optional(),
+  WEBHOOK_SECRET_ENCRYPTION_KEY_WRAPPED: z.string().optional(),
+  DEVICE_SECRET_ENCRYPTION_KEY_WRAPPED: z.string().optional(),
+  ADMIN_SECRET_ENCRYPTION_KEY_WRAPPED: z.string().optional(),
+  WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS_WRAPPED: z.string().optional(),
+  DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS_WRAPPED: z.string().optional(),
+  ADMIN_SECRET_ENCRYPTION_KEY_PREVIOUS_WRAPPED: z.string().optional(),
+  /** Key rotation: previous master keys, comma-separated base64,
+   * accepted for decryption only until cli/rotateSecretKeys.js has
+   * re-encrypted the stored secrets under the current key. */
+  WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS: z.string().optional(),
+  DEVICE_SECRET_ENCRYPTION_KEY_PREVIOUS: z.string().optional(),
+  ADMIN_SECRET_ENCRYPTION_KEY_PREVIOUS: z.string().optional(),
 
   /** How long an OAuth2 client-credentials access token stays valid. */
   OAUTH_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
@@ -61,8 +80,26 @@ const envSchema = z.object({
    * server time. The nonce of each request is remembered for twice as long. */
   DEVICE_REQUEST_MAX_SKEW_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
   /** How long after the customer's confirmation the bank may request the
-   * commit of a transaction (NXS-030). */
+   * commit of a transaction. */
   BANK_COMMIT_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(7 * 24 * 3600).default(3600),
+  /** How often PENDING_USER authorizations past their expiry are moved to
+   * EXPIRED (and the bank's webhook is notified). Read paths report EXPIRED
+   * immediately regardless of this interval. */
+  AUTHORIZATION_EXPIRY_SWEEP_MS: z.coerce.number().int().min(500).max(300_000).default(10_000),
+  // --- In-app audio/video calls (ADR 0017) ---
+  /** STUN servers for the device and the operator console, e.g.
+   * `stun:turn.bank.example:3478` (comma-separated). */
+  WEBRTC_STUN_URLS: z.string().optional().transform((v) => (v ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
+  /** TURN servers of the bank (coturn with `use-auth-secret`), e.g.
+   * `turns:turn.bank.example:5349?transport=tcp` (comma-separated). */
+  WEBRTC_TURN_URLS: z.string().optional().transform((v) => (v ?? '').split(',').map((x) => x.trim()).filter(Boolean)),
+  /** The coturn `static-auth-secret`; Auth Core derives per-session TURN
+   * credentials from it (TURN REST convention). */
+  WEBRTC_TURN_SECRET: optional(z.string().min(16)),
+  WEBRTC_TURN_CREDENTIAL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
+
+  /** How long a shutdown waits for requests in flight before closing them. */
+  SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(120_000).default(15_000),
 
   /** Path prefix the gateway removes before forwarding (e.g. `/nexus-sign`
    * when the SDK base URL is https://api.bank.example/nexus-sign). Devices
@@ -72,6 +109,38 @@ const envSchema = z.object({
   /** Offline confirmation: the customer confirms a transaction shown as a QR
    * code without network on the phone and types an 8-digit code. */
   OFFLINE_CONFIRMATION_ENABLED: z.string().optional().transform((v) => v === 'true'),
+  /** Bearer token required for GET /metrics. Without it the endpoint
+   * is open to every caller that passes the gateway check (any bank system).
+   * Required in production; at least 32 characters. */
+  METRICS_BEARER_TOKEN: z.string().optional(),
+  /** Where used device request nonces are remembered. `postgres`
+   * (default): table device_request_nonces, as durable as the rest of the
+   * data. `redis`: as before 2.0.0; a failover to an asynchronous replica or a
+   * restore can forget nonces. Production requires postgres. */
+  DEVICE_NONCE_STORE: z.enum(['postgres', 'redis']).default('postgres'),
+  /** Highest amount, per currency, that may be confirmed with an
+   * offline code, e.g. `PLN:100000,EUR:20000` (minor units). The offline code
+   * is an HMAC under a key Auth Core also holds, so whoever has the database
+   * and DEVICE_SECRET_ENCRYPTION_KEY can compute it; the cap bounds what such
+   * a code can authorize. Set in the deployment, not in the database.
+   * Currencies not listed are not offered offline. Required in production
+   * when OFFLINE_CONFIRMATION_ENABLED is true. */
+  OFFLINE_CONFIRMATION_MAX_AMOUNT: z.string().optional(),
+  /** Most offline confirmations one credential may make in 24 hours.
+   * Bounds how many authorizations a computed (forged) code could confirm
+   * before the bank notices. Unset: no limit; required in production when
+   * offline confirmation is enabled. */
+  OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY: z.coerce.number().int().min(1).max(1000).optional(),
+  /** offline confirmation protocol (docs/protocol/offline-confirmation-v2-deferred-signature.md).
+   * `deferred_signature` (default, v2): QR prefix NXS2.; an accepted code
+   * leaves the authorization OFFLINE_PROVISIONAL until the device uploads its
+   * ECDSA signature over the same bytes; only then VERIFIED. `immediate` (v1,
+   * as up to 2.0.0-rc.2): QR prefix NXS1.; an accepted code is VERIFIED at
+   * once. Production requires deferred_signature. */
+  OFFLINE_CONFIRMATION_MODE: z.enum(['deferred_signature', 'immediate']).default('deferred_signature'),
+  /** v2: hours after an accepted code within which the device signature must
+   * arrive; afterwards the authorization becomes OFFLINE_UNSIGNED (final). */
+  OFFLINE_SIGNATURE_DEADLINE_HOURS: z.coerce.number().int().min(1).max(720).default(72),
 
   // --- Secure push (docs/protocol/secure-push.md) ---
 
@@ -164,14 +233,11 @@ const envSchema = z.object({
   ANDROID_REQUIRED_DEVICE_VERDICT: z.enum(['MEETS_BASIC_INTEGRITY', 'MEETS_DEVICE_INTEGRITY', 'MEETS_STRONG_INTEGRITY']).default('MEETS_DEVICE_INTEGRITY'),
 
   /** Where Android keys must live, proven by Keystore key attestation
-   * (androidKeyAttestation.ts): REQUIRE_STRONGBOX, REQUIRE_HARDWARE_BACKED
-   * (TEE or StrongBox) or ALLOW_SOFTWARE (development only). A key that does
-   * not meet the policy is refused; nothing falls back silently. */
-  /** Where Android keys must live, proven by Keystore attestation:
-   * REQUIRE_STRONGBOX (StrongBox only), REQUIRE_HARDWARE_BACKED (TEE or
-   * StrongBox; default), ALLOW_TEE (the same acceptance as
-   * REQUIRE_HARDWARE_BACKED, named for policies written as "TEE allowed"),
-   * ALLOW_SOFTWARE (development only; a production blocker). */
+   * (androidKeyAttestation.ts): REQUIRE_STRONGBOX (StrongBox only),
+   * REQUIRE_HARDWARE_BACKED (TEE or StrongBox; default), ALLOW_TEE (the same
+   * acceptance as REQUIRE_HARDWARE_BACKED, named for policies written as "TEE
+   * allowed"), ALLOW_SOFTWARE (development only; a production blocker). A key
+   * that does not meet the policy is refused; nothing falls back silently. */
   ANDROID_KEY_SECURITY_POLICY: z.enum(['REQUIRE_STRONGBOX', 'REQUIRE_HARDWARE_BACKED', 'ALLOW_TEE', 'ALLOW_SOFTWARE']).default('REQUIRE_HARDWARE_BACKED'),
   /** Refuse devices whose bootloader is unlocked or whose boot is not verified. */
   ANDROID_REQUIRE_LOCKED_BOOTLOADER: z.string().optional().transform((v) => v !== 'false'),

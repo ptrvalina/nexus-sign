@@ -15,10 +15,11 @@ Native iOS SDK embedded into the bank's existing mobile application.
 1. The bank backend creates a NEXUS ID for the customer.
 2. When `bootstrap()` asks for a token, the host app gets one from its own backend, which calls Auth Core `POST /v1/mobile/sessions` with `{ nexusId, purpose: "BOOTSTRAP" }`.
 3. `NEXUSSignSDK.bootstrap()` requests a `BOOTSTRAP` token and creates three Secure Enclave keys: signing, request authentication and offline. One App Attest attestation covers all three. From then on the SDK signs every request with the authentication key; it holds no token.
-4. The bank backend creates a transaction authorization.
-5. The SDK fetches the exact authorization object and verifies it.
-6. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
-7. Auth Core verifies the signature and consumes the authorization atomically.
+4. The host app sends the credential ID and `try signingKeyFingerprint()` (the SHA-256 of the signing key, computed on the device) to its own backend, which approves exactly that key for the customer before it executes anything confirmed with it; the same after replacement and recovery ([bank credential trust](../docs/protocol/bank-credential-trust-v1.md)).
+5. The bank backend creates a transaction authorization.
+6. The SDK fetches the exact authorization object and verifies it.
+7. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
+8. Auth Core verifies the signature and consumes the authorization atomically. The bank executes only after its own check of the evidence.
 
 ## Configuration
 
@@ -37,6 +38,12 @@ let sdk = NEXUSSignSDK(config: NEXUSSignConfig(
 
 `recoverySetupPromptText` (default `"Confirm to set up your recovery phrase"`) is the reason shown in the Face ID / Touch ID prompt of `generateRecoveryPhrase()`; localize it in the host app. `keychainAccessGroup`, `pushKeychainAccessGroup` and `requestTimeout` (default 10 s) are optional.
 
+`certificatePins` (new in 2.0.0, ) pins the public key of the host of `baseURL`: a set of `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` strings, the same form as the Android SDK. Empty (the default) relies on the system's certificate validation only. When set, give at least two pins (the current key and a backup key kept offline) and an https URL; the system validation runs first, then a connection whose chain has none of the pinned keys is cancelled. Supported key types: P-256, P-384, RSA 2048/3072/4096. Compute a pin with:
+
+```bash
+openssl x509 -in server.pem -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+```
+
 | Token purpose | Lifetime | Used by |
 |---|---|---|
 | `BOOTSTRAP` | 5 minutes, single use | `bootstrap()` only |
@@ -49,6 +56,10 @@ If a device-signed request is rejected because the phone's clock is off, the SDK
 
 `isRegistered()` is true only when Auth Core has confirmed the credential (after `bootstrap()` or `recoverIdentity`) and the key is still on the device. A customer who already has an enrolled device can be enrolled again only with a `BOOTSTRAP` token that the bank backend requested with a replacement authorization after re-identifying the customer; otherwise `bootstrap()` fails with `serverError(statusCode: 409, ...)` (`ACTIVE_CREDENTIAL_EXISTS`). If enrolment fails, the current keys stay in place.
 
+## Audio and video verification calls
+
+When the bank's verification plan asks for an AUDIO or VIDEO step, the customer talks to a bank operator in the app before signing ([ADR 0017](../docs/adr/0017-in-app-audio-video-calls.md)). This SDK opens the session (`openVerificationCall`), signs the signalling (`callSignalling`) and runs the call state machine (`VerificationCallController`); the media, permissions and call screen are in the optional module [ios-sdk-calls](../ios-sdk-calls/README.md). The call never confirms the payment: after the operator's VERIFIED, call `approve` as usual.
+
 ## Offline confirmation
 
 When the bank has enabled it, the customer can confirm a transaction shown as a QR code (branch, ATM, web banking) with no network on the phone:
@@ -57,7 +68,12 @@ When the bank has enabled it, the customer can confirm a transaction shown as a 
 let challenge = try sdk.readOfflineChallenge(qrPayload: scannedText)   // verifies the bytes, no network
 show(challenge.transaction)                                             // same fields as online
 let code = try await sdk.confirmOffline(challenge)                      // Face ID / Touch ID, then 8 digits
+
+// Offline confirmation v2: when the app starts and when the connection returns
+Task { await sdk.submitPendingOfflineSignatures() }
 ```
+
+With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default on Auth Core 2.0.0) one biometric evaluation authorizes both Secure Enclave keys: the signing key signs the transaction and the signature is stored before the code is computed. Auth Core confirms the payment when the signature arrives ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). This code has not been compiled or run on a device in the environment that wrote it.
 
 The Secure Enclave key agreement runs inside the biometric prompt that shows the transaction. Check `isOfflineConfirmationAvailable()` before offering it. See [device authentication and offline confirmation](../docs/protocol/device-authentication-and-offline-confirmation.md).
 
@@ -135,7 +151,7 @@ If App Attest is unavailable or fails, the SDK still sends the enrolment with th
 let authorization = try await sdk.fetchAuthorization(authorizationID: id)
 let tx = try authorization.signedTransaction()
 amountLabel.text = "\(tx.formattedAmount) \(tx.currency)"   // e.g. "1250.00 PLN"
-beneficiaryLabel.text = tx.beneficiaryDisplay                // e.g. "Jan Kowalski · PL61…"
+beneficiaryLabel.text = tx.beneficiaryDisplay                // e.g. "PL61109010140000071219812874 · Jan Kowalski"
 referenceLabel.text = tx.transactionReference
 
 let outcome = try await sdk.approve(authorization: authorization)
@@ -144,6 +160,9 @@ let outcome = try await sdk.approve(authorization: authorization)
 `approve()` re-verifies the payload, takes the expiry from the signed bytes, shows `tx.confirmationText` in the system biometric prompt and signs those same bytes. If the payload does not verify, both calls throw `NEXUSSignError.authorizationPayloadInvalid(reason:detail:)` and nothing is signed — treat it as a security event, not as a retryable network error.
 
 Decode any NEXUS-SIGN payload your app receives from the bank backend (for example `NexusRecoverySession`) with `JSONDecoder.nexus()`: Auth Core timestamps carry milliseconds, which the default and `.iso8601` strategies reject.
+
+
+Since 2.0.0 the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
 
 ## Recovery
 

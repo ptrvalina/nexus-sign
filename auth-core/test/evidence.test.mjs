@@ -151,7 +151,8 @@ async function chainV3(hsm) {
     const sealedPayload = { schemaVersion: '3', recordType, nexusId: '123456789', chainSequence: records.length + 1, previousEvidenceHash: previous?.evidenceHash ?? null, sealKeyId: keyId, ...body };
     const hash = evidenceHash(sealedPayload);
     const { signature } = await hsm.signEvidence(Buffer.from(hash, 'hex'));
-    const record = { recordType, authorizationId: body.authorizationId ?? null, nexusId: '123456789', credentialId: CREDENTIAL, chainSequence: records.length + 1, sealedPayload, evidenceHash: hash, previousEvidenceHash: sealedPayload.previousEvidenceHash, hsmSignature: signature.toString('base64') };
+    // Export shape (mapEvidence): the columns that repeat sealed values, including seal key and schema.
+    const record = { recordType, authorizationId: body.authorizationId ?? null, nexusId: '123456789', credentialId: CREDENTIAL, chainSequence: records.length + 1, sealedPayload, evidenceHash: hash, previousEvidenceHash: sealedPayload.previousEvidenceHash, hsmSignature: signature.toString('base64'), sealKeyId: keyId, schemaVersion: '3' };
     records.push(record);
     return record;
   };

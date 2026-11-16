@@ -100,6 +100,13 @@ test('device-signed requests: valid, replayed, stale, tampered and unknown-key c
   const stubs = {
     '../config/env': { env: { DEVICE_REQUEST_MAX_SKEW_SECONDS: 300, DEVICE_REQUEST_PATH_PREFIX: '' } },
     '../db/redis': { redis: { set: async (key) => (usedNonces.has(key) ? null : (usedNonces.add(key), 'OK')) } },
+    // DEVICE_NONCE_STORE=postgres (default): the primary key of
+    // device_request_nonces; here a set with ON CONFLICT DO NOTHING semantics.
+    '../db/pool': { pool: { query: async (sql, [credential, nonce]) => {
+      assert.match(sql, /INSERT INTO device_request_nonces .* ON CONFLICT \(credential_id, nonce\) DO NOTHING/s);
+      const key = `${credential}:${nonce}`;
+      return { rowCount: usedNonces.has(key) ? 0 : (usedNonces.add(key), 1) };
+    } } },
     '../services/mobileSessionService': { resolveMobileSession: async () => null },
     '../services/nexusIdentityService': { getNexusIdentityStatus: async () => identityStatus },
     '../services/clientService': { getClientRecord: async () => ({ status: 'ACTIVE' }) },

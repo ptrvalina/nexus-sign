@@ -14,10 +14,12 @@ public final class NEXUSSignSDK {
     private let keyManager: KeyManager
     private let attestationProvider = AttestationProvider()
     private let networkClient: NetworkClient
+    private let offlineSignatures: OfflineSignatureQueue
 
     public init(config: NEXUSSignConfig) {
         self.config = config
         self.state = SDKState(bankID: config.bankID)
+        self.offlineSignatures = OfflineSignatureQueue(bankID: config.bankID)
         self.keyManager = KeyManager(bankID: config.bankID, accessGroup: config.keychainAccessGroup, state: state)
         self.networkClient = NetworkClient(config: config)
         useDeviceAuthentication()
@@ -31,6 +33,17 @@ public final class NEXUSSignSDK {
 
     /// The credential ID confirmed by Auth Core, if the device is registered.
     public var credentialID: String? { keyManager.effectiveCredentialID }
+
+    /// Fingerprint of this device's signing key: hex SHA-256 of its DER
+    /// SubjectPublicKeyInfo, computed here from the key in the Secure Enclave,
+    /// not taken from any Auth Core response. After enrolment, replacement or
+    /// recovery the app sends it with the credential ID to the bank's own
+    /// backend, which approves exactly this key for the customer
+    /// (docs/protocol/bank-credential-trust-v1.md). Nil when not registered.
+    public func signingKeyFingerprint() throws -> String? {
+        guard try isRegistered(), let info = try keyManager.activeSigningPublicKeyInfo() else { return nil }
+        return SubjectPublicKeyInfo.fingerprint(info)
+    }
 
     /// True when this device can confirm transactions from a QR code without network.
     public func isOfflineConfirmationAvailable() throws -> Bool {
@@ -83,6 +96,33 @@ public final class NEXUSSignSDK {
 
     /// Asks for biometric confirmation showing the signed transaction, signs
     /// the canonical bytes and submits the signature.
+    /// Opens an audio or video verification session for `authorization` when
+    /// the bank's verification plan asks for one (ADR 0017). The signed bytes
+    /// are verified first, so the terms shown during the call
+    /// (`signedTransaction().confirmationText`) are those the operator sees
+    /// and the device will sign. Auth Core binds the session to this
+    /// authorization and this device. At most three sessions per channel.
+    ///
+    /// Run the call with `callSignalling(for:)` and a media engine
+    /// (NEXUSSignCalls). The call never confirms the payment: after a
+    /// VERIFIED decision, call `approve(authorization:)` as usual.
+    public func openVerificationCall(authorization: NexusAuthorization, channel: VerificationChannel) async throws -> VerificationSession {
+        let signed = try authorization.signedTransaction()
+        guard let expiry = signed.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
+        guard let credentialID = keyManager.effectiveCredentialID else { throw NEXUSSignError.notRegistered }
+        guard signed.credentialId == credentialID else {
+            throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "the authorization is for another device")
+        }
+        let body = try await networkClient.openVerificationSession(authorizationID: authorization.authorizationId, channel: channel)
+        return try CallWire.decodeSession(body, authorizationID: authorization.authorizationId)
+    }
+
+    /// Device-signed signalling of one verification session.
+    public func callSignalling(for session: VerificationSession) throws -> CallSignalling {
+        guard keyManager.effectiveCredentialID != nil else { throw NEXUSSignError.notRegistered }
+        return DeviceCallSignalling(sessionID: session.sessionID, network: networkClient)
+    }
+
     public func approve(authorization: NexusAuthorization) async throws -> NEXUSVerificationOutcome {
         // Expiry, prompt text and the signed bytes all come from the one
         // verified canonical payload, never from the JSON convenience fields.
@@ -210,6 +250,7 @@ public final class NEXUSSignSDK {
     /// authorization. No network is used. Render the confirmation screen from
     /// `challenge.transaction`.
     public func readOfflineChallenge(qrPayload: String) throws -> NexusOfflineChallenge {
+        let version = try DeviceProtocol.qrPayloadVersion(qrPayload)
         let bytes = try DeviceProtocol.qrPayloadBytes(qrPayload)
         let transaction: NexusSignedTransaction
         do {
@@ -221,12 +262,19 @@ public final class NEXUSSignSDK {
             throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "the QR code is for another device")
         }
         guard let expiry = transaction.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
-        return NexusOfflineChallenge(transaction: transaction, canonicalPayload: bytes)
+        return NexusOfflineChallenge(transaction: transaction, canonicalPayload: bytes, requiresDeviceSignature: version == 2)
     }
 
     /// Asks for biometric confirmation showing the transaction and returns the
     /// 8-digit code the customer types on the bank's screen. Works without
     /// network. The code is valid only for this exact transaction.
+    ///
+    /// Offline confirmation v2 (`challenge.requiresDeviceSignature`): the one
+    /// biometric evaluation of the context authorizes the signing key, which
+    /// signs the transaction, and the offline key. The signature is stored
+    /// before the code is computed. Call `submitPendingOfflineSignatures()`
+    /// whenever the app is online; Auth Core confirms the payment when the
+    /// signature arrives.
     public func confirmOffline(_ challenge: NexusOfflineChallenge) async throws -> String {
         guard let credentialID = keyManager.effectiveCredentialID else { throw NEXUSSignError.notRegistered }
         guard let serverKey = keyManager.effectiveOfflineServerPublicKeyPEM else { throw NEXUSSignError.offlineConfirmationUnavailable }
@@ -238,11 +286,52 @@ public final class NEXUSSignSDK {
             throw Self.biometryError(policyError)
         }
         context.localizedReason = challenge.transaction.confirmationText
-        // The key agreement itself shows the biometric prompt of `context`.
+        if challenge.requiresDeviceSignature {
+            guard UUID(uuidString: challenge.transaction.authorizationId) != nil else {
+                throw NEXUSSignError.authorizationPayloadInvalid(reason: "invalid_qr", detail: "authorization ID is not a UUID")
+            }
+            // Evaluate once; both Secure Enclave keys are then used with this
+            // already-evaluated context, without a second prompt.
+            do {
+                _ = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: challenge.transaction.confirmationText)
+            } catch {
+                throw NEXUSSignError.authenticationDenied
+            }
+            let signature = try withBiometryCheck {
+                guard let privateKey = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                return try keyManager.sign(payload: challenge.canonicalPayload, using: privateKey)
+            }
+            // Stored before the code exists: no code without its signature.
+            try offlineSignatures.add(authorizationID: challenge.transaction.authorizationId, signature: signature)
+        }
+        // The key agreement itself shows the biometric prompt of `context`
+        // (v1); in v2 the context is already evaluated.
         var shared = try withBiometryCheck { try keyManager.offlineSharedSecret(serverPublicKeyPEM: serverKey, context: context) }
         defer { shared.resetBytes(in: 0..<shared.count) }
         let key = DeviceProtocol.deriveOfflineKey(sharedSecret: shared, credentialID: credentialID)
         return DeviceProtocol.offlineCode(tag: DeviceProtocol.offlineTag(key: key, canonicalPayload: challenge.canonicalPayload))
+    }
+
+    /// Offline confirmation v2: uploads the signatures made by
+    /// `confirmOffline` that Auth Core does not have yet. Call it when the app
+    /// starts and whenever it regains a connection. Signatures Auth Core
+    /// accepted, or can never accept, are removed; the others are kept.
+    @discardableResult
+    public func submitPendingOfflineSignatures() async -> OfflineSignatureDelivery {
+        guard keyManager.effectiveCredentialID != nil else {
+            return OfflineSignatureDelivery(delivered: 0, refused: 0, pending: offlineSignatures.pending().count)
+        }
+        return await offlineSignatures.deliver { item in
+            guard UUID(uuidString: item.authorizationId) != nil else { return .refused(statusCode: 0) }
+            do {
+                try await networkClient.uploadDeferredSignature(authorizationID: item.authorizationId, signatureBase64: item.signature)
+                return .accepted
+            } catch NEXUSSignError.serverError(let statusCode, _) {
+                return UploadOutcome.of(statusCode: statusCode)
+            } catch {
+                return .retry
+            }
+        }
     }
 
     // MARK: - Secure push (bank push mode NEXUS)

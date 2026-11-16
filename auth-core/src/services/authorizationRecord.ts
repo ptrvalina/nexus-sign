@@ -2,7 +2,12 @@ import { pool } from '../db/pool';
 import type { AuthorizationBeneficiary, AuthorizationObject } from './canonicalAuthorization';
 
 export const OPEN_STATES = ['PENDING_USER'];
-export const FINAL_STATES = ['VERIFIED', 'EXPIRED', 'REJECTED', 'CANCELLED'];
+export const FINAL_STATES = ['VERIFIED', 'EXPIRED', 'REJECTED', 'CANCELLED', 'OFFLINE_UNSIGNED'];
+/** Offline confirmation v2: code accepted, device signature not yet received.
+ * Neither open nor final; only the deferred signature or the sweep moves it. */
+export const PROVISIONAL_STATE = 'OFFLINE_PROVISIONAL';
+
+export type ConfirmationMethod = 'DEVICE_SIGNATURE' | 'OFFLINE_CODE' | 'OFFLINE_SIGNED';
 
 export interface AuthorizationRecord {
   authorizationId: string;
@@ -23,8 +28,14 @@ export interface AuthorizationRecord {
   signature: string | null;
   signatureAlgorithm: string;
   signatureFormat: 'der' | 'raw' | 'hmac' | null;
-  confirmationMethod: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE' | null;
+  confirmationMethod: ConfirmationMethod | null;
   verifiedAt: Date | null;
+  /** When an offline code was accepted (v1 and v2). */
+  offlineCodeAcceptedAt: Date | null;
+  /** v2: until when the device signature may arrive. */
+  offlineSignatureDeadline: Date | null;
+  /** OFFLINE_UNSIGNED: deadline, credential_not_active or identity_not_active. */
+  offlineUnsignedReason: string | null;
 }
 
 export class AuthorizationNotFoundError extends Error {
@@ -66,7 +77,9 @@ export interface AuthorizationRow {
   operation_type: string; amount_minor: string; currency: string; beneficiary: AuthorizationBeneficiary; policy_reference: string;
   policy_version: string; canonical_payload_hash: string; nonce: string; issued_at: Date; expires_at: Date; state: string;
   signature: string | null; signature_algorithm: string; signature_format: 'der' | 'raw' | 'hmac' | null; verified_at: Date | null;
-  confirmation_method: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE' | null;
+  confirmation_method: ConfirmationMethod | null;
+  offline_code_tag: string | null; offline_code_accepted_at: Date | null; offline_signature_deadline: Date | null;
+  offline_unsigned_reason: string | null;
   correlation_id: string | null; idempotency_key: string | null;
 }
 
@@ -92,5 +105,8 @@ export function mapAuthorization(row: AuthorizationRow): AuthorizationRecord {
     signatureFormat: row.signature_format,
     confirmationMethod: row.confirmation_method ?? null,
     verifiedAt: row.verified_at,
+    offlineCodeAcceptedAt: row.offline_code_accepted_at ?? null,
+    offlineSignatureDeadline: row.offline_signature_deadline ?? null,
+    offlineUnsignedReason: row.offline_unsigned_reason ?? null,
   };
 }

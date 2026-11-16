@@ -14,17 +14,21 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/*.test.mjs\"",
     "test:integration": "node --test --test-concurrency=1 \"test/integration/*.test.mjs\"",
+    "test:media": "node --test --test-concurrency=1 \"test/media/*.test.mjs\"",
     "test:vectors": "node test-vectors/check-signed-payload-vectors.mjs && node test-vectors/check-vector-copies.mjs",
     "check:openapi": "node scripts/check-openapi-routes.mjs",
     "check:repository": "bash scripts/check-repository.sh",
     "check:all": "npm run test && npm run test:vectors && npm run check:openapi && npm run check:repository",
     "smoke-test": "node scripts/e2e-smoke.mjs",
     "verify-evidence": "node scripts/verify-evidence.mjs",
-    "generate:vectors": "node test-vectors/generate-signed-payload-vectors.mjs && node test-vectors/generate-device-protocol-vectors.mjs && node test-vectors/generate-secure-push-vectors.mjs && node test-vectors/generate-recovery-vectors.mjs",
+    "generate:vectors": "node test-vectors/generate-signed-payload-vectors.mjs && node test-vectors/generate-device-protocol-vectors.mjs && node test-vectors/generate-secure-push-vectors.mjs && node test-vectors/generate-recovery-vectors.mjs && node test-vectors/generate-bank-trust-vectors.mjs",
     "register-client": "node dist/cli/registerClient.js",
     "create-admin-user": "node dist/cli/createAdminUser.js",
     "set-client-certificates": "node dist/cli/setClientCertificates.js",
-    "seal-credential-baseline": "node dist/cli/sealCredentialBaseline.js"
+    "seal-credential-baseline": "node dist/cli/sealCredentialBaseline.js",
+    "verification-setup": "node dist/cli/verificationSetup.js",
+    "rotate-secret-keys": "node dist/cli/rotateSecretKeys.js",
+    "master-keys": "node dist/cli/masterKeys.js"
   },
   "dependencies": {
     "express": "^4.19.2",

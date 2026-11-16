@@ -59,7 +59,7 @@ struct SDKState {
 
     /// `LAContext.evaluatedPolicyDomainState` when the active keys were
     /// enrolled. A different value later means the biometric enrolment changed
-    /// and the biometry-bound keys are gone (NXS-026).
+    /// and the biometry-bound keys are gone.
     var biometryDomainState: Data? {
         get { defaults.data(forKey: prefix + "biometryDomainState") }
         nonmutating set { defaults.set(newValue, forKey: prefix + "biometryDomainState") }

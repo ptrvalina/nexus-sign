@@ -29,7 +29,13 @@ export interface AuthorizationObject {
  */
 export const BENEFICIARY_KEY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 export const BENEFICIARY_MAX_FIELDS = 16;
-export const BENEFICIARY_MAX_VALUE_LENGTH = 512;
+/** ISO 20022 Max140Text, in UTF-16 code units as every SDK counts them. A
+ * longer value could push the account identifier out of the visible part of
+ * the confirmation prompt. Until 2.0.0-rc.2 the limit was 512. */
+export const BENEFICIARY_MAX_VALUE_LENGTH = 140;
+/** A value must not be blank or padded with space separators (Zs): padding
+ * changes what the prompt shows without changing how the value reads. */
+const PADDED = /^\p{Zs}|\p{Zs}$/u;
 
 /**
  * Characters that change how text is laid out without being visible: control
@@ -38,7 +44,7 @@ export const BENEFICIARY_MAX_VALUE_LENGTH = 512;
  * a bidi override or a line break can push the real IBAN out of the
  * confirmation prompt, so no displayed field may contain them. Lone UTF-16
  * surrogates (\p{Cs}) are refused too: they have no UTF-8 encoding, so the
- * signed bytes would not match the text and the SDKs reject them (NXS-033).
+ * signed bytes would not match the text and the SDKs reject them.
  * The SDKs apply the same rule to the signed bytes.
  */
 export const DISPLAY_UNSAFE_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
@@ -49,7 +55,10 @@ export function assertValidBeneficiary(beneficiary: unknown): asserts beneficiar
   if (entries.length > BENEFICIARY_MAX_FIELDS) throw new ValidationError(`Invalid beneficiary: at most ${BENEFICIARY_MAX_FIELDS} fields`);
   for (const [key, value] of entries) {
     if (!BENEFICIARY_KEY_PATTERN.test(key)) throw new ValidationError(`Invalid beneficiary key "${key}": must match ${BENEFICIARY_KEY_PATTERN}`);
-    if (typeof value !== 'string' || value.length > BENEFICIARY_MAX_VALUE_LENGTH) throw new ValidationError(`Invalid beneficiary value for "${key}"`);
+    if (typeof value !== 'string' || value.length === 0 || value.length > BENEFICIARY_MAX_VALUE_LENGTH) {
+      throw new ValidationError(`Invalid beneficiary value for "${key}": 1 to ${BENEFICIARY_MAX_VALUE_LENGTH} characters`);
+    }
+    if (PADDED.test(value)) throw new ValidationError(`Invalid beneficiary value for "${key}": leading or trailing space`);
     if (DISPLAY_UNSAFE_CHARACTER.test(value)) throw new ValidationError(`Invalid beneficiary value for "${key}": control, format or separator characters are not allowed`);
   }
 }

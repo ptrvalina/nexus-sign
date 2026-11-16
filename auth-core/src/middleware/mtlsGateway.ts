@@ -8,8 +8,8 @@ import { env } from '../config/env';
  *
  * Endpoints called directly by the embedded mobile SDK are exempt: a
  * customer's phone never holds the bank's gateway client certificate, so
- * those endpoints are authenticated by their own short-lived,
- * customer-scoped tokens instead. The exemption is an explicit allow-list of
+ * those endpoints are authenticated by device request signatures instead
+ * (or, for enrolment, a single-use BOOTSTRAP token). The exemption is an explicit allow-list of
  * device routes, matched case-insensitively because Express routing is
  * case-insensitive; the bank-facing /v1/mobile/sessions is never exempt.
  */
@@ -22,6 +22,10 @@ const DEVICE_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/verification\/escalate\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/verification-sessions\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/signature\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/call\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/signals\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/signals\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/cancel\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/push-registration\/?$/i },
   { method: 'DELETE', pattern: /^\/v1\/mobile\/push-registration\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/push-messages\/[^/]+\/?$/i },

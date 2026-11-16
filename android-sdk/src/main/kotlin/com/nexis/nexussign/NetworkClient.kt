@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.CertificatePinner
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -25,6 +26,12 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
     private val json = Json { ignoreUnknownKeys = true }
     private val client = OkHttpClient.Builder()
         .callTimeout(config.requestTimeoutMillis, TimeUnit.MILLISECONDS)
+        .apply {
+            if (config.certificatePins.isNotEmpty()) {
+                val host = config.baseUrl.toHttpUrl().host
+                certificatePinner(CertificatePinner.Builder().add(host, *config.certificatePins.toTypedArray()).build())
+            }
+        }
         .build()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val base64 = Base64.getEncoder()
@@ -85,6 +92,16 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
             put("signatureFormat", "der")
         }
         return decode(send("/v1/mobile/authorizations/$authorizationId/signature", body, TokenSource.Device))
+    }
+
+    /** Offline confirmation v2: the deferred device signature. Returns the
+     * HTTP status; every non-2xx answer is a [NEXUSSignError.ServerError]. */
+    suspend fun uploadDeferredSignature(authorizationId: String, signatureBase64: String): Int {
+        val body = buildJsonObject {
+            put("signature", signatureBase64)
+            put("signatureFormat", "der")
+        }
+        return send("/v1/mobile/authorizations/$authorizationId/deferred-signature", body, TokenSource.Device).code
     }
 
     @kotlinx.serialization.Serializable
@@ -148,6 +165,37 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
         }
         return decode(send("/v1/recovery/sessions/${session.sessionId}/complete", body, TokenSource.Fixed(session.accessToken)))
     }
+
+    // --- Verification calls (ADR 0017) ---
+
+    suspend fun openVerificationSession(authorizationId: String, channel: VerificationChannel): JsonObject {
+        val body = buildJsonObject { put("channel", channel.name) }
+        return parseObject(send("/v1/mobile/authorizations/$authorizationId/verification-sessions", body, TokenSource.Device))
+    }
+
+    suspend fun joinCall(sessionId: String): JsonObject =
+        parseObject(send("/v1/mobile/verification-sessions/$sessionId/call", null, TokenSource.Device))
+
+    suspend fun sendCallSignal(sessionId: String, body: JsonObject) {
+        send("/v1/mobile/verification-sessions/$sessionId/signals", body, TokenSource.Device)
+    }
+
+    suspend fun receiveCallSignals(sessionId: String, after: Long, waitMillis: Long): JsonObject =
+        parseObject(send("/v1/mobile/verification-sessions/$sessionId/signals?after=$after&waitMs=$waitMillis", null, TokenSource.Device))
+
+    suspend fun cancelCall(sessionId: String) {
+        send("/v1/mobile/verification-sessions/$sessionId/cancel", JsonObject(emptyMap()), TokenSource.Device) // 204
+    }
+
+    /** Longest long-poll wait that still fits in the request timeout. */
+    val callPollWaitMillis: Long get() = (config.requestTimeoutMillis - 2_000).coerceIn(0, 15_000)
+
+    private fun parseObject(reply: Reply): JsonObject =
+        try {
+            json.parseToJsonElement(reply.body) as JsonObject
+        } catch (e: Exception) {
+            throw NEXUSSignError.ServerError(reply.code, "Unexpected response format")
+        }
 
     private inline fun <reified T> decode(reply: Reply): T =
         try {

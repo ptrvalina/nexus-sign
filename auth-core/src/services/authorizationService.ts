@@ -66,7 +66,7 @@ export async function createAuthorization(input: CreateAuthorizationInput, clien
   if (credential.nexusId !== input.nexusId || credential.state !== 'ACTIVE') throw new ConflictError('Credential is not ACTIVE for the specified NEXUS ID');
   // With attestation required, a credential enrolled before the requirement
   // (attestation UNKNOWN) cannot approve transactions until the customer's
-  // device is enrolled again with verified evidence (NXS-025).
+  // device is enrolled again with verified evidence.
   if (env.REQUIRE_VALID_ATTESTATION && credential.attestationStatus !== 'VERIFIED') {
     throw new ConflictError('The device credential has no verified attestation; enrol the device again', 'CREDENTIAL_NOT_ATTESTED');
   }

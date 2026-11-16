@@ -15,7 +15,7 @@ NEXUS-SIGN runs inside the bank's controlled environment or private cloud. The m
 
 The repository does not contain a lockfile yet. It must be generated with access to the npm registry, reviewed and committed before an image can be built ([release checklist](release.md)). Until then the CI jobs that install dependencies fail by design.
 
-The base images (`node:22-alpine`) are referenced by tag, not by digest. Pinning them by digest needs registry access and is open (NXS-040).
+The base images (`node:22-alpine`) are referenced by tag, not by digest. Pinning them by digest needs registry access and is open.
 
 The runtime image runs as the unprivileged user `nexus`, contains `dist/`, `public/`, `src/db/schema.sql`, `migrations/` and the production dependencies, and checks `/healthz` with `HEALTHCHECK`. It sets `NODE_ENV=production` and `UV_THREADPOOL_SIZE=16`: the asynchronous PKCS#11 calls run on libuv worker threads shared with DNS, file and scrypt work, so keep `UV_THREADPOOL_SIZE` larger than `HSM_SESSION_POOL_SIZE` when changing either. `scripts/` (including `scripts/db/roles.sql` and `scripts/verify-evidence.mjs`) is not in the image; run those from a checkout of the release tag.
 
@@ -77,7 +77,7 @@ Redis holds short-lived security state: bank access tokens, BOOTSTRAP tokens, de
 - a device request nonce is recorded with `SET NX` and must stay recorded for its TTL (2 x `DEVICE_REQUEST_MAX_SKEW_SECONDS` + 60 s);
 - a BOOTSTRAP token is consumed with `GETDEL` and must not reappear, because it enrols a device and, with a `replacement`, replaces the customer's current device.
 
-Requirement for the Redis deployment (NXS-021). Auth Core does not enforce this; it is an operational requirement:
+Requirement for the Redis deployment. Auth Core does not enforce this; it is an operational requirement:
 
 - No failover to an asynchronous replica that may lack recent writes. A promoted replica that missed the latest `SET NX` or `GETDEL` lets a captured device request be replayed or a consumed BOOTSTRAP token be used again.
 - Acceptable setups: a single primary with persistence (AOF with `appendfsync always` or `everysec`, accepting the loss window of the chosen setting), or replication where the primary refuses writes it cannot replicate (`min-replicas-to-write` with `min-replicas-max-lag`, or `WAIT` semantics provided by the managed service) and failover promotes only an up-to-date replica.

@@ -1,6 +1,6 @@
-# Upgrade to 2.0.0-rc.2
+# Upgrade to 2.0
 
-From 1.4.0, follow this page from the start. From 2.0.0-rc.1, see [from 2.0.0-rc.1](#from-200-rc1) first.
+From 1.4.0, follow this page from the start. From 2.0.0-rc.1, see [from 2.0.0-rc.1](#from-200-rc1) first. From 2.0.0-rc.2 to 2.0.0, see [the last section](#from-200-rc2-to-200).
 
 2.0.0-rc.2 changes the database schema (migrations 013 to 018), the evidence format (schema 3), the recovery protocol (protocol 2), the bank client authentication (client certificate binding) and the admin console (TOTP, bank scope, four-eyes approval). Several changes are breaking for bank backends and for the bank's apps; they are listed at the end of this page. The upgrade needs a maintenance window without traffic, because 1.4.0 cannot write evidence after migration 013 and 2.0 refuses credentials until they are sealed (step 5).
 
@@ -128,14 +128,14 @@ Details and examples are in the [bank backend integration guide](../integration/
 
 | Change | What the bank backend does |
 |---|---|
-| Client certificate binding (NXS-012) | Tokens are issued and accepted only over a gateway connection with a certificate registered for the client. Register every certificate before it is used; a rollover needs both fingerprints registered. Mismatch: 401 and audit event `bank_certificate_mismatch`. |
+| Client certificate binding | Tokens are issued and accepted only over a gateway connection with a certificate registered for the client. Register every certificate before it is used; a rollover needs both fingerprints registered. Mismatch: 401 and audit event `bank_certificate_mismatch`. |
 | New client and webhook secrets | Only if the operator rotates them with `registerClient` in step 6. |
-| BOOTSTRAP for an identity with an enrolled device (NXS-002) | Refused with 409 `ACTIVE_CREDENTIAL_EXISTS`. Pass `replacement: {method, reference}` after re-identifying the customer, use recovery, or revoke the old credential first. |
-| Authorization creation (NXS-025) | 409 `CREDENTIAL_NOT_ATTESTED` for a credential whose attestation is not `VERIFIED`; the customer enrols again. |
-| Bank commit (NXS-030) | 409 `IDENTITY_NOT_ACTIVE`, `CREDENTIAL_NOT_ACTIVE` or `CONFIRMATION_TOO_OLD` (older than `BANK_COMMIT_MAX_AGE_SECONDS`, default 3600 s). Ask the customer again with a new authorization. |
-| Commit check (NXS-020) | Compare `canonicalPayloadHash` of the authorization with the value stored from the 201 creation response before committing. |
-| Evidence schema 3 (NXS-004, NXS-005) | Chains contain `CREDENTIAL_ENROLLED` and `RECOVERY_CONFIGURED` records next to `AUTHORIZATION` records. Store the chain head returned with every confirmation and identity read; verify with `scripts/verify-evidence.mjs --expect-head` and `--public-keys`. |
-| Recovery protocol 2 (NXS-003) | The recovery session response carries `recoveryPublicKeyPem` and `wrappedRecoveryKey`; forward the whole response to the app. 409 `RECOVERY_LOCKED` after 10 failed proofs in 24 hours, 409 `RECOVERY_PROTOCOL_RETIRED` for protocol 1 identities. |
+| BOOTSTRAP for an identity with an enrolled device | Refused with 409 `ACTIVE_CREDENTIAL_EXISTS`. Pass `replacement: {method, reference}` after re-identifying the customer, use recovery, or revoke the old credential first. |
+| Authorization creation | 409 `CREDENTIAL_NOT_ATTESTED` for a credential whose attestation is not `VERIFIED`; the customer enrols again. |
+| Bank commit | 409 `IDENTITY_NOT_ACTIVE`, `CREDENTIAL_NOT_ACTIVE` or `CONFIRMATION_TOO_OLD` (older than `BANK_COMMIT_MAX_AGE_SECONDS`, default 3600 s). Ask the customer again with a new authorization. |
+| Commit check | Compare `canonicalPayloadHash` of the authorization with the value stored from the 201 creation response before committing. |
+| Evidence schema 3 | Chains contain `CREDENTIAL_ENROLLED` and `RECOVERY_CONFIGURED` records next to `AUTHORIZATION` records. Store the chain head returned with every confirmation and identity read; verify with `scripts/verify-evidence.mjs --expect-head` and `--public-keys`. |
+| Recovery protocol 2 | The recovery session response carries `recoveryPublicKeyPem` and `wrappedRecoveryKey`; forward the whole response to the app. 409 `RECOVERY_LOCKED` after 10 failed proofs in 24 hours, 409 `RECOVERY_PROTOCOL_RETIRED` for protocol 1 identities. |
 | New webhooks | `credential.replaced`, `recovery.configured`, `identity.recovered`. A receiver that rejects unknown event types makes those deliveries fail. |
 | Integrity failures | A confirmation of a credential that fails the integrity check returns 200 `FAILED` with `reason: credential_integrity`. Treat it as a security incident, not as a customer error. |
 | Admin console | TOTP login, bank-scoped accounts, revocation and reactivation answered 202 and executed only after a second admin approves. |
@@ -146,16 +146,16 @@ Details and examples are in the [bank backend integration guide](../integration/
 
 | Change | Platforms | Effect |
 |---|---|---|
-| Android key attestation (NXS-006) | Android | SDK 2.0 sets the attestation challenge and sends `keyAttestation: {signingKeyChain, authenticationKeyChain}`. With `REQUIRE_VALID_ATTESTATION` (production), enrolment and recovery from SDK 1.4 are refused with 403. Keys must meet `ANDROID_KEY_SECURITY_POLICY`; devices with an unlocked bootloader are refused. |
-| Recovery protocol 2 (NXS-003) | Both | `POST /v1/mobile/recovery/setup` accepts only protocol 2, so recovery setup needs SDK 2.0. Protocol 1 phrases stop working in production; customers set up a new phrase. Shared vectors: `auth-core/test-vectors/recovery-v2.json`. |
-| Secure lock screen (NXS-027) | Android | Enrolment is refused without a secure lock screen (`NoAuthenticationMethodEnrolled`). |
-| Device passcode (NXS-027) | iOS | Keys are created with `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`; a device without passcode cannot enrol. |
-| Biometric change (NXS-026) | iOS | A changed biometric enrolment surfaces as `NEXUSSignError.credentialInvalidated`; the app enrols the device again. Android already reported `CredentialInvalidated`. |
-| Emulator HTTP (NXS-028) | Android | `http://10.0.2.2` is accepted only with `allowEmulatorHostHttp = true` in `NEXUSSignConfig` (default `false`). |
-| Recovery setup confirmation (NXS-024) | Both | `generateRecoveryPhrase` shows a biometric prompt, because the setup is signed with the signing key. Android: `generateRecoveryPhrase(activity: FragmentActivity)`; iOS: `generateRecoveryPhrase()` unchanged in signature. The prompt text is `recoverySetupPromptText` in `NEXUSSignConfig` (both platforms). |
-| Recovery session (NXS-003) | Both | `NexusRecoverySession` has the new fields `recoveryPublicKeyPem` and `wrappedRecoveryKey`. The app passes on the bank backend's session response unchanged; a session without them is refused with `serverError(statusCode: 0, ...)` / `ServerError(0, ...)`. A wrong phrase is now reported before any request. |
+| Android key attestation | Android | SDK 2.0 sets the attestation challenge and sends `keyAttestation: {signingKeyChain, authenticationKeyChain}`. With `REQUIRE_VALID_ATTESTATION` (production), enrolment and recovery from SDK 1.4 are refused with 403. Keys must meet `ANDROID_KEY_SECURITY_POLICY`; devices with an unlocked bootloader are refused. |
+| Recovery protocol 2 | Both | `POST /v1/mobile/recovery/setup` accepts only protocol 2, so recovery setup needs SDK 2.0. Protocol 1 phrases stop working in production; customers set up a new phrase. Shared vectors: `auth-core/test-vectors/recovery-v2.json`. |
+| Secure lock screen | Android | Enrolment is refused without a secure lock screen (`NoAuthenticationMethodEnrolled`). |
+| Device passcode | iOS | Keys are created with `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`; a device without passcode cannot enrol. |
+| Biometric change | iOS | A changed biometric enrolment surfaces as `NEXUSSignError.credentialInvalidated`; the app enrols the device again. Android already reported `CredentialInvalidated`. |
+| Emulator HTTP | Android | `http://10.0.2.2` is accepted only with `allowEmulatorHostHttp = true` in `NEXUSSignConfig` (default `false`). |
+| Recovery setup confirmation | Both | `generateRecoveryPhrase` shows a biometric prompt, because the setup is signed with the signing key. Android: `generateRecoveryPhrase(activity: FragmentActivity)`; iOS: `generateRecoveryPhrase()` unchanged in signature. The prompt text is `recoverySetupPromptText` in `NEXUSSignConfig` (both platforms). |
+| Recovery session | Both | `NexusRecoverySession` has the new fields `recoveryPublicKeyPem` and `wrappedRecoveryKey`. The app passes on the bank backend's session response unchanged; a session without them is refused with `serverError(statusCode: 0, ...)` / `ServerError(0, ...)`. A wrong phrase is now reported before any request. |
 | No SESSION tokens (2.0.0-rc.2) | Both | `NEXUSTokenPurpose` has only `BOOTSTRAP`; the token provider is called only by `bootstrap()`. A device enrolled by an SDK before 1.2 (no authentication key) gets `notRegistered` / `NotRegistered` and must be enrolled again through device replacement. |
-| Replacement notice (NXS-002) | Both | With `PUSH_DELIVERY_ENABLED`, push mode `NEXUS` and a push registration on the replaced device, that device receives a `SECURITY` message (`PUSH_REPLACEMENT_TITLE`, `PUSH_REPLACEMENT_BODY`, `data.event = DEVICE_REPLACED`) although its credential is already revoked. How the host app presents it is the app team's decision. |
+| Replacement notice | Both | With `PUSH_DELIVERY_ENABLED`, push mode `NEXUS` and a push registration on the replaced device, that device receives a `SECURITY` message (`PUSH_REPLACEMENT_TITLE`, `PUSH_REPLACEMENT_BODY`, `data.event = DEVICE_REPLACED`) although its credential is already revoked. How the host app presents it is the app team's decision. |
 
 ## From 2.0.0-rc.1
 
@@ -168,3 +168,22 @@ Details and examples are in the [bank backend integration guide](../integration/
 Bank backends stop calling the removed endpoints and `purpose: SESSION`; apps move to SDK 2.0.0-rc.2 ([breaking changes](#breaking-changes-for-bank-backends)).
 
 The SDK changes have not been compiled or tested on Apple or Android toolchains in the environment that produced this release candidate; they must be built and tested in CI and on physical devices ([release](release.md)).
+
+## From 2.0.0-rc.2 to 2.0.0
+
+Changes since 2.0.0-rc.2 that an upgrade must handle. Details: [CHANGELOG](../../CHANGELOG.md).
+
+1. **Before the window:**
+    - generate `METRICS_BEARER_TOKEN` (`openssl rand -base64 32`) and give it to the monitoring system;
+    - with offline confirmation enabled, agree `OFFLINE_CONFIRMATION_MAX_AMOUNT` (per currency, minor units) and `OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY` with the bank;
+    - bank backends: beneficiary values over 140 characters, empty or padded with spaces are refused with 400; the audio/video completion endpoint takes `{ resultToken }` only; receivers must accept the new webhook types `authorization.verified`, `authorization.rejected`, `authorization.expired` and `evidence.appended`;
+    - app teams: SDK 2.0.0 refuses signed bytes with beneficiary values the server no longer issues (`invalid_value`); optional `certificatePins`; optional call modules; offline confirmation v2 (`requiresDeviceSignature`, call `submitPendingOfflineSignatures()` at start-up and when the connection returns). SDKs up to 2.0.0-rc.2 refuse the `NXS2.` QR code: with offline confirmation enabled, ship the new SDK in the bank app before the switch;
+    - bank backends with offline confirmation: handle `status: PROVISIONAL` and the states `OFFLINE_PROVISIONAL` and `OFFLINE_UNSIGNED`, the webhooks `authorization.offline_provisional` and `authorization.offline_unsigned`, and `confirmationMethod: OFFLINE_SIGNED`; update evidence verifiers (`verify-evidence.mjs` of this release) and, from the switch date, run them with `--reject-offline-code`. Agree with the bank that payments are executed only on `VERIFIED`.
+2. **Stop traffic and back up** the database (steps 1 and 2 above).
+3. **Migrations** 019, 020, 021 and 022 as the table owner, then `scripts/db/roles.sql` again (it grants `nexus_app` DELETE on `device_request_nonces`).
+4. **Configuration:** create the KEK on the HSM (key ceremony), wrap the existing master keys with `masterKeys.js wrap <purpose>` (the stored secrets do not change), set `MASTER_KEY_SOURCE=hsm`, `PKCS11_KEK_LABEL` and the `*_WRAPPED` values, and remove the plaintext keys ([key management](../engineering/KEY_MANAGEMENT.md)); add `METRICS_BEARER_TOKEN`, `OFFLINE_CONFIRMATION_MAX_AMOUNT` and `OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY` (if offline confirmation is enabled; `OFFLINE_CONFIRMATION_MODE` stays at its default `deferred_signature`) and, for verification calls, `WEBRTC_*` ([audio and video calls](audio-video-calls.md)). Leave `DEVICE_NONCE_STORE` unset (default `postgres`).
+5. **Verification channels:** register provider keys or enable operator verification per bank (`verificationSetup.js`); channels without a verifier are no longer offered.
+6. **Start 2.0.0** and run the checks of step 12 above.
+7. **Optional, any time after the upgrade:** rotate the master keys ([key rotation](runbooks/key-rotation.md)); `rotateSecretKeys.js` also moves secrets written before 2.0.0 to the `k1` format.
+
+Rollback after 2.0.0 has run with traffic: 2.0.0-rc.2 does not know the states `OFFLINE_PROVISIONAL` and `OFFLINE_UNSIGNED` and cannot read secrets written in the `k1` format (new webhook secrets, offline keys of devices enrolled after the upgrade, TOTP secrets created or re-encrypted). Restore the backup instead (see [rollback](#rollback)).

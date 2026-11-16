@@ -6,7 +6,7 @@ import { AuthorizationNotFoundError } from '../services/authorizationRecord';
 import { InvalidRecoveryProofError, RecoveryNotConfiguredError, RecoverySessionNotFoundError } from '../services/recoveryService';
 import { CredentialNotFoundError } from '../services/credentialService';
 import { CredentialIntegrityError } from '../services/credentialIntegrity';
-import { ConflictError, ForbiddenError, GoneError, NotFoundError, UnauthorizedError, ValidationError } from '../services/errors';
+import { ConflictError, ForbiddenError, GoneError, NotFoundError, UnauthorizedError, UnprocessableError, ValidationError } from '../services/errors';
 
 type ErrorClass = abstract new (...args: never[]) => Error;
 
@@ -25,6 +25,7 @@ const STATUS_BY_ERROR: ReadonlyArray<readonly [ErrorClass, number]> = [
   [DuplicateBankCustomerError, 409],
   [RecoveryNotConfiguredError, 409],
   [GoneError, 410],
+  [UnprocessableError, 422],
 ];
 
 /**
@@ -44,7 +45,7 @@ export function errorHandler(logger: Logger) {
 
     const mapped = STATUS_BY_ERROR.find(([type]) => error instanceof type);
     if (mapped && error instanceof Error) {
-      const code = error instanceof ConflictError ? error.code : undefined;
+      const code = error instanceof ConflictError || error instanceof UnprocessableError ? error.code : undefined;
       res.status(mapped[1]).json({ error: error.message, ...(code ? { code } : {}) });
       return;
     }

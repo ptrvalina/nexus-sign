@@ -1,8 +1,10 @@
 import type { PoolClient } from 'pg';
+import type { DeferredAudits } from './credentialIntegrity';
 import { pool, withTransaction } from '../db/pool';
 import { recordAuditEvent } from './auditService';
 import { enqueueWebhook } from './webhookService';
-import { AuthorizationNotFoundError } from './authorizationRecord';
+import { AuthorizationNotFoundError, type AuthorizationRow } from './authorizationRecord';
+import { authorizationEvidenceProblem } from './authorizationEvidenceCheck';
 import { ConflictError } from './errors';
 import { env } from '../config/env';
 
@@ -39,6 +41,19 @@ interface Row {
 
 /** Records the bank's commit request; idempotent for the same bankTransactionReference. */
 export async function requestCommit(authorizationId: string, clientId: string, bankTransactionReference: string): Promise<BankTransactionView> {
+  // Security events of a refusal are written after the transaction has ended
+  // and released the row lock and its connection: written while holding the
+  // lock, through another pool connection, parallel requests waiting on the
+  // lock could hold the whole pool.
+  const deferred: DeferredAudits = [];
+  try {
+    return await commitInTransaction(authorizationId, clientId, bankTransactionReference, deferred);
+  } finally {
+    for (const audit of deferred) await audit();
+  }
+}
+
+function commitInTransaction(authorizationId: string, clientId: string, bankTransactionReference: string, deferred: DeferredAudits): Promise<BankTransactionView> {
   return withTransaction(async (tx) => {
     const auth = await lock(tx, authorizationId, clientId);
     if (auth.state !== 'VERIFIED') throw new ConflictError(`Authorization is ${auth.state}; only a VERIFIED authorization can be committed`);
@@ -51,7 +66,7 @@ export async function requestCommit(authorizationId: string, clientId: string, b
     if (auth.bank_transaction_state !== 'PENDING') throw new ConflictError(`Bank transaction is ${auth.bank_transaction_state}`);
     // An approval stops being usable when the customer or device it came
     // from is no longer in good standing, and after BANK_COMMIT_MAX_AGE_SECONDS
-    // (NXS-030). The bank asks the customer again in both cases.
+    //. The bank asks the customer again in both cases.
     const standing = await tx.query<{ identity: string; credential: string | null }>(
       `SELECT i.status AS identity, c.state AS credential
          FROM nexus_identities i LEFT JOIN credentials c ON c.credential_id = $2
@@ -61,6 +76,15 @@ export async function requestCommit(authorizationId: string, clientId: string, b
     if (credential !== 'ACTIVE') throw new ConflictError('The device credential that confirmed this authorization is no longer active', 'CREDENTIAL_NOT_ACTIVE');
     if (!auth.verified_at || Date.now() - auth.verified_at.getTime() > env.BANK_COMMIT_MAX_AGE_SECONDS * 1000) {
       throw new ConflictError(`The confirmation is older than ${env.BANK_COMMIT_MAX_AGE_SECONDS} s; request a new authorization`, 'CONFIRMATION_TOO_OLD');
+    }
+    // : the state column alone does not authorize a commit;
+    // the sealed evidence must show a device signature over these terms.
+    const problem = await authorizationEvidenceProblem(tx, auth as unknown as AuthorizationRow, deferred);
+    if (problem) {
+      // Outside the transaction, so the record survives the refusal.
+      deferred.push(() => recordAuditEvent('integrity_violation', { nexusId: auth.nexus_id, clientId },
+        { authorizationId, reason: `commit refused: ${problem}` }).catch(() => undefined));
+      throw new ConflictError(`The authorization's evidence does not support a commit: ${problem}`, 'EVIDENCE_INVALID');
     }
 
     const updated = await tx.query<Row>(

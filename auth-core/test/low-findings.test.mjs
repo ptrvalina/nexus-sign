@@ -1,6 +1,6 @@
 // Regression tests for LOW findings fixed in 2.0.0-rc.1 that need no
-// database: NXS-033 (canonicalizer, see property-fuzz.test.mjs), NXS-034,
-// NXS-035, NXS-037.
+// database: (canonicalizer, see property-fuzz.test.mjs), 
+// .
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createCipheriv, randomBytes } from 'node:crypto';
@@ -9,7 +9,7 @@ import { loadTs } from './support/load-ts.mjs';
 const key = randomBytes(32).toString('base64');
 const envStub = (overrides = {}) => ({ '../config/env': { env: { WEBHOOK_SECRET_ENCRYPTION_KEY: key, DEVICE_SECRET_ENCRYPTION_KEY: key, NODE_ENV: 'test', ...overrides } } });
 
-test('NXS-034: a device nonce outlives the whole timestamp window', () => {
+test('A device nonce outlives the whole timestamp window', () => {
   const { deviceNonceTtlSeconds } = loadTs('middleware/mobileAuth.ts', {
     stubs: { '../db/redis': { redis: {} }, '../db/pool': { pool: {} }, '../config/env': { env: {} } },
   });
@@ -19,10 +19,11 @@ test('NXS-034: a device nonce outlives the whole timestamp window', () => {
   }
 });
 
-test('NXS-035: a webhook secret is bound to its bank client; 1.4 ciphertexts still decrypt', () => {
+test('A webhook secret is bound to its bank client; 1.4 ciphertexts still decrypt', () => {
   const { encryptSecret, decryptSecret } = loadTs('crypto/secretBox.ts', { stubs: envStub() });
   const stored = encryptSecret('whsec-bank-a', 'webhook', 'bank-a');
-  assert.match(stored, /^v2\$/);
+  // 2.0.0: the ciphertext names its master key; still bound to the client.
+  assert.match(stored, /^k1\$[0-9a-f]{16}\$/);
   assert.equal(decryptSecret(stored, 'webhook', 'bank-a'), 'whsec-bank-a');
   assert.throws(() => decryptSecret(stored, 'webhook', 'bank-b'), 'copied to another bank\'s row');
   assert.throws(() => encryptSecret('x', 'webhook'), /bound to their bank client/);
@@ -35,7 +36,7 @@ test('NXS-035: a webhook secret is bound to its bank client; 1.4 ciphertexts sti
   assert.equal(decryptSecret(legacy, 'webhook', 'bank-a'), 'legacy-secret');
 });
 
-test('NXS-037: production refuses an APNs DEVELOPMENT registration', async () => {
+test('Production refuses an APNs DEVELOPMENT registration', async () => {
   const load = (NODE_ENV) => loadTs('services/pushRegistrationService.ts', {
     stubs: {
       ...envStub({ NODE_ENV }),
