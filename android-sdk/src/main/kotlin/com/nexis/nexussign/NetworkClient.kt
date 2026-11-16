@@ -199,6 +199,12 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
     suspend fun decideDeviceReplacement(replacementId: String, approve: Boolean): NexusDeviceReplacement =
         decode(send("/v1/mobile/device-replacements/$replacementId/${if (approve) "approve" else "cancel"}", JsonObject(emptyMap()), TokenSource.Device))
 
+    // Customer section, payment mandates, conversations (device-signed)
+
+    /** A device-signed call returning the raw JSON body, for the account features. */
+    internal suspend fun deviceCall(method: String, path: String, body: JsonObject? = null): String =
+        send(path, body ?: if (method == "GET") null else JsonObject(emptyMap()), TokenSource.Device, method).body
+
     /** Longest long-poll wait that still fits in the request timeout. */
     val callPollWaitMillis: Long get() = (config.requestTimeoutMillis - 2_000).coerceIn(0, 15_000)
 

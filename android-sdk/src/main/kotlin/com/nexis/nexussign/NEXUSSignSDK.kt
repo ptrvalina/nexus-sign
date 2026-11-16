@@ -508,6 +508,160 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     suspend fun cancelDeviceReplacement(replacementId: String): NexusDeviceReplacement =
         networkClient.decideDeviceReplacement(requireReplacementId(replacementId), approve = false)
 
+    // --- Customer section, payment mandates, conversations with the bank ---
+
+    private val accountJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private inline fun <reified T> parse(body: String): T = try {
+        accountJson.decodeFromString<T>(body)
+    } catch (e: Exception) {
+        throw NEXUSSignError.ServerError(200, "Unexpected response format")
+    }
+    private fun requireId(id: String, what: String): String {
+        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.ServerError(400, "Malformed $what")
+        return id.lowercase()
+    }
+
+    /** The customer's devices ("My devices"), this one marked thisDevice. */
+    suspend fun devices(): List<NexusDevice> = parse<DeviceList>(networkClient.deviceCall("GET", "/v1/mobile/devices")).devices
+
+    /** Removes one of the customer's devices (another one, or this one); returns how many active devices remain. */
+    suspend fun removeDevice(credentialId: String): Int =
+        parse<DeviceRevoked>(networkClient.deviceCall("POST", "/v1/mobile/devices/${requireId(credentialId, "credential ID")}/revoke")).remainingActiveDevices
+
+    /** Payments confirmed, declined or open, newest first. */
+    suspend fun history(filter: NexusHistoryFilter = NexusHistoryFilter.ALL, limit: Int = 50): List<NexusHistoryEntry> =
+        parse<HistoryList>(networkClient.deviceCall("GET", "/v1/mobile/history?filter=${filter.wire}&limit=${limit.coerceIn(1, 200)}")).authorizations
+
+    /** The sealed evidence of one of the customer's payments, as JSON (verify it with verify-evidence). */
+    suspend fun evidence(authorizationId: String): String =
+        networkClient.deviceCall("GET", "/v1/mobile/authorizations/${requireId(authorizationId, "authorization ID")}/evidence")
+
+    suspend fun securityEvents(limit: Int = 50): List<NexusSecurityEvent> =
+        parse<SecurityEventList>(networkClient.deviceCall("GET", "/v1/mobile/security-events?limit=${limit.coerceIn(1, 200)}")).events
+
+    suspend fun notifications(limit: Int = 50): List<NexusNotification> =
+        parse<NotificationList>(networkClient.deviceCall("GET", "/v1/mobile/notifications?limit=${limit.coerceIn(1, 200)}")).notifications
+
+    suspend fun settings(): NexusCustomerSettings = parse(networkClient.deviceCall("GET", "/v1/mobile/settings"))
+
+    /** Limits (minor units, null for none), the video-check threshold and channels; relaxing waits for the bank's hold. */
+    suspend fun updateSettings(currency: String?, perPaymentLimitMinor: String?, dailyLimitMinor: String?, videoCheckAboveMinor: String?, channels: NexusChannels): NexusCustomerSettings =
+        parse(networkClient.deviceCall("PUT", "/v1/mobile/settings", buildJsonObject {
+            put("currency", currency); put("perPaymentLimitMinor", perPaymentLimitMinor)
+            put("dailyLimitMinor", dailyLimitMinor); put("videoCheckAboveMinor", videoCheckAboveMinor)
+            put("channels", buildJsonObject { put("push", channels.push); put("audio", channels.audio); put("video", channels.video) })
+        }))
+
+    /** The customer suspends their NEXUS ID; only the bank reactivates it after identifying the customer. */
+    suspend fun suspendIdentity(reason: NexusSuspendReason) {
+        networkClient.deviceCall("POST", "/v1/mobile/identity/suspend", buildJsonObject { put("reason", reason.name) })
+    }
+
+    suspend fun mandates(): List<NexusMandate> = parse<MandateList>(networkClient.deviceCall("GET", "/v1/mobile/mandates")).mandates
+
+    suspend fun mandate(id: String): NexusMandate = parse(networkClient.deviceCall("GET", "/v1/mobile/mandates/${requireId(id, "mandate ID")}"))
+
+    /**
+     * Parses and checks the signed terms: domain NEXUS-SIGN/MANDATE (never
+     * payment bytes), this mandate and this device, the display rules on every
+     * shown value, SHA-256 equal to termsHash.
+     */
+    fun mandateTerms(mandate: NexusMandate): NexusMandateTerms {
+        fun invalid(reason: String, detail: String) = NEXUSSignError.AuthorizationPayloadInvalid(reason, detail)
+        val bytes = try { Base64.getDecoder().decode(mandate.termsBase64) } catch (e: IllegalArgumentException) { throw invalid("invalid_json", "termsBase64") }
+        val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        if (hash != mandate.termsHash) throw invalid("hash_mismatch", "termsHash")
+        val o = try { accountJson.parseToJsonElement(String(bytes, Charsets.UTF_8)) as JsonObject } catch (e: Exception) { throw invalid("invalid_json", "terms") }
+        fun field(key: String): String? = (o[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        fun text(key: String): String {
+            val v = field(key) ?: throw invalid("missing", key)
+            if (key !in setOf("valid_from", "valid_until", "offer_expires_at") && SignedPayload.displayTextViolation(v) != null) throw invalid("display", key)
+            return v
+        }
+        if (field("domain") != "NEXUS-SIGN/MANDATE" || field("protocol_version") != "1") throw invalid("wrong_domain", "not mandate terms")
+        if (field("mandate_id") != mandate.mandateId) throw invalid("mismatch", "mandate_id")
+        val credentialId = state.registeredCredentialId() ?: throw NEXUSSignError.NotRegistered
+        if (field("credential_id") != credentialId) throw invalid("wrong_device", "the mandate is for another device")
+        val payeeObject = o["payee"] as? JsonObject ?: throw invalid("missing", "payee")
+        val payee = payeeObject.mapValues { (k, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { SignedPayload.displayTextViolation(it) == null } ?: throw invalid("display", "payee.$k") }
+        if (payee.isEmpty()) throw invalid("missing", "payee")
+        payee["iban"]?.let { if (!SignedPayload.isValidIban(it)) throw invalid("iban", "payee.iban") }
+        return NexusMandateTerms(
+            mandateId = mandate.mandateId, nexusId = text("nexus_id"), credentialId = credentialId, mandateReference = text("mandate_reference"),
+            payee = payee, currency = text("currency"), perPaymentLimitMinor = text("per_payment_limit_minor"), totalLimitMinor = field("total_limit_minor"),
+            frequency = text("frequency"), validFrom = text("valid_from"), validUntil = text("valid_until"), termsVersion = text("terms_version"),
+            offerExpiresAt = text("offer_expires_at"),
+        )
+    }
+
+    /** Signs the mandate after biometric authentication, with the prompt built from the signed terms. */
+    suspend fun signMandate(mandate: NexusMandate, activity: FragmentActivity): NexusMandate {
+        val terms = mandateTerms(mandate)
+        val bytes = Base64.getDecoder().decode(mandate.termsBase64)
+        requireBiometrics(activity)
+        val signature = try {
+            keyManager.signatureForAuthorization()
+        } catch (e: NEXUSSignError.CredentialInvalidated) {
+            forgetRegistration()
+            throw e
+        }
+        val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), terms.confirmationText()).cryptoObject?.signature ?: signature
+        val der = try {
+            authorized.update(bytes)
+            authorized.sign()
+        } catch (e: Exception) {
+            throw NEXUSSignError.KeyOperationFailed(e)
+        }
+        return parse(networkClient.deviceCall("POST", "/v1/mobile/mandates/${mandate.mandateId}/signature", buildJsonObject {
+            put("signature", Base64.getEncoder().encodeToString(der)); put("signatureFormat", "der")
+        }))
+    }
+
+    enum class MandateAction(val path: String) { DECLINE("decline"), SUSPEND("suspend"), RESUME("resume"), REVOKE("revoke") }
+
+    suspend fun mandate(id: String, action: MandateAction): NexusMandate =
+        parse(networkClient.deviceCall("POST", "/v1/mobile/mandates/${requireId(id, "mandate ID")}/${action.path}"))
+
+    suspend fun conversations(): List<NexusConversation> = parse<ConversationList>(networkClient.deviceCall("GET", "/v1/mobile/conversations")).conversations
+
+    private fun attachmentJson(a: NexusConversationAttachment) = buildJsonObject {
+        put("reference", a.reference); put("sha256", a.sha256); put("mediaType", a.mediaType); put("fileName", a.fileName); put("sizeBytes", a.sizeBytes)
+    }
+
+    /** Opens a conversation, optionally about one of the customer's payments; clientMessageId makes a retry safe. */
+    suspend fun openConversation(topic: String, message: String, authorizationId: String? = null, attachment: NexusConversationAttachment? = null,
+                                 clientMessageId: String = java.util.UUID.randomUUID().toString()): Pair<NexusConversation, NexusConversationMessage> {
+        val opened = parse<ConversationOpened>(networkClient.deviceCall("POST", "/v1/mobile/conversations", buildJsonObject {
+            put("topic", topic); put("body", message); put("clientMessageId", clientMessageId)
+            authorizationId?.let { put("authorizationId", requireId(it, "authorization ID")) }
+            attachment?.let { put("attachment", attachmentJson(it)) }
+        }))
+        return opened.conversation to opened.message
+    }
+
+    /** Messages after [after] (0 for the whole history); the bank's messages are marked delivered. */
+    suspend fun conversationMessages(conversationId: String, after: Int = 0): Pair<NexusConversation, List<NexusConversationMessage>> {
+        val thread = parse<ConversationThread>(networkClient.deviceCall("GET", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/messages?after=${after.coerceAtLeast(0)}"))
+        return thread.conversation to thread.messages
+    }
+
+    suspend fun sendMessage(conversationId: String, text: String, attachment: NexusConversationAttachment? = null,
+                            clientMessageId: String = java.util.UUID.randomUUID().toString()): NexusConversationMessage =
+        parse<MessageSent>(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/messages", buildJsonObject {
+            put("body", text); put("clientMessageId", clientMessageId); attachment?.let { put("attachment", attachmentJson(it)) }
+        })).message
+
+    suspend fun markRead(conversationId: String, upToSequence: Int) {
+        networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/read", buildJsonObject { put("upToSequence", upToSequence) })
+    }
+
+    /** "Talk to a person": the conversation waits for an operator of the bank. */
+    suspend fun requestAgent(conversationId: String): NexusConversation =
+        parse(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/handover"))
+
+    suspend fun closeConversation(conversationId: String): NexusConversation =
+        parse(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/close"))
+
     private fun requireReplacementId(id: String): String {
         if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.ServerError(400, "Malformed replacement ID")
         return id

@@ -600,3 +600,198 @@ private actor ReplacementGate {
         }
     }
 }
+
+// MARK: - Customer section, payment mandates, conversations with the bank
+
+extension NEXUSSignSDK {
+
+    private static func checkedID(_ value: String, _ what: String) throws -> String {
+        guard UUID(uuidString: value) != nil else { throw NEXUSSignError.serverError(statusCode: 400, message: "Malformed \(what)") }
+        return value.lowercased()
+    }
+
+    /// The customer's devices ("My devices"), this one marked `thisDevice`.
+    public func devices() async throws -> [NexusDevice] {
+        let list: DeviceList = try await networkClient.deviceCall("GET", "/v1/mobile/devices")
+        return list.devices
+    }
+
+    /// Removes one of the customer's devices (another one, or this one).
+    /// Returns how many active devices remain.
+    public func removeDevice(credentialID: String) async throws -> Int {
+        let id = try Self.checkedID(credentialID, "credential ID")
+        let result: DeviceRevoked = try await networkClient.deviceCall("POST", "/v1/mobile/devices/\(id)/revoke", body: [:])
+        return result.remainingActiveDevices
+    }
+
+    /// Payments confirmed, declined or open, newest first.
+    public func history(filter: NexusHistoryFilter = .all, before: String? = nil, limit: Int = 50) async throws -> [NexusHistoryEntry] {
+        var query = "filter=\(filter.rawValue)&limit=\(max(1, min(limit, 200)))"
+        if let before, let encoded = before.addingPercentEncoding(withAllowedCharacters: .alphanumerics) { query += "&before=\(encoded)" }
+        let list: HistoryList = try await networkClient.deviceCall("GET", "/v1/mobile/history?\(query)")
+        return list.authorizations
+    }
+
+    /// The sealed evidence of one of the customer's payments, as JSON the bank's
+    /// app can show or hand to the customer; verify it with verify-evidence.
+    public func evidence(authorizationID: String) async throws -> Data {
+        let id = try Self.checkedID(authorizationID, "authorization ID")
+        let object: [String: AnyDecodable] = try await networkClient.deviceCall("GET", "/v1/mobile/authorizations/\(id)/evidence")
+        return try JSONSerialization.data(withJSONObject: object.mapValues { $0.value }, options: [.sortedKeys])
+    }
+
+    public func securityEvents(limit: Int = 50) async throws -> [NexusSecurityEvent] {
+        let list: SecurityEventList = try await networkClient.deviceCall("GET", "/v1/mobile/security-events?limit=\(max(1, min(limit, 200)))")
+        return list.events
+    }
+
+    public func notifications(limit: Int = 50) async throws -> [NexusNotification] {
+        let list: NotificationList = try await networkClient.deviceCall("GET", "/v1/mobile/notifications?limit=\(max(1, min(limit, 200)))")
+        return list.notifications
+    }
+
+    public func settings() async throws -> NexusCustomerSettings {
+        try await networkClient.deviceCall("GET", "/v1/mobile/settings")
+    }
+
+    /// Sets limits (minor units, nil for none), the video-check threshold and
+    /// channels. A relaxing change takes effect after the bank's hold: read
+    /// `effectiveAt` of the result.
+    public func updateSettings(currency: String?, perPaymentLimitMinor: String?, dailyLimitMinor: String?, videoCheckAboveMinor: String?, channels: NexusChannels) async throws -> NexusCustomerSettings {
+        let body: [String: Any] = [
+            "currency": currency as Any? ?? NSNull(), "perPaymentLimitMinor": perPaymentLimitMinor as Any? ?? NSNull(),
+            "dailyLimitMinor": dailyLimitMinor as Any? ?? NSNull(), "videoCheckAboveMinor": videoCheckAboveMinor as Any? ?? NSNull(),
+            "channels": ["push": channels.push, "audio": channels.audio, "video": channels.video],
+        ]
+        return try await networkClient.deviceCall("PUT", "/v1/mobile/settings", body: body)
+    }
+
+    /// The customer suspends their NEXUS ID; open payments are cancelled and
+    /// only the bank can reactivate it after identifying the customer.
+    public func suspendIdentity(reason: NexusSuspendReason) async throws {
+        let _: [String: String] = try await networkClient.deviceCall("POST", "/v1/mobile/identity/suspend", body: ["reason": reason.rawValue])
+    }
+
+    // MARK: Payment mandates
+
+    public func mandates() async throws -> [NexusMandate] {
+        let list: MandateList = try await networkClient.deviceCall("GET", "/v1/mobile/mandates")
+        return list.mandates
+    }
+
+    public func mandate(id: String) async throws -> NexusMandate {
+        try await networkClient.deviceCall("GET", "/v1/mobile/mandates/\(try Self.checkedID(id, "mandate ID"))")
+    }
+
+    /// Parses and checks the signed terms: domain NEXUS-SIGN/MANDATE (never
+    /// payment bytes), this mandate, this identity and this device, display
+    /// rules on every shown value, SHA-256 equal to termsHash.
+    public func mandateTerms(_ mandate: NexusMandate) throws -> NexusMandateTerms {
+        func invalid(_ reason: String, _ detail: String) -> NEXUSSignError { .authorizationPayloadInvalid(reason: reason, detail: detail) }
+        guard let bytes = Data(base64Encoded: mandate.termsBase64) else { throw invalid("invalid_json", "termsBase64") }
+        guard SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == mandate.termsHash else { throw invalid("hash_mismatch", "termsHash") }
+        guard let o = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { throw invalid("invalid_json", "terms") }
+        guard o["domain"] as? String == "NEXUS-SIGN/MANDATE", o["protocol_version"] as? String == "1" else { throw invalid("wrong_domain", "not mandate terms") }
+        guard o["mandate_id"] as? String == mandate.mandateId else { throw invalid("mismatch", "mandate_id") }
+        guard let credentialID = keyManager.effectiveCredentialID, o["credential_id"] as? String == credentialID else { throw invalid("wrong_device", "the mandate is for another device") }
+        func text(_ key: String) throws -> String {
+            guard let v = o[key] as? String, SignedPayload.displayTextViolation(v) == nil || ["valid_from", "valid_until", "offer_expires_at"].contains(key) else { throw invalid("display", key) }
+            return v
+        }
+        guard let payee = o["payee"] as? [String: String], !payee.isEmpty, payee.values.allSatisfy({ SignedPayload.displayTextViolation($0) == nil }) else { throw invalid("display", "payee") }
+        if let iban = payee["iban"], !SignedPayload.isValidIBAN(iban) { throw invalid("iban", "payee.iban") }
+        let total: String?
+        if o["total_limit_minor"] is NSNull { total = nil } else { total = try text("total_limit_minor") }
+        return NexusMandateTerms(
+            mandateId: mandate.mandateId, nexusId: try text("nexus_id"), credentialId: credentialID, mandateReference: try text("mandate_reference"),
+            payee: payee, currency: try text("currency"), perPaymentLimitMinor: try text("per_payment_limit_minor"), totalLimitMinor: total,
+            frequency: try text("frequency"), validFrom: try text("valid_from"), validUntil: try text("valid_until"),
+            termsVersion: try text("terms_version"), offerExpiresAt: try text("offer_expires_at"))
+    }
+
+    /// Signs the mandate after biometric authentication, with the prompt built
+    /// from the signed terms. Show `mandateTerms(_:)` to the customer first.
+    public func signMandate(_ mandate: NexusMandate) async throws -> NexusMandate {
+        let terms = try mandateTerms(mandate)
+        guard let bytes = Data(base64Encoded: mandate.termsBase64) else { throw NEXUSSignError.authorizationPayloadInvalid(reason: "invalid_json", detail: "termsBase64") }
+        let context = LAContext()
+        var policyError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else { throw Self.biometryError(policyError) }
+        context.localizedReason = terms.confirmationText
+        let signature = try withBiometryCheck {
+            guard let privateKey = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+            return try keyManager.sign(payload: bytes, using: privateKey)
+        }
+        return try await networkClient.deviceCall("POST", "/v1/mobile/mandates/\(mandate.mandateId)/signature",
+                                                  body: ["signature": signature.base64EncodedString(), "signatureFormat": "der"])
+    }
+
+    public enum MandateAction: String { case decline, suspend, resume, revoke }
+
+    public func mandate(id: String, action: MandateAction) async throws -> NexusMandate {
+        try await networkClient.deviceCall("POST", "/v1/mobile/mandates/\(try Self.checkedID(id, "mandate ID"))/\(action.rawValue)", body: [:])
+    }
+
+    // MARK: Conversations with the bank
+
+    public func conversations() async throws -> [NexusConversation] {
+        let list: ConversationList = try await networkClient.deviceCall("GET", "/v1/mobile/conversations")
+        return list.conversations
+    }
+
+    /// Opens a conversation, optionally about one of the customer's payments.
+    /// `clientMessageID` makes a retry safe.
+    public func openConversation(topic: String, message: String, authorizationID: String? = nil, attachment: NexusConversationAttachment? = nil,
+                                 clientMessageID: String = UUID().uuidString) async throws -> (NexusConversation, NexusConversationMessage) {
+        var body: [String: Any] = ["topic": topic, "body": message, "clientMessageId": clientMessageID]
+        if let authorizationID { body["authorizationId"] = try Self.checkedID(authorizationID, "authorization ID") }
+        if let attachment { body["attachment"] = Self.attachmentJSON(attachment) }
+        let opened: ConversationOpened = try await networkClient.deviceCall("POST", "/v1/mobile/conversations", body: body)
+        return (opened.conversation, opened.message)
+    }
+
+    /// Messages after `after` (0 for the whole history); the bank's messages are marked delivered.
+    public func conversationMessages(conversationID: String, after: Int = 0) async throws -> (NexusConversation, [NexusConversationMessage]) {
+        let thread: ConversationThread = try await networkClient.deviceCall("GET", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/messages?after=\(max(0, after))")
+        return (thread.conversation, thread.messages)
+    }
+
+    public func sendMessage(conversationID: String, text: String, attachment: NexusConversationAttachment? = nil, clientMessageID: String = UUID().uuidString) async throws -> NexusConversationMessage {
+        var body: [String: Any] = ["body": text, "clientMessageId": clientMessageID]
+        if let attachment { body["attachment"] = Self.attachmentJSON(attachment) }
+        let sent: MessageSent = try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/messages", body: body)
+        return sent.message
+    }
+
+    public func markRead(conversationID: String, upToSequence: Int) async throws {
+        let _: [String: Int] = try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/read", body: ["upToSequence": upToSequence])
+    }
+
+    /// "Talk to a person": the conversation waits for an operator of the bank.
+    public func requestAgent(conversationID: String) async throws -> NexusConversation {
+        try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/handover", body: [:])
+    }
+
+    public func closeConversation(conversationID: String) async throws -> NexusConversation {
+        try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/close", body: [:])
+    }
+
+    private static func attachmentJSON(_ a: NexusConversationAttachment) -> [String: Any] {
+        ["reference": a.reference, "sha256": a.sha256, "mediaType": a.mediaType, "fileName": a.fileName, "sizeBytes": a.sizeBytes]
+    }
+}
+
+/// Decodes any JSON value (for passing evidence through unchanged).
+struct AnyDecodable: Decodable {
+    let value: Any
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { value = NSNull() }
+        else if let b = try? c.decode(Bool.self) { value = b }
+        else if let i = try? c.decode(Int64.self) { value = i }
+        else if let d = try? c.decode(Double.self) { value = d }
+        else if let s = try? c.decode(String.self) { value = s }
+        else if let a = try? c.decode([AnyDecodable].self) { value = a.map { $0.value } }
+        else { value = try c.decode([String: AnyDecodable].self).mapValues { $0.value } }
+    }
+}

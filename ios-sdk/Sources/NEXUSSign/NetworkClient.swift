@@ -167,6 +167,13 @@ final class NetworkClient {
     /// Longest long-poll wait that fits in the request timeout.
     var callPollWaitMilliseconds: Int { max(0, min(15_000, Int(config.requestTimeout * 1000) - 2_000)) }
 
+    // MARK: Customer section, mandates, conversations (device-signed)
+
+    /// A device-signed call with a typed answer, for the account features.
+    func deviceCall<T: Decodable>(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> T {
+        try await send(method, path, body: body, token: .device)
+    }
+
     private func sendJSON(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
         let data = try await perform(method, path, body: body, token: .device)
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
