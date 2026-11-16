@@ -75,6 +75,17 @@ A path that matches no route returns 401 without a bank token and the framework'
 | `RECOVERY_SETUP_EXPIRED` | `POST /v1/mobile/recovery/setup` | The salt was not issued to this credential within the last 600 s, or differs | Handled by the SDK: request new parameters |
 | `RECOVERY_INTEGRITY` | `POST /v1/recovery/sessions`, recovery completion | The stored recovery configuration is not the identity's latest sealed `RECOVERY_CONFIGURED` record, or its key (and, at session creation, salt or iteration count) differs from that record (`integrity_violation`) | Security incident; do not retry |
 | `APPROVAL_PENDING` | `POST /admin/api/identities/{nexusId}/revoke`, `/reactivate` | A request for the same identity and action is already waiting for approval | Approve or reject the pending request |
+| `REPLACEMENT_REQUIRED` | `POST /v1/mobile/sessions` without `replacement` for an identity that had a device (now revoked); enrolment with a replacement token that names no replacement request | Revoking first does not skip the device replacement hold | Request a replacement after re-identifying the customer, or use recovery ([device replacement](../architecture/device-replacement.md)) |
+| `REPLACEMENT_NOT_USABLE` | `POST /v1/mobile/bootstrap` with a replacement token | The replacement request was cancelled by the enrolled device, expired, was already used, or is still on hold | Ask again with `POST /v1/mobile/sessions`; while it answers 202 `REPLACEMENT_PENDING`, wait for the customer's approval or the end of the hold |
+| `REPLACEMENT_NOT_PENDING` | `POST /v1/mobile/device-replacements/{id}/approve` or `/cancel` | No pending replacement request with this ID for the device's NEXUS ID | Handled by the SDK: refresh the list |
+| `RECOVERY_PHRASE_USED` | `POST /v1/recovery/sessions`, recovery completion | The phrase already recovered this identity; the recovered device has not set up a new one | The customer sets up a new phrase on the recovered device; a lost recovered device is replaced by the bank |
+| `AUTHORIZATION_NOT_PENDING` | `POST /v1/mobile/authorizations/{id}/decline`, `POST /v1/authorizations/{id}/cancel` | The authorization is no longer `PENDING_USER` | Read its state; nothing to withdraw |
+| `CREDENTIAL_MISMATCH` | `POST /v1/mobile/authorizations/{id}/decline` | The authorization is bound to another device | None (the request came from the wrong device) |
+| `CREDENTIAL_INTEGRITY` | `POST /v1/mobile/authorizations/{id}/deferred-signature` | The credential's keys do not match its sealed enrolment record | Security incident; do not retry |
+| `EVIDENCE_INVALID` | `POST /v1/authorizations/{id}/bank-commit-request` | The authorization's evidence does not support a commit (the message names the problem) | Do not commit; security incident |
+| `OFFLINE_LIMIT_EXCEEDED` | `GET /v1/authorizations/{id}/offline-challenge` | The amount is above `OFFLINE_CONFIRMATION_MAX_AMOUNT`, or the credential reached `OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY` | Confirm online |
+| `VERIFICATION_ATTEMPTS_EXHAUSTED` | Opening an audio or video verification session | The channel was attempted the maximum number of times for this authorization | Create a new authorization or decline the payment |
+| `VERIFICATION_CHANNEL_UNAVAILABLE` | `POST /v1/authorizations`, escalation | A required verification step has no verifier at this bank | Register a verification provider or enable operator verification |
 
 ## Confirmation results
 

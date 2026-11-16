@@ -170,7 +170,20 @@ Open findings and limits of the current design. Items marked "open" are known an
 - **Single-person suspension.** Suspension is deliberately one-person; an admin can suspend any identity in scope, which blocks the customer until two admins reactivate it.
 - **The bank's own decisions.** A bank backend operator with valid credentials and certificate can create authorizations, issue replacement tokens and open recovery sessions for that bank's customers. The customer signature, the audit records and the webhooks record what happened.
 - **Offline codes** are verifiable only by Auth Core, which holds the shared key, not by third parties. Banks that need non-repudiation for a payment type require online confirmation for it.
-- **Homoglyphs.** The display rule covers invisible and layout characters only. Visually similar characters from other scripts are accepted in beneficiary values.
+- **Homoglyphs (partly addressed; unreleased).** The [display text rules](../protocol/authorization-protocol-v1.md#display-text-rules) now refuse mixed Latin, Cyrillic, Greek, Armenian and Cherokee letters in one value, compatibility characters, non-ASCII spaces and digits, and invalid IBAN check digits. A value written entirely in one script that looks like a name in another is still accepted; the customer sees it as it is.
 - **Redis read access.** Tokens are stored under their SHA-256, so a copy of Redis does not reveal them; someone who can write to Redis can create tokens. Redis access belongs to the Auth Core service only.
 - **Push.** Someone holding the bank's APNs auth key or FCM service account can send notifications with their own visible text to the bank's app; they cannot produce a message that opens as a NEXUS-SIGN push. On iOS the push key is a keychain item, not a Secure Enclave key. A push envelope replayed through the provider shows the original message again.
 - **SDK verification.** The Swift and Kotlin code of 2.0.0-rc.2, including the device-side recovery protocol, Android key attestation, the iOS biometric change detection and the removal of bearer tokens from both SDKs, has not been built with the platform toolchains or tested on devices; the Kotlin sources were only compiled against API stubs ([release](../operations/release.md)).
+
+## Changes on branch `engineering/production-readiness` (unreleased)
+
+Assessed in the [security assessment report](../engineering/SECURITY_ASSESSMENT_REPORT.md); remaining limits in [known limitations](../engineering/KNOWN_LIMITATIONS.md).
+
+- **Bank backend compromise** no longer takes over a NEXUS ID by device replacement alone: a replacement waits for the enrolled device's approval or for `DEVICE_REPLACEMENT_HOLD_SECONDS`, and the device can cancel it. Residual: an attacker who also controls the customer's notifications during the hold, or a customer who ignores the request, still loses the identity after the hold.
+- **Gateway compromise** no longer passes a forged signature, an unapproved device key, an unsigned revocation or an expired authorization through the bank database, which now verifies them itself. Residual: a compromise of the bank database owner role.
+- **Bank database restore** no longer re-sends executed payments; the gateway asks the payment provider first.
+- **Direct inserts by the application's database role** can no longer create authorizations that are already confirmed or committed (migration 024). Residual: credential inserts are caught at use, not by the database.
+- **Recovery phrase theft** after the owner recovered: the phrase is single-use, and the old device is told.
+- **Evidence key provenance**: an evidence key imported into the HSM is refused.
+- **Open:** a stalled network HSM can block the Auth Core process in synchronous PKCS#11 calls (B-01); evidence is not sealed for declined, rejected and expired outcomes (B-04).
+
