@@ -13,8 +13,9 @@ import { env } from '../config/env';
  * Security properties:
  * - The evidence key is selected by token label, key label and optionally
  *   CKA_ID, and must be unique: two matching keys are an error, never a
- *   choice. The private key must be sensitive, non-extractable and a P-256
- *   signing key; the public key with the same label and ID must belong to it
+ *   choice. The private key must be a P-256 signing key, sensitive and
+ *   non-extractable, generated in the HSM and never extractable or
+ *   non-sensitive (CKA_LOCAL, CKA_NEVER_EXTRACTABLE, CKA_ALWAYS_SENSITIVE); the public key with the same label and ID must belong to it
  *   (checked by the self-test).
  * - Sign and verify run on a pool of logged-in sessions. C_SignAsync and
  *   C_VerifyAsync run on libuv worker threads; every operation has a deadline
@@ -381,13 +382,19 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
     const attributes = this.pkcs11.C_GetAttributeValue(session, key, [
       { type: Pkcs11js.CKA_KEY_TYPE }, { type: Pkcs11js.CKA_SIGN }, { type: Pkcs11js.CKA_SENSITIVE },
       { type: Pkcs11js.CKA_EXTRACTABLE }, { type: Pkcs11js.CKA_EC_PARAMS },
+      { type: Pkcs11js.CKA_LOCAL }, { type: Pkcs11js.CKA_NEVER_EXTRACTABLE }, { type: Pkcs11js.CKA_ALWAYS_SENSITIVE },
     ]);
-    const [keyType, canSign, sensitive, extractable, params] = attributes.map((a) => a.value as Buffer);
+    const [keyType, canSign, sensitive, extractable, params, local, neverExtractable, alwaysSensitive] = attributes.map((a) => a.value as Buffer);
     if (!keyType || ulong(keyType) !== Pkcs11js.CKK_EC) throw new Error('The HSM evidence key is not an EC key');
     if (!params || !params.equals(P256_PARAMS)) throw new Error('The HSM evidence key is not on curve P-256');
     if (!isTrue(canSign)) throw new Error('The HSM evidence key is not allowed to sign (CKA_SIGN)');
     if (!isTrue(sensitive)) throw new Error('The HSM evidence key must be sensitive (CKA_SENSITIVE)');
     if (isTrue(extractable)) throw new Error('The HSM evidence key must not be extractable (CKA_EXTRACTABLE)');
+    // Provenance (audit finding B-02): a key generated inside the HSM and
+    // never exportable, not one imported from a copy that may exist elsewhere.
+    if (!isTrue(local)) throw new Error('The HSM evidence key must be generated in the HSM (CKA_LOCAL), not imported');
+    if (!isTrue(neverExtractable)) throw new Error('The HSM evidence key must never have been extractable (CKA_NEVER_EXTRACTABLE)');
+    if (!isTrue(alwaysSensitive)) throw new Error('The HSM evidence key must always have been sensitive (CKA_ALWAYS_SENSITIVE)');
   }
 
   private readPublicKey(session: Buffer): { pem: string; keyId: string } {
