@@ -72,6 +72,8 @@ export type AuditEventType =
   | 'admin_login_failed'
   | 'admin_logout'
   | 'admin_identity_viewed'
+  | 'admin_mandates_viewed'
+  | 'admin_devices_viewed'
   | 'admin_audit_log_viewed'
   | 'admin_approval_requested'
   | 'admin_approval_granted'

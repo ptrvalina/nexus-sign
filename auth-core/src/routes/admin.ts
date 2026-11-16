@@ -13,6 +13,8 @@ import type { AdminSession } from '../services/adminAuthService';
 import { byBodyField, byIp, loginThrottle } from '../middleware/bruteForceProtection';
 import { assertClaimedBy, claimCall, listCalls, operatorSignal, operatorSignals, operatorRelease, sendBye } from '../services/verificationCall';
 import { recordOperatorDecision } from '../services/adaptiveVerificationService';
+import { consoleCancelDeviceRequest, consoleDevices, consoleMandate, consoleMandateAction, consoleMandates, consoleRevokeDevice } from '../services/bankConsoleService';
+import type { HsmAdapter } from '../crypto/hsmAdapter';
 
 const loginSchema = z.object({
   username: z.string().min(1).max(64),
@@ -77,7 +79,7 @@ function sameOrigin(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-export function buildAdminRouter(options: { cookieSecure: boolean }): Router {
+export function buildAdminRouter(options: { cookieSecure: boolean; hsm: HsmAdapter }): Router {
   const router = Router();
   router.use('/admin/api', sameOrigin);
 
@@ -233,6 +235,46 @@ export function buildAdminRouter(options: { cookieSecure: boolean }): Router {
       }
     });
   }
+
+  // --- Mandates and devices of one customer (bank staff) ---
+  // Auditors and platform operators read; the bank's own operators act.
+  const nexusParam = z.string().regex(/^\d{9}$/);
+  router.get('/admin/api/identities/:nexusId/mandates', async (req, res, next) => {
+    try {
+      res.status(200).json({ mandates: await consoleMandates(sessionOf(req as AdminRequest), nexusParam.parse(req.params.nexusId)) });
+    } catch (error) { next(error); }
+  });
+  router.get('/admin/api/mandates/:mandateId', async (req, res, next) => {
+    try {
+      res.status(200).json(await consoleMandate(sessionOf(req as AdminRequest), uuidSchema.parse(req.params.mandateId)));
+    } catch (error) { next(error); }
+  });
+  for (const [path, action] of [['hold', 'HOLD'], ['release', 'RELEASE'], ['withdraw', 'WITHDRAW']] as const) {
+    router.post(`/admin/api/mandates/:mandateId/${path}`, requireRole('operator'), async (req, res, next) => {
+      try {
+        const reason = action === 'RELEASE' ? '' : z.object({ reason: z.string().min(1).max(48) }).parse(req.body).reason;
+        res.status(200).json(await consoleMandateAction(options.hsm, sessionOf(req as AdminRequest), uuidSchema.parse(req.params.mandateId), action, reason));
+      } catch (error) { next(error); }
+    });
+  }
+  router.get('/admin/api/identities/:nexusId/devices', async (req, res, next) => {
+    try {
+      res.status(200).json(await consoleDevices(sessionOf(req as AdminRequest), nexusParam.parse(req.params.nexusId)));
+    } catch (error) { next(error); }
+  });
+  router.post('/admin/api/identities/:nexusId/devices/:credentialId/revoke', requireRole('operator'), async (req, res, next) => {
+    try {
+      const body = z.object({ reason: z.string().min(1).max(48) }).parse(req.body);
+      const nexusId = nexusParam.parse(req.params.nexusId); const credentialId = uuidSchema.parse(req.params.credentialId);
+      await consoleRevokeDevice(sessionOf(req as AdminRequest), nexusId, credentialId, body.reason);
+      res.status(200).json({ nexusId, credentialId, state: 'REVOKED' });
+    } catch (error) { next(error); }
+  });
+  router.post('/admin/api/identities/:nexusId/device-requests/:requestId/cancel', requireRole('operator'), async (req, res, next) => {
+    try {
+      res.status(200).json(await consoleCancelDeviceRequest(sessionOf(req as AdminRequest), nexusParam.parse(req.params.nexusId), uuidSchema.parse(req.params.requestId)));
+    } catch (error) { next(error); }
+  });
 
   // --- Conversations handed over to a person (operators of the bank) ---
   const conversationOperator = (req: Request) => ({ username: sessionOf(req as AdminRequest).username, clientId: sessionOf(req as AdminRequest).clientId });

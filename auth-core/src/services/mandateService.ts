@@ -281,12 +281,55 @@ export async function customerMandateAction(hsm: HsmAdapter, device: { nexusId: 
       case 'SUSPEND': return m.state === 'ACTIVE' ? transition(tx, hsm, m, 'SUSPENDED', 'SUSPENDED', 'SUSPENDED_BY_CUSTOMER', actor) : refuse();
       case 'RESUME':
         if (m.state !== 'SUSPENDED') refuse();
+        // A hold placed by the bank's staff is lifted by the bank, not by the customer.
+        if (m.state_reason?.startsWith(BANK_HOLD)) throw new ConflictError('The bank holds this mandate; only the bank lifts the hold', 'MANDATE_HELD_BY_BANK');
         if (new Date(m.valid_until).getTime() <= Date.now()) return transition(tx, hsm, m, 'EXPIRED', 'EXPIRED', 'VALIDITY_ENDED', 'system:expiry');
         return transition(tx, hsm, m, 'ACTIVE', 'RESUMED', 'RESUMED_BY_CUSTOMER', actor);
       case 'REVOKE': return m.state === 'ACTIVE' || m.state === 'SUSPENDED' ? transition(tx, hsm, m, 'REVOKED', 'REVOKED', 'REVOKED_BY_CUSTOMER', actor) : refuse();
       default: return refuse();
     }
   });
+}
+
+const BANK_HOLD = 'SUSPENDED_BY_BANK:';
+
+/**
+ * The bank's staff hold an active mandate (suspected fraud, a dispute): no
+ * debit is allowed while it is SUSPENDED. The customer cannot lift a bank
+ * hold; another member of the bank's staff does (four eyes), with
+ * releaseBankHold.
+ */
+export async function placeBankHold(hsm: HsmAdapter, clientId: string, mandateId: string, staff: string, reason: string): Promise<Mandate> {
+  return withTransaction(async (tx) => {
+    const m = await lockMandate(tx, mandateId, { clientId });
+    if (m.state !== 'ACTIVE') throw new ConflictError(`Mandate is ${m.state}; only an active mandate is held`, 'MANDATE_STATE_CONFLICT');
+    return transition(tx, hsm, m, 'SUSPENDED', 'SUSPENDED', `${BANK_HOLD}${staff}:${reason}`.slice(0, 128), `admin:${staff}`);
+  });
+}
+
+/** Lifts a bank hold. The staff member who placed it cannot lift it. */
+export async function releaseBankHold(hsm: HsmAdapter, clientId: string, mandateId: string, staff: string): Promise<Mandate> {
+  return withTransaction(async (tx) => {
+    const m = await lockMandate(tx, mandateId, { clientId });
+    if (m.state !== 'SUSPENDED' || !m.state_reason?.startsWith(BANK_HOLD)) {
+      throw new ConflictError(`Mandate is ${m.state} without a bank hold`, 'MANDATE_STATE_CONFLICT');
+    }
+    if (m.state_reason.startsWith(`${BANK_HOLD}${staff}:`)) throw new ConflictError('Another member of staff lifts the hold you placed', 'SAME_STAFF_MEMBER');
+    if (new Date(m.valid_until).getTime() <= Date.now()) return transition(tx, hsm, m, 'EXPIRED', 'EXPIRED', 'VALIDITY_ENDED', 'system:expiry');
+    return transition(tx, hsm, m, 'ACTIVE', 'RESUMED', 'BANK_HOLD_RELEASED', `admin:${staff}`);
+  });
+}
+
+/** The debits the bank asked about, allowed and refused, newest first. */
+export async function listMandateDebits(mandateId: string, limit = 200): Promise<Array<{ debitId: string; debitReference: string; amountMinor: string; currency: string;
+  periodStart: string; decision: 'ALLOWED' | 'REFUSED'; reason: string | null; createdAt: string }>> {
+  const rows = await pool.query(
+    `SELECT debit_id, debit_reference, amount_minor::text AS amount_minor, currency, period_start::text AS period_start, decision, reason, created_at
+       FROM mandate_debits WHERE mandate_id = $1 ORDER BY created_at DESC LIMIT $2`, [mandateId, Math.min(Math.max(limit, 1), 500)]);
+  return rows.rows.map((r) => ({
+    debitId: r.debit_id, debitReference: r.debit_reference, amountMinor: r.amount_minor, currency: r.currency,
+    periodStart: r.period_start, decision: r.decision, reason: r.reason, createdAt: new Date(r.created_at).toISOString(),
+  }));
 }
 
 /** The bank withdraws a mandate (it cannot change one). */

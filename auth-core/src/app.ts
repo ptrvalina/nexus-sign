@@ -111,7 +111,7 @@ export function buildApp(hsmAdapter: HsmAdapter, logger: Logger): Express {
   // protects the route in production; administrative API methods enforce the
   // session and role checks independently.
   app.use('/admin', express.static(path.join(process.cwd(), 'public', 'admin')));
-  app.use(buildAdminRouter({ cookieSecure: env.ADMIN_COOKIE_SECURE }));
+  app.use(buildAdminRouter({ cookieSecure: env.ADMIN_COOKIE_SECURE, hsm: hsmAdapter }));
 
   app.use(metricsMiddleware);
 

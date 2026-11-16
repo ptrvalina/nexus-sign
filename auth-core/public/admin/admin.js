@@ -240,6 +240,7 @@ async function lookupIdentity() {
         button.addEventListener('click', () => handleIdentityAction(nexusId, button.dataset.action));
       });
     }
+    if (typeof loadCustomerPanels === 'function') await loadCustomerPanels(nexusId);
   } catch (error) {
     resultEl.classList.add('visible');
     resultEl.innerHTML = `<div class="muted">${escapeHtml(error.message)}</div>`;

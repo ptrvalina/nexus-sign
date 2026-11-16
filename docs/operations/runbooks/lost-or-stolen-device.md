@@ -58,6 +58,7 @@ Choose by urgency:
 | Action | Who | Effect |
 |---|---|---|
 | Revoke the credential: `POST /v1/credentials/{credentialId}/revoke` | Bank backend, one call | Immediate and final for that credential. In one transaction: state `REVOKED` with `revoked_at`, its `PENDING_USER` authorizations `CANCELLED`, its push registration removed, audit event `credential_revoked` with `cancelledAuthorizations`. |
+| Revoke one device from the console: `POST /admin/api/identities/{nexusId}/devices/{credentialId}/revoke` with `{"reason":"..."}` ([bank console](../bank-console.md)) | One admin with role `operator` of the bank | As revoking the credential from the bank backend; the reason names the staff member. Other devices of the customer stay active. |
 | Suspend the identity: `POST /admin/api/identities/{nexusId}/suspend` with `{"reason":"..."}` | One admin with role `operator` or higher and access to the bank | Immediate. All `PENDING_USER` authorizations of the identity are cancelled; mobile requests receive 403; no authorization, confirmation, enrolment or recovery is possible. The credential is kept. Audit event `identity_suspended`. |
 | Revoke the identity: `POST /admin/api/identities/{nexusId}/revoke` | Two admins (four-eyes) | Takes effect only when a second admin approves. Final: the identity and all its credentials are revoked; the customer needs a new NEXUS ID. |
 
