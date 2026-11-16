@@ -73,6 +73,10 @@ A restore to a point before the failure loses everything written after that poin
 
 6. Start Auth Core with an empty Redis. Confirm `/readyz` 200 on every pod. Keep bank traffic closed until the next section is done, or reopen it with the banks' agreement.
 
+### What a restore keeps (tested)
+
+`auth-core/test/integration/backup-restore.test.mjs` takes a `pg_dump --format=custom` of a database with a customer, a signed mandate, a debit and a revoked device, restores it with `pg_restore` into an empty database and checks: every table has the same rows; the evidence chain verifies offline with the HSM public key and its head equals the source's; a record altered after the restore is detected; the append-only and lifecycle triggers refuse changes; and Auth Core continues the chain on the restored database (the next record follows the restored head). It ran on PostgreSQL 16 in the review environment with the development HSM adapter; with the bank's HSM the evidence key must be the one in use at the backup (a restored chain verifies only with the keys that sealed it).
+
 ### Re-apply what the restore undid
 
 Changes made after the restore point are gone from the database, including protective ones. Rebuild them from the banks' records, the webhook receivers' logs, and the audit records exported to the SIEM (the restored `audit_logs` ends at the restore point):
