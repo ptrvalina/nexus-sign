@@ -4,11 +4,12 @@ title = "NEXUS-SIGN secret scanning"
 useDefault = true
 
 [allowlist]
-description = "Published protocol test vectors (bank-trust-v1: public-key fingerprints and statements signed with test keys) and attestation fixtures (fixed public test material chosen for reproducibility), configuration templates without values, and PKCS#11 constant names; not secrets"
+description = "Published protocol test vectors (bank-trust-v1: public-key fingerprints and statements signed with test keys; mandate-terms-v1 and its generator: device credential UUIDs, which are identifiers) and attestation fixtures (fixed public test material chosen for reproducibility), configuration templates without values, and PKCS#11 constant names; not secrets"
 paths = [
-  '''^auth-core/test-vectors/(signed-payload-v1|device-protocols-v1|secure-push-v1|recovery-v2|bank-trust-v1)\.json$''',
-  '''^ios-sdk/Tests/NEXUSSignTests/Resources/(signed-payload-v1|device-protocols-v1|secure-push-v1|recovery-v2|bank-trust-v1)\.json$''',
+  '''^auth-core/test-vectors/(signed-payload-v1|device-protocols-v1|secure-push-v1|recovery-v2|bank-trust-v1|mandate-terms-v1)\.json$''',
+  '''^ios-sdk/Tests/NEXUSSignTests/Resources/(signed-payload-v1|device-protocols-v1|secure-push-v1|recovery-v2|bank-trust-v1|mandate-terms-v1)\.json$''',
   '''^auth-core/test/fixtures/android-key-attestation/[^/]+\.json$''',
+  '''^auth-core/test-vectors/generate-mandate-terms-vectors\.mjs$''',
   '''(^|/)\.env\.example$''',
 ]
 regexes = [
