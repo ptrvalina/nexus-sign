@@ -177,3 +177,19 @@ Phrases set up with SDK 1.4 or earlier (recovery protocol 1) are refused by Auth
 ## Tests
 
 `swift test` runs on macOS (the package declares `.macOS(.v12)` for this); CI runs it on every change. `SignedTransactionTests`, `DeviceProtocolTests`, `RecoveryProtocolTests` and `SecurePushTests` use the vectors in `Tests/NEXUSSignTests/Resources/` (`signed-payload-v1.json`, `device-protocols-v1.json`, `secure-push-v1.json`, `recovery-v2.json`). These are copies of `auth-core/test-vectors/`, because SwiftPM bundles only resources inside the package; `npm run generate:vectors` in `auth-core/` writes both, and `npm run test:vectors` fails when a copy differs. The PBKDF2 derivation of the recovery protocol uses CommonCrypto `CCKeyDerivationPBKDF`; `RecoveryProtocolTests` pins its output against `recovery-v2.json`.
+
+## Customer section, payment mandates, conversations (unreleased; not yet compiled)
+
+These methods were added on branch `engineering/production-readiness` and have not been built in the environment where they were written; the CI SDK job must build and test them before use.
+
+| Area | Methods | Server API |
+|---|---|---|
+| Devices | `devices()`, `removeDevice(credentialId)` | `/v1/mobile/devices`, `/v1/mobile/devices/{id}/revoke` |
+| History and evidence | `history(filter)`, `evidence(authorizationId)` | `/v1/mobile/history`, `/v1/mobile/authorizations/{id}/evidence` |
+| Security log and feed | `securityEvents()`, `notifications()` | `/v1/mobile/security-events`, `/v1/mobile/notifications` |
+| Settings | `settings()`, `updateSettings(…)` (relaxing waits for the bank's hold) | `/v1/mobile/settings` |
+| Identity | `suspendIdentity(reason)` | `/v1/mobile/identity/suspend` |
+| Mandates | `mandates()`, `mandate(id)`, `mandateTerms(mandate)` (checks domain `NEXUS-SIGN/MANDATE`, mandate, device, display rules and hash), `signMandate(mandate…)` (biometric prompt from the signed terms), `mandate(id, action)` for decline, suspend, resume, revoke | `/v1/mobile/mandates…` ([payment mandates v1](../docs/protocol/payment-mandates-v1.md)) |
+| Conversations | `conversations()`, `openConversation(…)`, `conversationMessages(…)`, `sendMessage(…)`, `markRead(…)`, `requestAgent(…)`, `closeConversation(…)` | `/v1/mobile/conversations…` ([conversations](../docs/architecture/customer-conversations.md)) |
+
+Show a mandate only from `mandateTerms`, never from the JSON convenience fields, in the same way as payments are shown only from the signed bytes.

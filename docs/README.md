@@ -64,6 +64,7 @@
 
 ## Engineering status and reports
 
+- [Final engineering report](engineering/FINAL_ENGINEERING_REPORT.md): initial state, every change, test results with commands, gates and what blocks the pilot
 - [Production readiness report](engineering/PRODUCTION_READINESS_REPORT.md): status per area, with the evidence and what blocks each step
 - [Security assessment report](engineering/SECURITY_ASSESSMENT_REPORT.md): findings of the internal review and how each was handled
 - [Product feature compliance matrix](engineering/PRODUCT_FEATURE_COMPLIANCE_MATRIX.md): every function of the product description against the code
