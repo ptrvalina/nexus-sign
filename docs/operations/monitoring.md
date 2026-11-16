@@ -79,6 +79,25 @@ The following are replaced with `[redacted]`:
 | `Push delivery batch failed` | error | A push worker cycle threw; see [push delivery](runbooks/push-delivery.md) |
 | `Unhandled promise rejection` | error | A rejected promise outside the request pipeline |
 
+## SIEM export of the audit log
+
+`node dist/cli/exportAudit.js` writes audit events (`audit_logs`: logins, approvals, revocations, suspensions, recoveries, mandate and call events, failed signatures) to stdout, one per line, for the bank's SIEM collector:
+
+```sh
+AUDIT_EXPORT_DATABASE_URL=postgres://nexus_audit_reader@db.bank.internal/nexus?sslmode=verify-full \
+  node dist/cli/exportAudit.js --format cef --cursor-file /var/lib/nexus/audit.cursor --lag-seconds 120
+```
+
+| Option | Meaning |
+|---|---|
+| `--format jsonl` | One JSON object per line with Elastic Common Schema names (`@timestamp`, `event.action`, `event.severity`, `user.name`, `source.ip`, `user_agent.original`) and `nexus_sign.*` for NEXUS ID, bank client and details |
+| `--format cef` | ArcSight CEF:0: `act` event type, `suser` actor, `src` address, `cs1` NEXUS ID, `cs2` bank client, `msg` details as JSON; `\`, `\|`, `=` and line breaks escaped |
+| `--cursor-file` | Read the position before and write it (atomically, after the output) after each run: run it every minute and every event arrives once |
+| `--lag-seconds` (default 60) | Leaves out events younger than this. An event's time is its transaction's start, so a long transaction can commit an event older than the last cursor; set the lag above `statement_timeout` |
+| `--client` | Only one bank client's events (a SIEM per bank) |
+
+Severity is 7 for failures, invalid signatures, lockouts, rejections, revocations and suspensions, else 3. Use the read-only role `nexus_audit_reader` (`scripts/db/roles.sql`). Application logs (pino JSON on stdout) are collected separately by the platform's log shipper. Tested on PostgreSQL (`audit-export.test.mjs`).
+
 ## Suggested alerts
 
 | Condition | Example expression or source | Runbook |
