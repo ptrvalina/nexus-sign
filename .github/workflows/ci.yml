@@ -366,8 +366,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4, also validates the wrapper checksum
-      - name: Unit tests and release build
-        run: sh ./gradlew --no-daemon testDebugUnitTest assembleRelease
+      # Android Lint checks every API call against minSdk 28 (NewApi is an error).
+      - name: Unit tests, Android Lint and release build
+        run: sh ./gradlew --no-daemon testDebugUnitTest lintRelease assembleRelease
 
   android-sdk-calls:
     name: android-sdk-calls / WebRTC module build
@@ -383,8 +384,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4, also validates the wrapper checksum
-      - name: Build against io.github.webrtc-sdk:android (pinned version)
-        run: sh ./gradlew --no-daemon assembleRelease
+      - name: Build against io.github.webrtc-sdk:android (pinned version), with Android Lint
+        run: sh ./gradlew --no-daemon lintRelease assembleRelease
       - name: Record the resolved WebRTC artifact and its SHA-256 (provenance evidence, D-015)
         run: |
           find ~/.gradle/caches/modules-2/files-2.1/io.github.webrtc-sdk -type f \( -name '*.aar' -o -name '*.pom' \) -exec sha256sum {} + | tee webrtc-artifacts.sha256
