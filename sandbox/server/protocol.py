@@ -141,6 +141,9 @@ def validate_beneficiary(beneficiary):
         problem = display_text_problem(value)
         if problem:
             return f'beneficiary.{key}: {problem}'
+        # Finding D-02: no second account number outside the account fields.
+        if key not in ACCOUNT_KEYS and looks_like_iban(value):
+            return f'beneficiary.{key} looks like an account number'
         if key == 'iban' and not is_valid_iban(value):
             return 'beneficiary.iban is not a valid IBAN in electronic format'
         if key == 'bic' and not _BIC.match(value):
@@ -149,6 +152,13 @@ def validate_beneficiary(beneficiary):
 
 
 _DISPLAY_UNSAFE = {'Cc', 'Cf', 'Zl', 'Zp', 'Cs'}
+_PROMPT_SEPARATORS = {'\u2192', '\u00b7', '\u2022'}
+ACCOUNT_KEYS = ('iban', 'account', 'account_number')
+
+
+def looks_like_iban(value):
+    """True when the value without spaces and hyphens, upper-cased, is a valid IBAN."""
+    return is_valid_iban(value.replace(' ', '').replace('-', '').upper())
 _IBAN = re.compile(r'[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\Z')
 _BIC = re.compile(r'[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\Z')
 # Fixed code point ranges, identical in Auth Core and both SDKs, so that the
@@ -174,6 +184,8 @@ def display_text_problem(text):
     broken rule or None. Mirrors displayTextViolation in Auth Core."""
     if not is_display_safe(text):
         return 'control, format or separator character'
+    if any(ch in _PROMPT_SEPARATORS for ch in text):
+        return 'the characters \u2192 \u00b7 \u2022 are reserved for the confirmation prompt'
     if unicodedata.normalize('NFC', text) != text:
         return 'not in Unicode Normalization Form C'
     if unicodedata.normalize('NFKC', text) != text:
