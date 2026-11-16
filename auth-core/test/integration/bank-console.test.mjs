@@ -38,6 +38,7 @@ describe('bank console: mandates and devices (PostgreSQL)', { skip: skipWithoutS
       requests: loadTs('services/deviceReplacementService.ts', { stubs, cache }),
       evidence: loadTs('services/evidenceService.ts', { stubs, cache }),
       console: loadTs('services/bankConsoleService.ts', { stubs, cache }),
+      authorizations: loadTs('services/authorizationService.ts', { stubs, cache }),
       db: loadTs('db/pool.ts', { stubs, cache }),
     };
     const { SoftwareHsmAdapter } = loadTs('crypto/softwareHsmAdapter.ts', { stubs, cache });
@@ -134,6 +135,19 @@ describe('bank console: mandates and devices (PostgreSQL)', { skip: skipWithoutS
     assert.equal(withdrawn.state, 'WITHDRAWN'); assert.match(withdrawn.stateReason, /CONSOLE:ben:customer called/);
     await assert.rejects(s.console.consoleMandateAction(hsm, anna, m.mandateId, 'HOLD', 'x'), (e) => e.code === 'MANDATE_STATE_CONFLICT');
     assert.deepEqual(verifyEvidenceChain(await chain(c.nexusId), await keys()), []);
+  });
+
+  test('the payments screen lists the customer\'s authorizations with their state; other banks see nothing', async () => {
+    const c = await customer();
+    const created = await s.authorizations.createAuthorization({
+      nexusId: c.nexusId, credentialId: c.phone.credentialId, transactionReference: `TX-${randomUUID()}`, operationType: 'TRANSFER',
+      amountMinor: '125000', currency: 'EUR', beneficiary: { iban: 'PL61109010140000071219812874', name: 'Jan Kowalski' }, policyReference: 'default', policyVersion: '1',
+    }, clientId);
+    const listed = await s.console.consoleAuthorizations(anna, c.nexusId);
+    assert.deepEqual(listed.map((a) => [a.authorizationId, a.state, a.amountMinor]), [[created.authorization.authorizationId, 'PENDING_USER', '125000']]);
+    assert.deepEqual(await s.console.consoleAuthorizations(anna, c.nexusId, { filter: 'confirmed' }), []);
+    assert.equal((await s.console.consoleAuthorizations(platform, c.nexusId)).length, 1);
+    await assert.rejects(s.console.consoleAuthorizations(stranger, c.nexusId), /not found/i);
   });
 
   test('the device screen lists devices, requests, the bank limit and events; staff revoke a device and stop an open request', async () => {

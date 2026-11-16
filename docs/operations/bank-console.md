@@ -13,6 +13,10 @@ The admin console (`/admin`) shows one customer's mandates and devices under the
 
 Every view writes `admin_mandates_viewed` or `admin_devices_viewed` to the audit log with the staff member's name (`admin:<username>`). Every change is written under the same name.
 
+## Payments
+
+`GET /admin/api/identities/{nexusId}/authorizations?filter=all|confirmed|declined|open` (any role): the customer's authorizations, newest first, with state, the recorded reason (for example `DECLINED_BY_CUSTOMER`), when it was decided and whether evidence is sealed. Audit `admin_authorizations_viewed`.
+
 ## Mandates
 
 | Endpoint | Role | Effect |
@@ -37,4 +41,4 @@ The device limit is a setting of the bank client (`bank_clients.max_devices_per_
 
 ## Not verified
 
-The services were checked by the PostgreSQL tests. The screen was rendered in Chromium against a stubbed API (escaping, which buttons appear for which state and role); it has not been used against a running Auth Core. The HTTP routes were not run in the review environment (no `express`); CI job `auth-core / integration` and a look at the console on a test system are needed.
+The services were checked by the PostgreSQL tests. The screen is rendered in Chromium against a stubbed API by `test/media/console-customer-screen.test.mjs` (escaping, which buttons appear for which state and role; passed here with Playwright); it has not been used against a running Auth Core. The HTTP routes were not run in the review environment (no `express`); CI job `auth-core / integration` and a look at the console on a test system are needed.

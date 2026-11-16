@@ -10,6 +10,7 @@ import {
   getMandateForClient, listMandateDebits, listMandatesForIdentity, placeBankHold, releaseBankHold, withdrawMandate, type Mandate,
 } from './mandateService';
 import { enqueueWebhook } from './webhookService';
+import { authorizationHistory, type HistoryEntry, type HistoryFilter } from './customerAccountService';
 
 /**
  * What the bank's staff see and do in the console for one customer's
@@ -32,6 +33,13 @@ async function mandateInScope(admin: AdminSession, mandateId: string): Promise<M
   const clientId = row.rows[0]?.client_id;
   if (!clientId || (admin.clientId !== null && admin.clientId !== clientId)) throw new NotFoundError(`Mandate ${mandateId} was not found`);
   return getMandateForClient(clientId, mandateId);
+}
+
+/** The customer's authorizations (confirmed, declined, open) with how each ended and whether evidence is sealed. */
+export async function consoleAuthorizations(admin: AdminSession, nexusId: string, options: { filter?: HistoryFilter; before?: string } = {}): Promise<HistoryEntry[]> {
+  const identity = await identityInScope(admin, nexusId);
+  await recordAuditEvent('admin_authorizations_viewed', { nexusId, actor: `admin:${admin.username}` }, { filter: options.filter ?? 'all' });
+  return authorizationHistory(identity.nexusId, { filter: options.filter, before: options.before, limit: 100 });
 }
 
 export async function consoleMandates(admin: AdminSession, nexusId: string): Promise<Mandate[]> {

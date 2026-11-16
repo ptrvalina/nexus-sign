@@ -18,8 +18,26 @@ async function loadCustomerPanels(nexusId) {
   document.getElementById('customer-section').style.display = '';
   document.getElementById('customer-title').textContent = `Customer ${nexusId}`;
   document.getElementById('mandate-detail').innerHTML = '';
-  await Promise.all([loadMandates(nexusId), loadDevices(nexusId)]);
+  await Promise.all([loadAuthorizations(nexusId), loadMandates(nexusId), loadDevices(nexusId)]);
 }
+
+async function loadAuthorizations(nexusId) {
+  const filter = document.getElementById('authorizations-filter').value;
+  const { authorizations } = await api(`/admin/api/identities/${nexusId}/authorizations?filter=${encodeURIComponent(filter)}`);
+  renderTable(document.getElementById('authorizations-table'), [
+    { label: 'Created', render: (a) => formatTimestamp(a.createdAt) },
+    { label: 'Reference', render: (a) => `<span class="mono">${escapeHtml(a.transactionReference)}</span>` },
+    { label: 'Amount', render: (a) => money(a.amountMinor, a.currency) },
+    { label: 'Payee', render: (a) => escapeHtml([a.beneficiary.iban || a.beneficiary.account || a.beneficiary.account_number, a.beneficiary.name].filter(Boolean).join(' · ')) },
+    { label: 'State', render: (a) => `${badge(a.state)} ${escapeHtml(a.reason || '')}` },
+    { label: 'Decided', render: (a) => formatTimestamp(a.decidedAt) },
+    { label: 'Evidence', render: (a) => (a.evidence ? 'sealed' : '—') },
+  ], authorizations, 'No payments for this customer.');
+}
+
+document.getElementById('authorizations-filter').addEventListener('change', () => {
+  if (customerPanel.nexusId) loadAuthorizations(customerPanel.nexusId).catch(reportError);
+});
 
 async function loadMandates(nexusId) {
   const { mandates } = await api(`/admin/api/identities/${nexusId}/mandates`);

@@ -201,6 +201,13 @@
   <section id="customer-section" style="display:none">
     <div class="section-header"><h2 id="customer-title">Customer</h2></div>
     <div class="body">
+      <h3>Payments</h3>
+      <div class="filters" style="margin-bottom:6px">
+        <select id="authorizations-filter">
+          <option value="all">All</option><option value="confirmed">Confirmed</option><option value="declined">Declined, expired, cancelled</option><option value="open">Open</option>
+        </select>
+      </div>
+      <div id="authorizations-table"></div>
       <h3>Mandates</h3>
       <div id="mandates-table"></div>
       <div id="mandate-detail"></div>

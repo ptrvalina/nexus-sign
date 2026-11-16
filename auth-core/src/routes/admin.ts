@@ -13,7 +13,7 @@ import type { AdminSession } from '../services/adminAuthService';
 import { byBodyField, byIp, loginThrottle } from '../middleware/bruteForceProtection';
 import { assertClaimedBy, claimCall, listCalls, operatorSignal, operatorSignals, operatorRelease, sendBye } from '../services/verificationCall';
 import { recordOperatorDecision } from '../services/adaptiveVerificationService';
-import { consoleCancelDeviceRequest, consoleDevices, consoleMandate, consoleMandateAction, consoleMandates, consoleRevokeDevice } from '../services/bankConsoleService';
+import { consoleAuthorizations, consoleCancelDeviceRequest, consoleDevices, consoleMandate, consoleMandateAction, consoleMandates, consoleRevokeDevice } from '../services/bankConsoleService';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import * as customerCalls from '../services/customerCallService';
 
@@ -240,6 +240,12 @@ export function buildAdminRouter(options: { cookieSecure: boolean; hsm: HsmAdapt
   // --- Mandates and devices of one customer (bank staff) ---
   // Auditors and platform operators read; the bank's own operators act.
   const nexusParam = z.string().regex(/^\d{9}$/);
+  router.get('/admin/api/identities/:nexusId/authorizations', async (req, res, next) => {
+    try {
+      const query = z.object({ filter: z.enum(['all', 'confirmed', 'declined', 'open']).default('all'), before: z.string().datetime().optional() }).parse(req.query);
+      res.status(200).json({ authorizations: await consoleAuthorizations(sessionOf(req as AdminRequest), nexusParam.parse(req.params.nexusId), query) });
+    } catch (error) { next(error); }
+  });
   router.get('/admin/api/identities/:nexusId/mandates', async (req, res, next) => {
     try {
       res.status(200).json({ mandates: await consoleMandates(sessionOf(req as AdminRequest), nexusParam.parse(req.params.nexusId)) });
