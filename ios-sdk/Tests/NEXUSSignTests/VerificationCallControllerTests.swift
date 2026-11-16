@@ -21,6 +21,10 @@ final class VerificationCallControllerTests: XCTestCase {
 
         init(channel: VerificationChannel = .video, expiresAt: Date = Date().addingTimeInterval(300)) { self.channel = channel; self.expiresAt = expiresAt }
 
+        /// Holds the lock for `body` only. A synchronous helper, so async
+        /// methods never call lock()/unlock() themselves (an error in Swift 6).
+        private func locked<T>(_ body: () throws -> T) rethrows -> T { lock.lock(); defer { lock.unlock() }; return try body() }
+
         var toOperator: [CallMessage] { lock.lock(); defer { lock.unlock() }; return _toOperator }
         var cancelled: Int { lock.lock(); defer { lock.unlock() }; return _cancelled }
         var offersSent: Int { toOperator.filter { if case .offer = $0 { return true } else { return false } }.count }
@@ -30,35 +34,37 @@ final class VerificationCallControllerTests: XCTestCase {
         }
 
         func send(_ message: CallMessage, messageID: String) async throws {
-            lock.lock(); defer { lock.unlock() }
-            guard ids.insert(messageID).inserted else { return }
-            switch message {
-            case .offer:
-                if offers > answers { throw NEXUSSignError.serverError(statusCode: 409, message: "offer pending") }
-                offers += 1
-            case .candidate:
-                if offers == 0 { throw NEXUSSignError.serverError(statusCode: 409, message: "candidate before offer") }
-            case .answer:
-                throw NEXUSSignError.serverError(statusCode: 400, message: "device never answers")
-            case .bye: break
+            try locked {
+                guard ids.insert(messageID).inserted else { return }
+                switch message {
+                case .offer:
+                    if offers > answers { throw NEXUSSignError.serverError(statusCode: 409, message: "offer pending") }
+                    offers += 1
+                case .candidate:
+                    if offers == 0 { throw NEXUSSignError.serverError(statusCode: 409, message: "candidate before offer") }
+                case .answer:
+                    throw NEXUSSignError.serverError(statusCode: 400, message: "device never answers")
+                case .bye: break
+                }
+                _toOperator.append(message)
             }
-            _toOperator.append(message)
         }
 
         func receive(after: Int64, waitMilliseconds: Int) async throws -> SignalBatch {
             if let receiveError { throw receiveError }
             let deadline = Date().addingTimeInterval(Double(min(waitMilliseconds, 200)) / 1000)
             while true {
-                lock.lock()
-                let batch = replayed + toDevice.filter { $0.seq > after }
-                replayed.removeAll()
-                lock.unlock()
+                let batch: [ReceivedSignal] = locked {
+                    let batch = replayed + toDevice.filter { $0.seq > after }
+                    replayed.removeAll()
+                    return batch
+                }
                 if !batch.isEmpty || Date() >= deadline { return SignalBatch(signals: batch, next: batch.last?.seq ?? after) }
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
         }
 
-        func cancel() async throws { lock.lock(); _cancelled += 1; lock.unlock() }
+        func cancel() async throws { locked { _cancelled += 1 } }
 
         func operatorSends(_ message: CallMessage, from: String = "operator") {
             lock.lock(); defer { lock.unlock() }

@@ -338,8 +338,10 @@ jobs:
         working-directory: ios-sdk
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Swift package build and tests
-        run: swift test
+      # Warnings are errors: the package and its tests compile warning-free, and
+      # Swift 6 concurrency diagnostics (warnings in Swift 5 mode) stay out.
+      - name: Swift package build and tests (warnings as errors)
+        run: swift test -Xswiftc -warnings-as-errors
 
   ios-demo:
     name: ios demo app / build
