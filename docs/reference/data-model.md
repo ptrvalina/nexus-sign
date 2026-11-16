@@ -91,17 +91,21 @@ The lifecycles enforced by the database are specified in [state machines](../arc
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING_USER: POST /v1/authorizations
-    PENDING_USER --> VERIFIED: valid signature or offline code, plan satisfied, not expired, credential ACTIVE
-    PENDING_USER --> EXPIRED: confirmation attempted at or after expires_at
-    PENDING_USER --> REJECTED: fifth invalid attempt, or last verification factor failed
-    PENDING_USER --> CANCELLED: credential revoked or replaced, identity suspended or revoked, recovery completed
+    PENDING_USER --> VERIFIED: valid signature (or v1 offline code), plan satisfied, not expired, credential ACTIVE
+    PENDING_USER --> OFFLINE_PROVISIONAL: v2 offline code accepted
+    OFFLINE_PROVISIONAL --> VERIFIED: device signature over the same bytes arrives before the deadline
+    OFFLINE_PROVISIONAL --> OFFLINE_UNSIGNED: deadline passed, or credential or identity no longer active
+    PENDING_USER --> EXPIRED: expiry sweep or confirmation attempted at or after expires_at
+    PENDING_USER --> REJECTED: fifth invalid attempt, last verification factor failed, or declined by the customer
+    PENDING_USER --> CANCELLED: withdrawn by the bank, credential revoked or replaced, identity suspended or revoked, recovery completed
     VERIFIED --> [*]
     EXPIRED --> [*]
     REJECTED --> [*]
     CANCELLED --> [*]
+    OFFLINE_UNSIGNED --> [*]
 ```
 
-`VERIFIED`, `EXPIRED`, `REJECTED` and `CANCELLED` are final for Auth Core. The transition to `VERIFIED` runs in one transaction that locks the verification plan first, then the authorization, and re-checks the plan, the expiry, the credential state, the credential key and the canonical bytes. An escalation that commits concurrently wins. The column and the trigger (migration 018) accept only these five states and only transitions from `PENDING_USER`.
+`VERIFIED`, `EXPIRED`, `REJECTED`, `CANCELLED` and `OFFLINE_UNSIGNED` are final for Auth Core. Migration 022 added the `OFFLINE_*` states; migration 024 requires every authorization to be created `PENDING_USER`. The transition to `VERIFIED` runs in one transaction that locks the verification plan first, then the authorization, and re-checks the plan, the expiry, the credential state, the credential key and the canonical bytes. An escalation that commits concurrently wins. The column and the trigger accept only these seven states and only the transitions shown.
 
 Expiry is applied when a confirmation is attempted. An authorization past `expires_at` that nobody tried to confirm keeps `PENDING_USER`.
 

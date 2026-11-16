@@ -1,6 +1,6 @@
 # Offline confirmation: threat model
 
-Status (2026-10-18, phase 8): **offline confirmation v2 (deferred device signature) implemented in Auth Core and the Android SDK, written for the iOS SDK; gate G2 stays PARTIAL** until the SDKs are built and run on devices and the residual cases below are accepted. Protocol: [offline confirmation v2](../protocol/offline-confirmation-v2-deferred-signature.md), decision: [ADR 0018](../adr/0018-deferred-device-signature.md). Tests: `auth-core/test/integration/offline-deferred-signature.test.mjs` (v2), `offline-forgery.test.mjs` and `offline-limits.test.mjs` (v1), `master-key-hsm.test.mjs`.
+Status (2026-10-18): **offline confirmation v2 (deferred device signature) implemented in Auth Core and the Android SDK, written for the iOS SDK; gate G2 stays PARTIAL** until the SDKs are built and run on devices and the residual cases below are accepted. Protocol: [offline confirmation v2](../protocol/offline-confirmation-v2-deferred-signature.md), decision: [ADR 0018](../adr/0018-deferred-device-signature.md). Tests: `auth-core/test/integration/offline-deferred-signature.test.mjs` (v2), `offline-forgery.test.mjs` and `offline-limits.test.mjs` (v1), `master-key-hsm.test.mjs`.
 
 ## The path of an offline confirmation
 
@@ -92,7 +92,7 @@ Each row names the test that exercises it on the current code (`offline-deferred
 
 ## Compromise scenarios re-assessed against the code (2026-10-18)
 
-Changes since phase 9 that matter here: the commit check also requires the record's chain position and link; `confirmed` in the bank's `GET` is derived from evidence that verifies now, not from the state column; the device parsers check ID and nonce formats. Tests: `evidence-forgery-hsm.test.mjs` (FH, records with a genuine SoftHSM seal), EN, DS.
+Later changes that matter here: the commit check also requires the record's chain position and link; `confirmed` in the bank's `GET` is derived from evidence that verifies now, not from the state column; the device parsers check ID and nonce formats. Tests: `evidence-forgery-hsm.test.mjs` (FH, records with a genuine SoftHSM seal), EN, DS.
 
 | Scenario | The attacker can | Auth Core prevents | Detected afterwards | Still possible |
 |---|---|---|---|---|
@@ -113,7 +113,7 @@ Who executes: Auth Core never moves money. The bank's system executes, and the o
 
 ## Evidence row metadata and trust boundaries (2026-10-19)
 
-**What prevents substituting record metadata.** The application role cannot change evidence (`UPDATE` revoked, append-only trigger on `UPDATE`, `DELETE`, `TRUNCATE`); a copied record collides with `UNIQUE (authorization_id)`, `(nexus_id, chain_sequence)` and `(nexus_id, previous_evidence_hash)`. A table owner who disables the trigger can still change columns. Since phase 11 every column that repeats a sealed value must equal it at the commit, in `confirmed`, in the enrolment check and in the verifier (D-038, D-039); the seal itself proves the payload. Tests: `evidence-metadata-binding.test.mjs` (MB) 1–11 with genuine SoftHSM seals.
+**What prevents substituting record metadata.** The application role cannot change evidence (`UPDATE` revoked, append-only trigger on `UPDATE`, `DELETE`, `TRUNCATE`); a copied record collides with `UNIQUE (authorization_id)`, `(nexus_id, chain_sequence)` and `(nexus_id, previous_evidence_hash)`. A table owner who disables the trigger can still change columns. Every column that repeats a sealed value must equal it at the commit, in `confirmed`, in the enrolment check and in the verifier (D-038, D-039); the seal itself proves the payload. Tests: `evidence-metadata-binding.test.mjs` (MB) 1–11 with genuine SoftHSM seals.
 
 **What prevents substituting the registered public key.** The key used to verify a device signature must equal the key sealed in the credential's `CREDENTIAL_ENROLLED` record, whose seal, payload and columns are checked on every use. A database writer who replaces `public_key_pem` gets `credential_integrity`; one who also changes the enrolment row breaks its seal or its column binding.
 
@@ -180,7 +180,7 @@ Each needs a separate architectural decision. Auth Core itself does not enforce 
 
 ## Where the bank's decision is enforced (2026-10-19)
 
-The phase 12 decision protects only where every path to execution goes through it. Phase 13 adds the execution boundary (`bank-integration/`, [trust boundary](../architecture/bank-trust-boundary.md)): the only code that may call the payment adapter, through a one-time permit. `bank-execution-boundary.test.mjs` (EB, numbered in file order; Auth Core on SoftHSM, the bank's store in PostgreSQL) checks in every negative case that the adapter was not called.
+The bank's execution decision protects only where every path to execution goes through it. The execution boundary (`bank-integration/`, [trust boundary](../architecture/bank-trust-boundary.md)) is the only code that may call the payment adapter, through a one-time permit. `bank-execution-boundary.test.mjs` (EB, numbered in file order; Auth Core on SoftHSM, the bank's store in PostgreSQL) checks in every negative case that the adapter was not called.
 
 | Attack or failure | Result | Test |
 |---|---|---|
@@ -236,7 +236,7 @@ Not covered:
 
 ## The bank's database roles (2026-10-20)
 
-Phase 14 left the boundary's database role with `INSERT` and `UPDATE` on the journal, the log and the registry; reproduced on `3cbea86` ([bank database authorization](bank-database-authorization.md), section 1). Since phase 15 no application role writes a table; every change is a `SECURITY DEFINER` function of the owner, and the gateway checks the approval again. Tests: `bank-db-authorization.test.mjs` (DA), with EP and EB.
+An earlier development version left the boundary's database role with `INSERT` and `UPDATE` on the journal, the log and the registry; reproduced on `3cbea86` ([bank database authorization](bank-database-authorization.md), section 1). Now no application role writes a table; every change is a `SECURITY DEFINER` function of the owner, and the gateway checks the approval again. Tests: `bank-db-authorization.test.mjs` (DA), with EP and EB.
 
 | Attempt | Result | Test |
 |---|---|---|
@@ -255,7 +255,7 @@ Phase 14 left the boundary's database role with `INSERT` and `UPDATE` on the jou
 | A review resolved under another name | the database records the login | DA 11, EP «no answer» |
 | A role inheriting the boundary role; `SET ROLE` to the owner or the gateway | the boundary's functions only; refused | DA 12 |
 | Objects put in the functions' way: in `bank`, in `public`, temporary tables, a function named like a built-in | permission denied; definer functions have `search_path = pg_catalog, pg_temp`; none executable by `PUBLIC` | DA 13 |
-| Extra grants from an earlier version, a `PUBLIC` grant, phase 14 tables in `public`, objects created later; a superuser or a member of the owner given as a service role | removed on reinstall; not granted; refused | DA 14 |
+| Extra grants from an earlier version, a `PUBLIC` grant, tables of the earlier development version in `public`, objects created later; a superuser or a member of the owner given as a service role | removed on reinstall; not granted; refused | DA 14 |
 
 Not covered:
 

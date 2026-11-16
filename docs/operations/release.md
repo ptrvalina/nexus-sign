@@ -4,7 +4,7 @@ What was verified for release 2.0.0-rc.2, what CI checks once it can run, and wh
 
 ## Verified for 2.0.0-rc.2 in the build environment
 
-Run on 2026-10-07 with Node.js 22 in the environment that produced the release candidate. That environment had no access to the npm registry, Gradle and Maven repositories, container registries or GitHub Actions, and no Swift toolchain.
+Historical record of 2.0.0-rc.2, run on 2026-10-07 with Node.js 22 in the environment that produced the release candidate. The counts below are for that tree and are out of date (the current tree has more routes, tests and migrations; for example `check:openapi` now checks 49 routes); no logs were kept. Results for the current branch are in the [production readiness report](../engineering/PRODUCTION_READINESS_REPORT.md). That environment had no access to the npm registry, Gradle and Maven repositories, container registries or GitHub Actions, and no Swift toolchain.
 
 | Check | Command | Result |
 |---|---|---|
@@ -22,7 +22,7 @@ Run on 2026-10-07 with Node.js 22 in the environment that produced the release c
 
 The integration suites cover the concurrency invariants (100 parallel signatures and offline codes consume an authorization exactly once), replay, expiry, tenant isolation, the PKCS#11 adapter on SoftHSM, evidence and credential integrity against a database writer, device replacement, recovery protocol 2, the removed compatibility paths (no bearer token for enrolled devices, protocol 1 refused, bank provisioning endpoints absent), admin MFA, scope and four-eyes approval, client certificate binding, audit attribution and append-only audit, the database state machines (including a property test and migration 018's refusal on data it cannot migrate), the database roles and the production startup posture.
 
-The Auth Core dependencies used for these runs were installed without a reviewed lockfile; the results do not cover the dependency set a release build will lock.
+The Auth Core dependencies used for these runs were installed without a reviewed lockfile. `auth-core/package-lock.json` has since been committed; the rc.2 results above do not cover the locked dependency set.
 
 ## Must still be verified outside the build environment
 
@@ -56,8 +56,13 @@ The Auth Core dependencies used for these runs were installed without a reviewed
 | `auth-core / end-to-end (PostgreSQL, Redis)` | `schema.sql` twice and every migration; `scripts/db/roles.sql`; server as `nexus_app`; `scripts/e2e-smoke.mjs` |
 | `containers / build and health check` | Auth Core and sandbox images build; the sandbox passes its health check |
 | `ios-sdk / build and unit tests` | `swift test` on macOS |
-| `android-sdk / build and unit tests` | Wrapper validation, unit tests (vectors read from `auth-core/test-vectors`) and release build |
+| `android-sdk / build and unit tests` | Wrapper validation through `gradle/actions/setup-gradle` (`gradle-wrapper.properties` has no `distributionSha256Sum` yet), unit tests (vectors read from `auth-core/test-vectors`) and release build |
 | `sandbox / protocol and API tests` | Unit and API tests on Python 3.10 |
+| `auth-core / real WebRTC call (PostgreSQL, Redis, Chromium)` | A WebRTC call between two browser peers through Auth Core signalling |
+| `android-sdk call state machine against Auth Core (signalling only)` | The Android call state machine against a running Auth Core |
+| `ios demo app / build`, `android demo app / debug APK` | The demo host apps build |
+| `android-sdk-calls / WebRTC module build`, `ios-sdk-calls / WebRTC module build` | The optional call modules build |
+| `demo bank / access control` | The demo bank backend's access checks |
 
 [`.github/workflows/security.yml`](../../.github/workflows/security.yml) runs CodeQL, the SBOM, Trivy and the dependency audit and secret scan (`audit`) on the same events and weekly. [`.github/workflows/release.yml`](../../.github/workflows/release.yml) runs for `v*` tags.
 
@@ -67,11 +72,11 @@ Completed by the release owner for every release, and by the bank before the fir
 
 ### Build
 
-- [ ] Lockfile generated with registry access, reviewed and committed; `npm audit --omit=dev --audit-level=high` reviewed.
+- [ ] Committed lockfile reviewed; `npm audit --omit=dev --audit-level=high` reviewed.
 - [ ] All `ci.yml` and `security.yml` jobs green on the release commit, including both SDK jobs; CodeQL results (`codeql-sarif` artifact) and Trivy findings reviewed; SBOM archived.
 - [ ] Release tag built by `release.yml`; provenance verified; image archive SHA-256 recorded.
 - [ ] Gradle checksums and image digests added, or the gaps accepted in writing.
-- [ ] `CHANGELOG.md` entry and `VERSION` consistent (`npm run check:repository`).
+- [ ] `CHANGELOG.md` has an entry for `VERSION` (checked by hand: `npm run check:repository` checks `VERSION` against `package.json`, both `openapi.yaml` files and both SDK version constants, not the CHANGELOG).
 - [ ] `npm run smoke-test` passes against a deployed instance.
 
 ### Upgrade

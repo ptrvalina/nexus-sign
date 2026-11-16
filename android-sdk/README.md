@@ -44,7 +44,7 @@ val sdk = NEXUSSignSDK(context, NEXUSSignConfig(
 | `recoverySetupPromptText` | `"Confirm your new recovery phrase"` | Description of the biometric prompt shown by `generateRecoveryPhrase()`. New in 2.0 |
 | `allowEmulatorHostHttp` | `false` | Development only: accept `http://10.0.2.2`, the emulator's alias for the developer's machine. New in 2.0; leave it off in release builds |
 | `requestTimeoutMillis` | `10_000` | Network request timeout |
-| `certificatePins` | empty | Public-key pins for the host of `baseUrl`, `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` (OkHttp `CertificatePinner`). Empty relies on the platform's certificate validation only. When set: at least two distinct pins (current key and a backup key kept offline), https only; a chain matching none of them fails the request. New in 2.0.0 |
+| `certificatePins` | empty | Public-key pins for the host of `baseUrl`, `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` (OkHttp `CertificatePinner`). Empty relies on the platform's certificate validation only. When set: at least two distinct pins (current key and a backup key kept offline), https only; a chain matching none of them fails the request. New (unreleased, planned for 2.0.0) |
 | `playIntegrityCloudProjectNumber` | `null` | The bank's Google Cloud project number for Play Integrity; without it no integrity token is sent |
 
 | Token purpose | Lifetime | Used by |
@@ -76,7 +76,7 @@ val code = sdk.confirmOffline(challenge, activity)            // biometric promp
 lifecycleScope.launch { sdk.submitPendingOfflineSignatures() }
 ```
 
-With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default on Auth Core 2.0.0) the SDK first signs the transaction with the signing key — its own biometric prompt, because Android binds a key to one prompt — and stores the signature, then shows the second prompt for the code. Auth Core confirms the payment when the signature arrives; `submitPendingOfflineSignatures()` uploads what is pending and keeps what could not be delivered ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). Pending signatures are kept in `com.nexis.nexussign.<bankId>.offline`; exclude it from backup like the keys file.
+With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default from Auth Core 2.0.0 (unreleased)) the SDK first signs the transaction with the signing key — its own biometric prompt, because Android binds a key to one prompt — and stores the signature, then shows the second prompt for the code. Auth Core confirms the payment when the signature arrives; `submitPendingOfflineSignatures()` uploads what is pending and keeps what could not be delivered ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). Pending signatures are kept in `com.nexis.nexussign.<bankId>.offline`; exclude it from backup like the keys file.
 
 The offline key is an HMAC key in the Keystore that can only be used through the `BiometricPrompt` showing the transaction (`CryptoObject(Mac)`); it works from Android 9. Check `isOfflineConfirmationAvailable()` before offering it. See [docs/architecture/device-authentication-and-offline-confirmation.md](../docs/protocol/device-authentication-and-offline-confirmation.md).
 
@@ -142,7 +142,7 @@ val outcome = sdk.approve(authorization, activity)
 `approve()` re-verifies the payload, takes the expiry from the signed bytes, shows `tx.confirmationText()` as the `BiometricPrompt` description (with explicit confirmation required) and signs those same bytes. It switches to the main thread for the prompt itself, so it can be called from any coroutine scope tied to the activity. If the payload does not verify, both calls throw `NEXUSSignError.AuthorizationPayloadInvalid` and nothing is signed — treat it as a security event, not as a retryable network error.
 
 
-Since 2.0.0 the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
+From 2.0.0 (unreleased) the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
 
 ## Recovery
 

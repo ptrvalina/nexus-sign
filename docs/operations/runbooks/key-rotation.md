@@ -40,7 +40,7 @@ Every schema 3 record names the key that sealed it in `sealKeyId` (SHA-256 of th
 
 ### WEBHOOK_SECRET_ENCRYPTION_KEY change
 
-`bank_clients.webhook_secret_encrypted` is AES-256-GCM. Since 2.0.0 the value names its key: `k1$<key id>$iv$authTag$ciphertext` (key id: first 8 bytes of SHA-256 of the master key, hex), associated data `webhook:<clientId>`. Older values (`v2$iv$authTag$ciphertext`, and `iv$authTag$ciphertext` from 1.4) are still read and are re-encrypted by `rotateSecretKeys.js`. If the key is changed **without** keeping the old one in `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS`, every existing value stops decrypting:
+`bank_clients.webhook_secret_encrypted` is AES-256-GCM. From 2.0.0 (unreleased) the value names its key: `k1$<key id>$iv$authTag$ciphertext` (key id: first 8 bytes of SHA-256 of the master key, hex), associated data `webhook:<clientId>`. Older values (`v2$iv$authTag$ciphertext`, and `iv$authTag$ciphertext` from 1.4) are still read and are re-encrypted by `rotateSecretKeys.js`. If the key is changed **without** keeping the old one in `WEBHOOK_SECRET_ENCRYPTION_KEY_PREVIOUS`, every existing value stops decrypting:
 
 - Deliveries for clients with a webhook fail and count as failed attempts; see [webhook backlog](webhook-backlog.md). Queuing an event does not decrypt the secret, so the API calls that queue events are not affected.
 

@@ -1,6 +1,6 @@
 # Native builds: commands for a CI runner or development machine
 
-The native build gate (G4) can only pass on a machine with the platform toolchains and access to Maven Central, Google Maven and GitHub. The environment this work was done in has none of them (checked 2026-10-18: no `swift`/`xcodebuild`, no Android SDK, Gradle cannot reach Maven Central or Google Maven, no Docker daemon, no GitHub access). Nothing in this file has been executed there.
+The native builds can only pass on a machine with the platform toolchains and access to Maven Central, Google Maven and GitHub. The environment this work was done in has none of them (checked 2026-10-18: no `swift`/`xcodebuild`, no Android SDK, Gradle cannot reach Maven Central or Google Maven, no Docker daemon, no GitHub access). Nothing in this file has been executed there.
 
 The same steps run in CI: jobs `android-sdk`, `android-sdk-calls`, `android-demo`, `ios-sdk`, `ios-sdk-calls`, `ios-demo` in `.github/workflows/ci.yml`. Record the run IDs and the outputs marked **record** in the release record.
 
@@ -46,7 +46,7 @@ INTEGRATION_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres IN
 
 Pass criteria: every command exits 0; the AAR checksum and signature are recorded and verified against a project-published key; the APK contains the expected ABIs and only the expected permissions; no duplicate-class or version conflict errors.
 
-## iOS (macOS with Xcode 15 or later; the owner's Mac has Xcode 26.5)
+## iOS (macOS with Xcode 15 or later)
 
 ```bash
 # 1. Core Swift package: build and XCTest (includes VerificationCallControllerTests)

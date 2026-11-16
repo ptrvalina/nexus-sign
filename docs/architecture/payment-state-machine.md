@@ -1,8 +1,8 @@
 # Payment state machine on the bank's side
 
-Status: 2.0.0. Implemented in `bank-integration/` (`schema.mjs`, `trustStore.mjs`, `executionBoundary.mjs`, `paymentGateway.mjs`, `registry.mjs`). Tests: `auth-core/test/integration/bank-execution-processes.test.mjs` (EP), `bank-execution-boundary.test.mjs` (EB) and `bank-db-authorization.test.mjs` (DA).
+Status: unreleased, planned for 2.0.0 (current version 2.0.0-rc.2). Implemented in `bank-integration/` (`schema.mjs`, `trustStore.mjs`, `executionBoundary.mjs`, `paymentGateway.mjs`, `registry.mjs`). Tests: `auth-core/test/integration/bank-execution-processes.test.mjs` (EP), `bank-execution-boundary.test.mjs` (EB) and `bank-db-authorization.test.mjs` (DA).
 
-Since phase 15 the database is in its own schema `bank`. No application role can write a table. Every transition is made by one `SECURITY DEFINER` function, and the function names itself to the trigger (`bank.via`). The trigger accepts a change only if the triple (from, to, function) is in `bank.allowed_transitions`, for every role including the owner. Roles and rights: [bank database authorization](../security/bank-database-authorization.md).
+The database is in its own schema `bank`. No application role can write a table. Every transition is made by one `SECURITY DEFINER` function, and the function names itself to the trigger (`bank.via`). The trigger accepts a change only if the triple (from, to, function) is in `bank.allowed_transitions`, for every role including the owner. Roles and rights: [bank database authorization](../security/bank-database-authorization.md).
 
 ## Four facts that are kept apart
 

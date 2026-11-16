@@ -4,10 +4,13 @@ Engineering decisions of the 2.0.0 remediation. Newest last. Each entry names th
 
 ## D-001 Local git snapshot instead of a GitHub clone
 
+The work was done on a local git snapshot of the repository because the GitHub repository could not be cloned from the build environment. Changes are delivered as commits on a separate branch and are not pushed without the owner's approval.
 
 ## D-002 No locally generated lockfile
 
-The npm registry is blocked here. The dependencies used for testing were built from their GitHub sources; writing a `package-lock.json` from them would produce integrity hashes that do not correspond to registry tarballs. stays open until a lockfile generated with `npm install` against the registry is committed.
+The npm registry was blocked in the environment where this decision was taken. The dependencies used for testing were built from their GitHub sources; writing a `package-lock.json` from them would have produced integrity hashes that do not correspond to registry tarballs.
+
+Resolved: `auth-core/package-lock.json` is now committed (lockfile version 3, every package from registry.npmjs.org with an `integrity` hash).
 
 ## D-003 Expiry: report at read time, persist by a sweep
 
@@ -154,7 +157,7 @@ A record with a genuine HSM seal could still be inserted next to the chain rathe
 
 ## D-037 Device parsers check ID and nonce formats
 
-The protocol requires valid formats on the device; the parsers checked amount, currency and timestamps only. Added: lowercase UUIDs for `authorization_id` and `credential_id`, 9-digit `nexus_id`, 64-character lowercase hex `nonce`, on Android, iOS and in the sandbox, with vectors. Auth Core always issued these formats; the canonical encoding is unchanged, so no version change. Look-alike payee names remain valid (they are signed and shown as they are; ).
+The protocol requires valid formats on the device; the parsers checked amount, currency and timestamps only. Added: lowercase UUIDs for `authorization_id` and `credential_id`, 9-digit `nexus_id`, 64-character lowercase hex `nonce`, on Android, iOS and in the sandbox, with vectors. Auth Core always issued these formats; the canonical encoding is unchanged, so no version change. Look-alike payee names remain valid (they are signed and shown as they are).
 
 ## D-038 Evidence row metadata must equal the sealed payload
 

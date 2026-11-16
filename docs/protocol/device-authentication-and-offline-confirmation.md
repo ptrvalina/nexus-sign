@@ -98,7 +98,7 @@ Because the code covers the hash of the exact bytes the phone displayed, a QR co
 
 ### What an offline code proves
 
-> Since 2.0.0, with `OFFLINE_CONFIRMATION_MODE=deferred_signature` (default, required in production), a code alone no longer confirms: see [offline confirmation v2](offline-confirmation-v2-deferred-signature.md). This section describes v1.
+> From 2.0.0 (unreleased), with `OFFLINE_CONFIRMATION_MODE=deferred_signature` (default, required in production), a code alone no longer confirms: see [offline confirmation v2](offline-confirmation-v2-deferred-signature.md). This section describes v1.
 
 An offline code proves that the enrolled device, after a biometric check, confirmed the transaction it displayed. Unlike a device signature, it is computed with a key that Auth Core also holds, so it is not independently verifiable by a third party. The evidence record says so (`confirmationMethod`, `signatureFormat: hmac`), and `scripts/verify-evidence.mjs` reports such records separately. Banks that need non-repudiation for a payment type should require online confirmation for it.
 

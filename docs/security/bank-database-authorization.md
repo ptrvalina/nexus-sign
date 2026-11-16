@@ -1,6 +1,6 @@
 # Bank database authorization
 
-Status: 2.0.0-rc.3. Implementation: [`bank-integration/schema.mjs`](../../bank-integration/schema.mjs). Tests: `auth-core/test/integration/bank-db-authorization.test.mjs` (DA 1–14, numbered in file order), together with EP (`bank-execution-processes`) and EB (`bank-execution-boundary`). Verified on PostgreSQL 16.13 only.
+Status: unreleased, planned for 2.0.0 (current version 2.0.0-rc.2). Implementation: [`bank-integration/schema.mjs`](../../bank-integration/schema.mjs). Tests: `auth-core/test/integration/bank-db-authorization.test.mjs` (DA 1–14, numbered in file order), together with EP (`bank-execution-processes`) and EB (`bank-execution-boundary`). Verified on PostgreSQL 16.13 only.
 
 This is the reference schema in this repository. It is not a bank's database and has not been reviewed by a bank's DBA or an independent auditor.
 
@@ -94,7 +94,7 @@ Common to all 19:
 
 - **Clean database:** the administrator runs `DATABASE_HARDENING`: no `TEMPORARY` for `PUBLIC`, no `CREATE` in `public`. Then the owner runs `installSchema`.
 - **Reinstall:** `installSchema` first revokes every right of each given role on all tables, sequences and functions of `bank` and on the schema, and every `PUBLIC` right. Then it grants the matrix again. Extra grants made by hand do not survive (DA 14).
-- **Upgrade from phase 14:** the phase 14 tables lived in `public` (`bank_*`). `installSchema` revokes the given roles' rights on those tables and on `bank_submit`, `bank_resubmit` and `bank_operation_for_lookup` if the owner owns them (DA 14). **Their data is not migrated.** A bank that ran phase 14 migrates payments, executions, statements and heads under its own change control, then drops the old tables.
+- **Upgrade from the earlier development version:** its tables lived in `public` (`bank_*`). `installSchema` revokes the given roles' rights on those tables and on `bank_submit`, `bank_resubmit` and `bank_operation_for_lookup` if the owner owns them (DA 14). **Their data is not migrated.** A bank that ran that version migrates payments, executions, statements and heads under its own change control, then drops the old tables.
 
 ## 7. Residual boundary: the owner and the PostgreSQL administrator
 

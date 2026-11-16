@@ -1,6 +1,6 @@
 # Bank trust boundary and execution boundary
 
-Status: 2.0.0. The execution path runs through a gateway in its own process with its own database role ([payment state machine](payment-state-machine.md)); no role writes a table, and the gateway checks the approval again ([bank database authorization](../security/bank-database-authorization.md)). Protocol: [bank credential trust v1](../protocol/bank-credential-trust-v1.md). Contract and reference implementation: [`bank-integration/`](../../bank-integration/README.md).
+Status: unreleased, planned for 2.0.0 (current version 2.0.0-rc.2). The execution path runs through a gateway in its own process with its own database role ([payment state machine](payment-state-machine.md)); no role writes a table, and the gateway checks the approval again ([bank database authorization](../security/bank-database-authorization.md)). Protocol: [bank credential trust v1](../protocol/bank-credential-trust-v1.md). Contract and reference implementation: [`bank-integration/`](../../bank-integration/README.md).
 
 ## Trust boundary
 

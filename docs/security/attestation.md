@@ -121,7 +121,7 @@ The chains are verified at the keys' `creationDateTime`, because their RKP inter
 
 `auth-core/test/device-attestation-policy.test.mjs` covers enrolment without chains, the weaker level of the two keys, a failing chain failing the enrolment, cross-platform evidence and the iOS level. `test/integration/attestation-policy.test.mjs` checks that an `UNKNOWN` credential cannot approve once `REQUIRE_VALID_ATTESTATION` is on.
 
-Not covered by these tests: the acceptance of a biometric-bound signing key and the refusal of an unlocked device with a real chain (the sample chains have no user authentication and a locked bootloader), and the SDK side (key generation with the challenge, StrongBox selection, sending the chains, the biometric binding), which is verified on devices ([verification status](../operations/release.md)). Genuine App Attest and Play Integrity tokens are not exercised automatically.
+Not covered by these tests: the acceptance of a biometric-bound signing key and the refusal of an unlocked device with a real chain (the sample chains have no user authentication and a locked bootloader), and the SDK side (key generation with the challenge, StrongBox selection, sending the chains, the biometric binding), which can only be verified on devices and has not been yet ([device acceptance checklist](../engineering/DEVICE_ACCEPTANCE_CHECKLIST.md)). Genuine App Attest and Play Integrity tokens are not exercised automatically.
 
 ### Not checked
 

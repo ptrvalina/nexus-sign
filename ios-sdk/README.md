@@ -38,7 +38,7 @@ let sdk = NEXUSSignSDK(config: NEXUSSignConfig(
 
 `recoverySetupPromptText` (default `"Confirm to set up your recovery phrase"`) is the reason shown in the Face ID / Touch ID prompt of `generateRecoveryPhrase()`; localize it in the host app. `keychainAccessGroup`, `pushKeychainAccessGroup` and `requestTimeout` (default 10 s) are optional.
 
-`certificatePins` (new in 2.0.0, ) pins the public key of the host of `baseURL`: a set of `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` strings, the same form as the Android SDK. Empty (the default) relies on the system's certificate validation only. When set, give at least two pins (the current key and a backup key kept offline) and an https URL; the system validation runs first, then a connection whose chain has none of the pinned keys is cancelled. Supported key types: P-256, P-384, RSA 2048/3072/4096. Compute a pin with:
+`certificatePins` (new, unreleased, planned for 2.0.0) pins the public key of the host of `baseURL`: a set of `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` strings, the same form as the Android SDK. Empty (the default) relies on the system's certificate validation only. When set, give at least two pins (the current key and a backup key kept offline) and an https URL; the system validation runs first, then a connection whose chain has none of the pinned keys is cancelled. Supported key types: P-256, P-384, RSA 2048/3072/4096. Compute a pin with:
 
 ```bash
 openssl x509 -in server.pem -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
@@ -73,7 +73,7 @@ let code = try await sdk.confirmOffline(challenge)                      // Face 
 Task { await sdk.submitPendingOfflineSignatures() }
 ```
 
-With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default on Auth Core 2.0.0) one biometric evaluation authorizes both Secure Enclave keys: the signing key signs the transaction and the signature is stored before the code is computed. Auth Core confirms the payment when the signature arrives ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). This code has not been compiled or run on a device in the environment that wrote it.
+With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default from Auth Core 2.0.0 (unreleased)) one biometric evaluation authorizes both Secure Enclave keys: the signing key signs the transaction and the signature is stored before the code is computed. Auth Core confirms the payment when the signature arrives ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). This code has not been compiled or run on a device in the environment that wrote it.
 
 The Secure Enclave key agreement runs inside the biometric prompt that shows the transaction. Check `isOfflineConfirmationAvailable()` before offering it. See [device authentication and offline confirmation](../docs/protocol/device-authentication-and-offline-confirmation.md).
 
@@ -162,7 +162,7 @@ let outcome = try await sdk.approve(authorization: authorization)
 Decode any NEXUS-SIGN payload your app receives from the bank backend (for example `NexusRecoverySession`) with `JSONDecoder.nexus()`: Auth Core timestamps carry milliseconds, which the default and `.iso8601` strategies reject.
 
 
-Since 2.0.0 the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
+From 2.0.0 (unreleased) the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
 
 ## Recovery
 

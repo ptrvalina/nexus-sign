@@ -19,7 +19,7 @@ The authorization object contains only strings and one flat object of strings (`
 ## Decision
 
 - The signed form is the v1 authorization object with keys sorted recursively, serialized with `JSON.stringify` semantics and encoded as UTF-8 (`canonicalizeAuthorization` in `auth-core/src/services/canonicalAuthorization.ts`).
-- Beneficiary keys must match `^[a-z][a-z0-9_]{0,63}$`, at most 16 fields, values up to 512 characters (reduced to 140, without leading or trailing space, in 2.0.0; ).
+- Beneficiary keys must match `^[a-z][a-z0-9_]{0,63}$`, at most 16 fields, values up to 512 characters (reduced to 140, without leading or trailing space, in 2.0.0).
 - Each SDK parses the bytes with its own strict reader and accepts them only if re-encoding the parsed object reproduces them byte for byte (`SignedPayload.parse` in `SignedTransaction.kt` and `SignedTransaction.swift`). This rejects duplicate keys, alternative escapes, whitespace, unsorted keys and trailing data.
 - No RFC 8785 or CBOR library is added. Auth Core keeps its CBOR dependency only for App Attest attestation objects.
 - The shared vectors in `auth-core/test-vectors/signed-payload-v1.json` pin all implementations; `check-signed-payload-vectors.mjs` compares them with the server code and with the copies bundled in each test suite.

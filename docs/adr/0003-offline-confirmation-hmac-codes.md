@@ -29,7 +29,7 @@ Banks want customers to confirm a transaction shown on a branch screen, an ATM o
 - Without `DEVICE_SECRET_ENCRYPTION_KEY` the stored offline keys cannot be decrypted; the affected devices have to enrol again for offline confirmation.
 - Shared vectors: `auth-core/test-vectors/device-protocols-v1.json`. Specification: [device authentication and offline confirmation](../protocol/device-authentication-and-offline-confirmation.md).
 
-## Amendment 2026-10-18 (2.0.0, )
+## Amendment 2026-10-18 (unreleased, planned for 2.0.0)
 
 Whoever holds the database and `DEVICE_SECRET_ENCRYPTION_KEY` can compute a valid code for any pending authorization of an offline-enabled credential, and the resulting evidence record is sealed like any other. This is inherent in a short symmetric code and cannot be removed without giving up offline use. Mitigations:
 

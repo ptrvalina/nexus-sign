@@ -1,6 +1,6 @@
 # Bank credential trust v1
 
-Status: 2.0.0. Implemented in `auth-core/scripts/lib/bankTrust.mjs`, the tools `scripts/bank-trust-statement.mjs` and `scripts/bank-execution-check.mjs`, and the SDK call `signingKeyFingerprint()`. Vectors: `auth-core/test-vectors/bank-trust-v1.json`.
+Status: unreleased, planned for 2.0.0 (current version 2.0.0-rc.2). Implemented in `auth-core/scripts/lib/bankTrust.mjs`, the tools `scripts/bank-trust-statement.mjs` and `scripts/bank-execution-check.mjs`, and the SDK call `signingKeyFingerprint()`. Vectors: `auth-core/test-vectors/bank-trust-v1.json`.
 
 ## Why
 
