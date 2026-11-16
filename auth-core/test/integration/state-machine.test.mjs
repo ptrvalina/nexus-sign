@@ -150,7 +150,9 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
         UPDATE credentials SET state = 'REVOKED' WHERE credential_id = '${id}';
         ALTER TABLE credentials ENABLE TRIGGER credential_lifecycle;`);
       // An authorization in a removed state, then a row in a dropped table.
-      await db.pool.query(`ALTER TABLE authorization_requests DROP CONSTRAINT authorization_requests_state_check`);
+      // Before 018 there was no insert-state trigger (migration 024) either.
+      await db.pool.query(`ALTER TABLE authorization_requests DROP CONSTRAINT authorization_requests_state_check;
+        ALTER TABLE authorization_requests DISABLE TRIGGER authorization_insert_state`);
       const auth = randomUUID();
       await db.pool.query(`INSERT INTO authorization_requests (authorization_id, client_id, nexus_id, credential_id, transaction_reference, operation_type,
           amount_minor, currency, beneficiary, policy_reference, policy_version, canonical_payload_hash, nonce, issued_at, expires_at, state)

@@ -38,4 +38,4 @@ Superseded in part by [0016](0016-remove-compatibility-paths.md): migration 018 
 Changes made after this decision, in the same release:
 
 - Bank-side rotation now revokes the old credential before inserting the new one, so the one-`ACTIVE` index no longer refuses it (`rotateCredential` in `credentialService.ts`).
-- Migration 017 also adds `BEFORE DELETE` triggers that refuse deleting rows of `authorization_requests`, `credentials`, `nexus_identities`, `recovery_sessions` and `admin_approvals`, and `scripts/db/roles.sql` grants `nexus_app` `DELETE` only on `push_registrations`. Inserts remain uncovered by the triggers.
+- Migration 017 also adds `BEFORE DELETE` triggers that refuse deleting rows of `authorization_requests`, `credentials`, `nexus_identities`, `recovery_sessions` and `admin_approvals`, and `scripts/db/roles.sql` grants `nexus_app` `DELETE` only on `push_registrations`. Inserts remain uncovered by the triggers. Amended by migration 024 (audit finding C-05): authorization inserts are checked (`authorization_insert_state`); credential inserts still are not.
