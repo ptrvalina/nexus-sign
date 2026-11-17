@@ -144,7 +144,8 @@ describe('admin console', { skip: skipWithoutServices }, () => {
        VALUES (gen_random_uuid(), $1, 'authorization.verified', '{}', 'FAILED', 8, 'HTTP 503') RETURNING id, event_id`, [clientId])).rows[0];
     const own = await failed('bank-a');
     const other = await failed('bank-b');
-    const a = await adminSession(server, operatorA);
+    // operator-a's TOTP codes are used up by earlier tests: a fresh operator of bank-a.
+    const a = await adminSession(server, await server.createAdmin('redeliver-a', 'operator', { clientId: 'bank-a' }));
     const redeliver = (id) => a.call('POST', `/admin/api/webhook-deliveries/${id}/redeliver`);
     const accepted = await redeliver(own.id);
     assert.equal(accepted.status, 202, accepted.text);
@@ -153,7 +154,7 @@ describe('admin console', { skip: skipWithoutServices }, () => {
     assert.deepEqual(row, { retry_count: 0, event_id: own.event_id });
     const audit = await server.db.query(`SELECT actor, client_id, details FROM audit_logs WHERE event_type = 'webhook_redelivery_requested'`);
     assert.equal(audit.rows.length, 1);
-    assert.equal(audit.rows[0].actor, 'admin:operator-a');
+    assert.equal(audit.rows[0].actor, 'admin:redeliver-a');
     assert.equal(audit.rows[0].client_id, 'bank-a');
     assert.equal((await redeliver(other.id)).status, 404, 'another bank\'s delivery is not visible');
     const delivered = (await server.db.query(`INSERT INTO webhook_deliveries (event_id, client_id, event_type, payload, status) VALUES (gen_random_uuid(), 'bank-a', 'x', '{}', 'DELIVERED') RETURNING id`)).rows[0];

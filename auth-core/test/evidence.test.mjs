@@ -152,12 +152,12 @@ test('an offline confirmation is sealed and chained, but its code is not treated
 
 // --- Schema 3: enrolment provenance, numbering, chain head ---
 
-async function chainV3(hsm) {
+async function chainV3(hsm, sealedExtra = {}) {
   const keyId = await hsm.evidenceKeyId();
   const records = [];
   const append = async (recordType, body) => {
     const previous = records.at(-1);
-    const sealedPayload = { schemaVersion: '3', recordType, nexusId: '123456789', chainSequence: records.length + 1, previousEvidenceHash: previous?.evidenceHash ?? null, sealKeyId: keyId, ...body };
+    const sealedPayload = { schemaVersion: '3', recordType, nexusId: '123456789', ...sealedExtra, chainSequence: records.length + 1, previousEvidenceHash: previous?.evidenceHash ?? null, sealKeyId: keyId, ...body };
     const hash = evidenceHash(sealedPayload);
     const { signature } = await hsm.signEvidence(Buffer.from(hash, 'hex'));
     // Export shape (mapEvidence): the columns that repeat sealed values, including seal key and schema.
@@ -260,6 +260,33 @@ test('the verifier binds an export to the expected customer and authorization (a
   const otherAuthorization = run('--expect-authorization-id=00000000-0000-4000-8000-000000000000');
   assert.equal(otherAuthorization.status, 1);
   assert.match(otherAuthorization.stderr, /no sealed record of authorization/);
+});
+
+test('the verifier binds an export to the bank sealed in it (finding B-10)', async () => {
+  const hsm = new SoftwareHsmAdapter();
+  const key = await hsm.evidencePublicKeyPem();
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-verify-bank-'));
+  writeFileSync(join(dir, 'keys.pem'), key);
+  const run = (records, ...extra) => {
+    const file = join(dir, `e-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(file, JSON.stringify({ nexusId: '123456789', evidencePublicKeys: [key], records }));
+    return spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-evidence.mjs', import.meta.url)), file, `--public-keys=${join(dir, 'keys.pem')}`, '--allow-unchecked-head', ...extra], { encoding: 'utf8' });
+  };
+  const sealedForBankA = await chainV3(hsm, { clientId: 'bank-a' });
+  const ok = run(sealedForBankA, '--expect-client-id=bank-a');
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  const otherBank = run(sealedForBankA, '--expect-client-id=bank-b');
+  assert.equal(otherBank.status, 1);
+  assert.match(otherBank.stderr, /sealed for bank bank-a, not bank-b/);
+  // Changing the bank in the export breaks the seal, not only the check.
+  const moved = structuredClone(sealedForBankA);
+  moved[0].sealedPayload.clientId = 'bank-b';
+  assert.equal(run(moved, '--expect-client-id=bank-b').status, 1);
+  // Records sealed before the bank identifier was sealed: the check cannot pass.
+  const older = run(await chainV3(hsm), '--expect-client-id=bank-a');
+  assert.equal(older.status, 1);
+  assert.match(older.stderr, /sealed without a bank identifier/);
+  assert.equal(run(await chainV3(hsm)).status, 0, 'without the option an older chain stays valid');
 });
 
 test('the verifier does not call a chain valid when its end was not checked (audit B-05)', async () => {

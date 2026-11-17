@@ -42,6 +42,7 @@ Every schema 3 record seals:
 | `schemaVersion` | `"3"` |
 | `recordType` | One of the types above |
 | `nexusId` | The NEXUS ID whose chain the record belongs to |
+| `clientId` | The bank (client ID) the identity belongs to. Sealed by Auth Core versions after 2.0.0-rc.2 (finding B-10); records sealed earlier have no such field. A verifier must accept its absence |
 | `chainSequence` | Position in the chain: 1 for the first record, then 2, 3 … |
 | `previousEvidenceHash` | `evidenceHash` of the record at `chainSequence - 1`; `null` for the first record |
 | `sealKeyId` | Lowercase hex SHA-256 of the DER SubjectPublicKeyInfo of the HSM evidence key that sealed the record |
@@ -226,6 +227,7 @@ EVIDENCE_VALID records=7 hsm_seal=verified device_signatures=5/5 verified chain=
 | `--public-keys=<file.pem>` | One file with one or more PEM public keys: the current and retired evidence keys, obtained out of band (for example from the HSM key ceremony records). Without it the keys in the export are used, which an audit should not rely on: the script then prints a `WARNING` on standard error, the summary starts with `EVIDENCE_SELF_CONSISTENT` and reports `hsm_seal=verified_with_export_keys`, and the exit code is 3. `--public-key` is accepted as an alias |
 | `--expect-head=<chainSequence>:<evidenceHash>` | The head the bank stored from its latest confirmation. Without it (and without `--heads`) the summary says `head=not_checked`, records removed from the end of the chain are not detected, and a chain export exits with 4 |
 | `--expect-nexus-id=<id>` | Every record must belong to this NEXUS ID; without it a valid export of another customer verifies as well |
+| `--expect-client-id=<id>` | Every record must be sealed for this bank. Records sealed before the bank identifier was sealed fail this check (they cannot show their bank) |
 | `--expect-authorization-id=<id>` | The export must contain the sealed record of this authorization; a single-record export must be that record |
 | `--allow-unchecked-head` | Exit 0 instead of 4 for a chain checked without a head the bank kept, for callers that check the end of the chain themselves |
 | `--heads=<file>` | The heads the bank kept from `evidence.appended` webhooks for this NEXUS ID (JSON array, or one JSON object per line). Each must carry a valid HSM seal and be present unchanged in the export; a head past the end of the export reports `records missing at the end of the chain`. The summary then says `heads=<n>_matched`. New (unreleased, planned for 2.0.0) |

@@ -188,11 +188,16 @@ async function appendRecord(
   const previousEvidenceHash = previous.rows[0]?.evidence_hash ?? null;
   const chainSequence = Number(previous.rows[0]?.chain_sequence ?? 0) + 1;
   const sealKeyId = await hsm.evidenceKeyId();
+  // The bank the identity belongs to is sealed too, so an export proves which
+  // bank a record is for (finding B-10). Records sealed before it lack it.
+  const bank = await tx.query<{ client_id: string }>(`SELECT client_id FROM nexus_identities WHERE nexus_id = $1`, [nexusId]);
+  const clientId = bank.rows[0]?.client_id;
 
   const sealedPayload = {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     recordType,
     nexusId,
+    ...(clientId ? { clientId } : {}),
     chainSequence,
     previousEvidenceHash,
     sealKeyId,
@@ -219,9 +224,8 @@ async function appendRecord(
   // Every new chain head goes to the bank (transactional outbox), so
   // the bank holds HSM-sealed checkpoints that Auth Core cannot take back;
   // verify-evidence --heads detects records removed after any of them.
-  const owner = await tx.query<{ client_id: string }>(`SELECT client_id FROM nexus_identities WHERE nexus_id = $1`, [nexusId]);
-  if (owner.rows[0]) {
-    await enqueueWebhook(owner.rows[0].client_id, 'evidence.appended', {
+  if (clientId) {
+    await enqueueWebhook(clientId, 'evidence.appended', {
       nexusId, recordType, evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash,
       previousEvidenceHash, sealKeyId, hsmSignature: seal.signature.toString('base64'),
     }, tx);

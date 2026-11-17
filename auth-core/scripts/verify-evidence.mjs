@@ -4,7 +4,7 @@
 // (sealed enrolment), and the customer's device signature over the exact
 // transaction bytes.
 //
-//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>] [--expect-nexus-id=<id>] [--expect-authorization-id=<id>] [--reject-offline-code] [--allow-unchecked-head]
+//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>] [--expect-nexus-id=<id>] [--expect-authorization-id=<id>] [--expect-client-id=<bank client id>] [--reject-offline-code] [--allow-unchecked-head]
 //
 // <export.json> is the response of either
 //   GET /v1/authorizations/{id}/evidence        (one record with its enrolment)
@@ -27,14 +27,16 @@
 // --expect-nexus-id: every record must belong to this customer (a valid export
 // of another customer is otherwise valid too). --expect-authorization-id: the
 // export must contain the sealed confirmation of this authorization; a single
-// record must be it (finding B-10).
+// record must be it. --expect-client-id: every record must be sealed for this
+// bank; records sealed before the bank identifier was sealed (Auth Core
+// 2.0.0-rc.2 and earlier) carry none and fail this check (finding B-10).
 import { readFileSync } from 'node:fs';
 import { describeSignedTransaction, legacyRecords, verifyEvidenceChain, verifyEvidenceRecord, verifyRetainedHeads } from './lib/evidence.mjs';
 
 const args = process.argv.slice(2);
 const file = args.find((a) => !a.startsWith('--'));
 if (!file) {
-  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>] [--expect-nexus-id=<id>] [--expect-authorization-id=<id>] [--reject-offline-code] [--allow-unchecked-head]');
+  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>] [--expect-nexus-id=<id>] [--expect-authorization-id=<id>] [--expect-client-id=<bank client id>] [--reject-offline-code] [--allow-unchecked-head]');
   process.exit(2);
 }
 const option = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -80,6 +82,14 @@ const expectedNexusId = option('expect-nexus-id');
 if (expectedNexusId !== undefined) {
   for (const record of records) {
     if (record.sealedPayload?.nexusId !== expectedNexusId) problems.push(`record ${record.chainSequence ?? '?'} belongs to NEXUS ID ${record.sealedPayload?.nexusId}, not ${expectedNexusId}`);
+  }
+}
+const expectedClientId = option('expect-client-id');
+if (expectedClientId !== undefined) {
+  for (const record of records) {
+    const sealed = record.sealedPayload?.clientId;
+    if (sealed === undefined) problems.push(`record ${record.chainSequence ?? '?'} was sealed without a bank identifier, so its bank cannot be checked`);
+    else if (sealed !== expectedClientId) problems.push(`record ${record.chainSequence ?? '?'} was sealed for bank ${sealed}, not ${expectedClientId}`);
   }
 }
 const expectedAuthorizationId = option('expect-authorization-id');

@@ -91,6 +91,8 @@ describe('evidence for every outcome (PostgreSQL)', { skip: skipWithoutServices 
     assert.equal(sealedDecline.policyVersion, '7'); assert.equal(sealedDecline.credentialState, 'ACTIVE');
     assert.deepEqual(sealedDecline.device, { platform: 'ANDROID', securityLevel: 'STRONGBOX' });
     assert.deepEqual(verifyEvidenceChain(records, await keys()), [], 'the offline verifier accepts the chain');
+    // Every record names the bank it was sealed for (finding B-10).
+    assert.deepEqual([...new Set(records.map((r) => r.sealedPayload.clientId))], [clientId]);
   });
 
   test('a revoked device and the payments it leaves open are sealed; the verifier refuses a changed outcome', async () => {
