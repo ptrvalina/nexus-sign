@@ -22,6 +22,15 @@ All notable changes to this project are documented here. Versions follow [Semant
 - Android call module: the published POM names the core SDK with its version.
 - iOS SDK did not compile: `NexusCustomerCall.operator` used a Swift keyword (the JSON key stays `operator`).
 - Verification calls: the side that closes the call (operator decision, release, device cancel) sends the only `bye`; before, the server's state watcher could close the call first with its own reason.
+- Console login: while the account-wide failure limit is hit, the right password with a valid TOTP code still signs in; the password alone gets 429 with `Retry-After` (finding A2-06).
+- Security paths that swallowed errors now log them as security events when the audit write fails (finding A2-10).
+- Device signatures are normalised to low S before they are stored and sealed (findings A1-05, B-06). **Integration impact:** a bank verifier comparing signature bytes with the phone's copy must compare after normalising, or verify the signature instead.
+- Database: `consumed_at` and `bank_commit_*` can be set only on their transition; audit rows take the server time (migration 032, finding C-07). Re-wrapping a stored secret needs the role `nexus_secret_rotator` (migration 033, `roles.sql`; findings B-09, C-08). **Operations impact:** grant `nexus_secret_rotator` to the login that runs `rotateSecretKeys`.
+- Credential and identity changes lock the identity's open authorizations first, in the order confirmation uses; the deadlock between revocation and confirmation is gone (finding A1-07).
+- Auth Core refuses to start in production while unbound legacy webhook secrets remain (finding B-11; run `rotateSecretKeys` first, upgrade guide step 7).
+- HSM: re-initialisation waits until in-flight calls return before `C_Finalize` (finding B-08).
+- iOS SDK: push receipts use the certificate pins (finding D-08); Secure Enclave and PBKDF2 work runs off Swift's cooperative pool (finding D-12).
+- Both SDKs end a verification call whose answer has no DTLS fingerprint (finding D-14).
 
 - CI: with `REQUIRE_ALL_INTEGRATION_SUITES=1` (set in the integration job) an integration suite that cannot run for lack of PostgreSQL, Redis or SoftHSM fails instead of skipping. Release: the workflow builds only when the tag equals `v` + `VERSION` and the `ci.yml` and `security.yml` runs for the tagged commit succeeded.
 - Evidence for every outcome (audit finding B-04): declined, rejected, expired, cancelled and unsigned authorizations and revoked credentials are sealed into the NEXUS ID's evidence chain (record types `AUTHORIZATION_OUTCOME` and `CREDENTIAL_REVOKED`). A database trigger records each outcome with its reason in the transaction of the state change (migration 025), so no code path can end an authorization without it; the expiry worker seals it. `verify-evidence.mjs` checks and prints the new records. **Integration impact:** chains contain the new record types; a bank verifier built on an older `scripts/lib/evidence.mjs` reports them as unknown and must be updated. Test on PostgreSQL (`evidence-outcomes.test.mjs`, 4 cases).
@@ -39,6 +48,9 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ### Added
 
+- Console: `POST /admin/api/webhook-deliveries/{id}/redeliver` sends a `FAILED` webhook again with the same event ID (operator role, audited; finding A2-08).
+- `verify-evidence.mjs --expect-nexus-id`, `--expect-authorization-id` (finding B-10).
+- iOS README: App Attest entitlement and server settings (finding D-15).
 - Final readiness package (`docs/engineering/FINAL_READINESS_PACKAGE.md`, sections A–J), the four technical documents (functional specification, cryptographic architecture, security architecture, security testing guide), a findings register with ASVS/MASVS groups and the D-01 decision, and the functional coverage matrix in the directive's format.
 - Backup and restore test (`backup-restore.test.mjs`): `pg_dump`/`pg_restore` into an empty database keeps every row, the evidence chain verifies offline with the same head, tampering is still detected, triggers are restored, and Auth Core continues the chain ([disaster recovery](docs/operations/disaster-recovery.md#what-a-restore-keeps-tested)).
 - Tests of the App Attest and Play Integrity checks (`attestation-parsers.test.mjs`, 16 cases): an App Attest chain issued by a test root made with OpenSSL and pinned like Apple's root (nonce extension, keyId, rpIdHash, counter, aaguid, foreign root, format), and Play Integrity verdicts in the shape of Google's decoded response (nonce, packages, signing certificate, freshness, HTTP error). These are not real device tokens; recorded tokens from real devices are still needed.

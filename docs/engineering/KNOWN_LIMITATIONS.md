@@ -35,7 +35,7 @@ One: checking the payee against the bank's own records (Verification of Payee) i
 | The in-database ECDSA verifier is PL/pgSQL | Tested against OpenSSL on generated valid and corrupted inputs; slower than native code; not reviewed for timing side channels (it handles public data only) |
 | Conversation bodies are stored in the Auth Core database in clear text | Protected like the rest of the database; not end-to-end encrypted; the bank sets retention |
 | No API rate limiting in Auth Core | Expected at the bank's gateway (finding A1-10) |
-| Low and informational review findings | 29 Low (10 accepted by design, 19 planned before production) and 20 Info findings are open ([findings register](SECURITY_FINDINGS.md)) |
+| Low and informational review findings | 16 Low (10 accepted by design, 6 planned before production: A2-08 secret overlap, B-10 bank identifier in the seal, C-13, D-06, D-11, D-14 relay option and binaries) and 20 Info findings are open ([findings register](SECURITY_FINDINGS.md)) |
 | Customer calls are recorded, not sealed | The call row is immutable once ended; calls authorize nothing |
 | Metrics and the audit export | The confirmation counter counts in the confirming transaction; the audit export needs a lag above the longest transaction |
 
