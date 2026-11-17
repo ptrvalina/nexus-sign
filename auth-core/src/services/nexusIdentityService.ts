@@ -2,6 +2,7 @@ import { randomInt } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { withTransaction, pool } from '../db/pool';
 import { recordAuditEvent } from './auditService';
+import { lockOpenAuthorizations } from './openAuthorizationLocks';
 import { forgetInactivePushRegistrations } from './pushRegistrationService';
 import { setOutcomeReason } from './outcomeReason';
 
@@ -111,6 +112,7 @@ function map(row: IdentityRow): NexusIdentityRecord {
  * mobile sessions and recovery are refused until it is reactivated. */
 export async function suspendNexusIdentity(nexusId: string, reason: string, actor?: string, tx?: PoolClient): Promise<void> {
   await inTransaction(tx, async (client) => {
+    await lockOpenAuthorizations(client, nexusId);
     const result = await client.query(`UPDATE nexus_identities SET status='SUSPENDED', updated_at=now() WHERE nexus_id=$1 AND status='ACTIVE'`, [nexusId]);
     if (result.rowCount === 0) throw new NexusIdentityNotFoundError(nexusId);
     await setOutcomeReason(client, 'IDENTITY_SUSPENDED');
@@ -126,6 +128,7 @@ function inTransaction<T>(tx: PoolClient | undefined, work: (client: PoolClient)
 
 export async function revokeNexusIdentity(nexusId: string, reason: string, actor?: string, tx?: PoolClient): Promise<void> {
   await inTransaction(tx, async (client) => {
+    await lockOpenAuthorizations(client, nexusId);
     const result = await client.query(`UPDATE nexus_identities SET status='REVOKED', updated_at=now() WHERE nexus_id=$1 AND status IN ('ACTIVE','SUSPENDED')`, [nexusId]);
     if (result.rowCount === 0) throw new NexusIdentityNotFoundError(nexusId);
     await setOutcomeReason(client, 'IDENTITY_REVOKED');

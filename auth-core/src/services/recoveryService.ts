@@ -3,6 +3,7 @@ import { pool, withTransaction } from '../db/pool';
 import { redis } from '../db/redis';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { recordAuditEvent, recordSecurityEvent } from './auditService';
+import { lockOpenAuthorizations } from './openAuthorizationLocks';
 import { type CredentialPlatform, type CredentialRecord } from './credentialService';
 import { NexusIdentityNotFoundError } from './nexusIdentityService';
 import { parseP256PublicKey } from '../crypto/p256PublicKey';
@@ -284,6 +285,7 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     const accessTokenHash = createHash('sha256').update(input.accessToken).digest();
     if (!s.access_token_hash || s.access_token_hash.length !== accessTokenHash.length || !timingSafeEqual(s.access_token_hash, accessTokenHash)) throw new RecoverySessionNotFoundError();
     if (s.attempt_count >= MAX_ATTEMPTS) throw new RecoverySessionNotFoundError();
+    await lockOpenAuthorizations(tx, s.nexus_id);
     const identity = await tx.query<{ nexus_id: string; recovery_protocol: number | null; recovery_public_key_pem: string | null; recovery_wrapped_key: Buffer | null; recovery_evidence_id: string | null }>(
       `SELECT nexus_id, recovery_protocol, recovery_public_key_pem, recovery_wrapped_key, recovery_evidence_id
        FROM nexus_identities WHERE nexus_id=$1 AND client_id=$2 AND status='ACTIVE'

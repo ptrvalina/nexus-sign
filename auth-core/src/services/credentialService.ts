@@ -14,6 +14,7 @@ import { queueReplacementNotice } from './pushService';
 import { enqueueWebhook } from './webhookService';
 import { consumeDeviceReplacement } from './deviceReplacementService';
 import { setOutcomeReason } from './outcomeReason';
+import { lockOpenAuthorizations } from './openAuthorizationLocks';
 
 export type CredentialPlatform = 'IOS' | 'ANDROID' | 'OTHER';
 export type CredentialState = 'ACTIVE' | 'REVOKED';
@@ -81,6 +82,7 @@ export class CredentialNotFoundError extends Error {
 export async function createCredential(input: CreateCredentialInput): Promise<CredentialRecord> {
   const publicKey = parseP256PublicKey(input.publicKeyPem);
   return withTransaction(async (client) => {
+    await lockOpenAuthorizations(client, input.nexusId);
     const identity = await client.query<{ status: string }>(
       `SELECT status FROM nexus_identities WHERE nexus_id = $1 AND client_id = $2 FOR UPDATE`,
       [input.nexusId, input.clientId],
@@ -198,6 +200,8 @@ export async function getCredentialForClient(credentialId: string, clientId: str
 
 export async function revokeCredentialForClient(credentialId: string, clientId: string, reason: string): Promise<void> {
   await withTransaction(async (client) => {
+    const owner = await client.query<{ nexus_id: string }>(`SELECT nexus_id FROM credentials WHERE credential_id = $1`, [credentialId]);
+    if (owner.rows[0]) await lockOpenAuthorizations(client, owner.rows[0].nexus_id);
     await setOutcomeReason(client, `REVOKED_BY_BANK:${reason}`);
     const result = await client.query(
       `UPDATE credentials c SET state = 'REVOKED', revoked_at = now()
@@ -226,6 +230,7 @@ export async function revokeCredentialForClient(credentialId: string, clientId: 
  */
 export async function revokeDeviceByCustomer(clientId: string, nexusId: string, requestingCredentialId: string, targetCredentialId: string): Promise<{ remainingActive: number }> {
   return withTransaction(async (client) => {
+    await lockOpenAuthorizations(client, nexusId);
     await client.query(`SELECT 1 FROM nexus_identities WHERE nexus_id = $1 FOR UPDATE`, [nexusId]);
     const rows = await client.query<{ credential_id: string; state: string }>(
       `SELECT credential_id, state FROM credentials WHERE nexus_id = $1 AND credential_id = ANY($2::uuid[]) FOR UPDATE`,
