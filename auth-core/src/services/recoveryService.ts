@@ -2,7 +2,7 @@ import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, 
 import { pool, withTransaction } from '../db/pool';
 import { redis } from '../db/redis';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
-import { recordAuditEvent } from './auditService';
+import { recordAuditEvent, recordSecurityEvent } from './auditService';
 import { type CredentialPlatform, type CredentialRecord } from './credentialService';
 import { NexusIdentityNotFoundError } from './nexusIdentityService';
 import { parseP256PublicKey } from '../crypto/p256PublicKey';
@@ -371,7 +371,7 @@ async function assertRecoveryKeyIntegrity(
   kdf?: { saltB64: string; iterations: number },
 ): Promise<void> {
   const fail = async (reason: string): Promise<never> => {
-    await recordAuditEvent('integrity_violation', { nexusId }, { reason: `recovery key: ${reason}` }).catch(() => undefined);
+    await recordSecurityEvent('integrity_violation', { nexusId }, { reason: `recovery key: ${reason}` });
     throw new ConflictError('Recovery configuration failed its integrity check', 'RECOVERY_INTEGRITY');
   };
   if (!evidenceId) return fail('no sealed recovery configuration');

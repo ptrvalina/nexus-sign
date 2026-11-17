@@ -191,7 +191,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       try {
         await recordPushReceipt(z.string().uuid().parse(req.params.messageId), body.credentialId.toLowerCase(), body.receipt);
       } catch (error) {
-        if (error instanceof NotFoundError) await receiptThrottle.recordFailure(req).catch(() => undefined);
+        if (error instanceof NotFoundError) await receiptThrottle.recordFailure(req);
         throw error;
       }
       res.status(204).send();

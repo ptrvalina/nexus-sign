@@ -2,7 +2,7 @@ import express, { Router, type Response } from 'express';
 import { z } from 'zod';
 import { certificateMatches, getClientRecord, verifyClientCredentials, InvalidClientSecretError } from '../services/clientService';
 import { env } from '../config/env';
-import { recordAuditEvent } from '../services/auditService';
+import { recordAuditEvent, recordSecurityEvent } from '../services/auditService';
 import type { GatewayRequest } from '../middleware/mtlsGateway';
 import { issueToken } from '../services/tokenService';
 import { byIp, loginThrottle } from '../middleware/bruteForceProtection';
@@ -79,9 +79,10 @@ export function buildOAuthRouter(): Router {
       });
     } catch (error) {
       if (error instanceof InvalidClientSecretError) {
-        await throttle.recordFailure(req).catch(() => undefined);
+        // Counting is part of the protection: if it fails, the request fails (A2-10).
+        await throttle.recordFailure(req);
         // The claimed client_id is unverified: details only, not the client column.
-        await recordAuditEvent('oauth_token_rejected', {}, { claimedClientId: String(req.body?.client_id ?? '').slice(0, 128) }).catch(() => undefined);
+        await recordSecurityEvent('oauth_token_rejected', {}, { claimedClientId: String(req.body?.client_id ?? '').slice(0, 128) });
         oauthError(res, 401, 'invalid_client');
         return;
       }

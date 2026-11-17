@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import type { DeferredAudits } from './credentialIntegrity';
 import { pool, withTransaction } from '../db/pool';
-import { recordAuditEvent } from './auditService';
+import { recordAuditEvent, recordSecurityEvent } from './auditService';
 import { enqueueWebhook } from './webhookService';
 import { AuthorizationNotFoundError, type AuthorizationRow } from './authorizationRecord';
 import { authorizationEvidenceProblem } from './authorizationEvidenceCheck';
@@ -82,8 +82,8 @@ function commitInTransaction(authorizationId: string, clientId: string, bankTran
     const problem = await authorizationEvidenceProblem(tx, auth as unknown as AuthorizationRow, deferred);
     if (problem) {
       // Outside the transaction, so the record survives the refusal.
-      deferred.push(() => recordAuditEvent('integrity_violation', { nexusId: auth.nexus_id, clientId },
-        { authorizationId, reason: `commit refused: ${problem}` }).catch(() => undefined));
+      deferred.push(() => recordSecurityEvent('integrity_violation', { nexusId: auth.nexus_id, clientId },
+        { authorizationId, reason: `commit refused: ${problem}` }));
       throw new ConflictError(`The authorization's evidence does not support a commit: ${problem}`, 'EVIDENCE_INVALID');
     }
 

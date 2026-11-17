@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { env } from '../config/env';
 import { pool } from '../db/pool';
-import { recordAuditEvent } from './auditService';
+import { recordSecurityEvent } from './auditService';
 import { evidenceHash, getEvidenceRecord, type SealedEvidence } from './evidenceService';
 
 /**
@@ -65,8 +65,8 @@ export type DeferredAudits = Array<() => Promise<unknown>>;
  */
 export async function assertCredentialIntegrity(credential: CredentialKeys, runner: Pick<PoolClient, 'query'> = pool, deferred?: DeferredAudits): Promise<string> {
   const failure = async (reason: string): Promise<never> => {
-    const audit = () => recordAuditEvent('integrity_violation', { nexusId: credential.nexusId },
-      { credentialId: credential.credentialId, reason }).catch(() => undefined);
+    const audit = () => recordSecurityEvent('integrity_violation', { nexusId: credential.nexusId },
+      { credentialId: credential.credentialId, reason });
     if (deferred) deferred.push(audit); else await audit();
     throw new CredentialIntegrityError(`Credential integrity check failed: ${reason}`);
   };

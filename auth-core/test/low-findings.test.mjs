@@ -74,3 +74,22 @@ test('A failed ROLLBACK keeps the original error and destroys the connection (A1
 
   assert.equal(await withTransaction(async () => 42, fakeSource(false).source), 42);
 });
+
+test('A security event that cannot be audited is written to the log instead of vanishing (A2-10)', async () => {
+  const failingPool = { pool: { query: async () => { throw new Error('database unavailable'); } } };
+  const { recordSecurityEvent } = loadTs('services/auditService.ts', { stubs: { '../db/pool': failingPool, './requestContext': { currentRequestContext: () => undefined } } });
+  const lines = [];
+  await recordSecurityEvent('integrity_violation', { nexusId: '123456789' }, { reason: 'test' }, (line) => lines.push(line));
+  assert.equal(lines.length, 1);
+  const entry = JSON.parse(lines[0]);
+  assert.equal(entry.level, 50);
+  assert.equal(entry.eventType, 'integrity_violation');
+  assert.equal(entry.context.nexusId, '123456789');
+  assert.equal(entry.err, 'database unavailable');
+
+  const okPool = { pool: { query: async () => ({ rows: [], rowCount: 1 }) } };
+  const ok = loadTs('services/auditService.ts', { stubs: { '../db/pool': okPool, './requestContext': { currentRequestContext: () => undefined } } });
+  const none = [];
+  await ok.recordSecurityEvent('integrity_violation', {}, {}, (line) => none.push(line));
+  assert.deepEqual(none, [], 'nothing is logged when the audit row is written');
+});
