@@ -14,10 +14,12 @@ public final class NEXUSSignSDK {
     private let keyManager: KeyManager
     private let attestationProvider = AttestationProvider()
     private let networkClient: NetworkClient
+    private let offlineSignatures: OfflineSignatureQueue
 
     public init(config: NEXUSSignConfig) {
         self.config = config
-        self.state = SDKState(bankID: config.bankID)
+        self.state = SDKState.shared(bankID: config.bankID)
+        self.offlineSignatures = OfflineSignatureQueue(bankID: config.bankID)
         self.keyManager = KeyManager(bankID: config.bankID, accessGroup: config.keychainAccessGroup, state: state)
         self.networkClient = NetworkClient(config: config)
         useDeviceAuthentication()
@@ -32,9 +34,21 @@ public final class NEXUSSignSDK {
     /// The credential ID confirmed by Auth Core, if the device is registered.
     public var credentialID: String? { keyManager.effectiveCredentialID }
 
+    /// Fingerprint of this device's signing key: hex SHA-256 of its DER
+    /// SubjectPublicKeyInfo, computed here from the key in the Secure Enclave,
+    /// not taken from any Auth Core response. After enrolment, replacement or
+    /// recovery the app sends it with the credential ID to the bank's own
+    /// backend, which approves exactly this key for the customer
+    /// (docs/protocol/bank-credential-trust-v1.md). Nil when not registered.
+    public func signingKeyFingerprint() throws -> String? {
+        guard try isRegistered(), let info = try keyManager.activeSigningPublicKeyInfo() else { return nil }
+        return SubjectPublicKeyInfo.fingerprint(info)
+    }
+
     /// True when this device can confirm transactions from a QR code without network.
     public func isOfflineConfirmationAvailable() throws -> Bool {
-        try isRegistered() && keyManager.effectiveOfflineServerPublicKeyPEM != nil && keyManager.existingKey(.offline) != nil
+        try isRegistered() && (keyManager.effectiveOfflineKeyAgreement == "PER_AUTHORIZATION" || keyManager.effectiveOfflineServerPublicKeyPEM != nil)
+            && keyManager.existingKey(.offline) != nil
     }
 
     /// Enrols this device with a BOOTSTRAP token from the host app: generates
@@ -55,7 +69,7 @@ public final class NEXUSSignSDK {
                                                               attestation: attestation, bootstrapToken: bootstrapToken)
             },
             confirmed: { (credentialID: $0.credentialId, offlineServerPublicKeyPEM: $0.offlineServerPublicKeyPem,
-                          deviceSignatures: $0.requestAuthentication == "DEVICE_SIGNATURE") }
+                          offlineKeyAgreement: $0.offlineKeyAgreement, deviceSignatures: $0.requestAuthentication == "DEVICE_SIGNATURE") }
         )
         useDeviceAuthentication()
         return registration
@@ -81,6 +95,33 @@ public final class NEXUSSignSDK {
         return authorization
     }
 
+    /// Opens an audio or video verification session for `authorization` when
+    /// the bank's verification plan asks for one (ADR 0017). The signed bytes
+    /// are verified first, so the terms shown during the call
+    /// (`signedTransaction().confirmationText`) are those the operator sees
+    /// and the device will sign. Auth Core binds the session to this
+    /// authorization and this device. At most three sessions per channel.
+    ///
+    /// Run the call with `callSignalling(for:)` and a media engine
+    /// (NEXUSSignCalls). The call never confirms the payment: after a
+    /// VERIFIED decision, call `approve(authorization:)` as usual.
+    public func openVerificationCall(authorization: NexusAuthorization, channel: VerificationChannel) async throws -> VerificationSession {
+        let signed = try authorization.signedTransaction()
+        guard let expiry = signed.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
+        guard let credentialID = keyManager.effectiveCredentialID else { throw NEXUSSignError.notRegistered }
+        guard signed.credentialId == credentialID else {
+            throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "the authorization is for another device")
+        }
+        let body = try await networkClient.openVerificationSession(authorizationID: authorization.authorizationId, channel: channel)
+        return try CallWire.decodeSession(body, authorizationID: authorization.authorizationId)
+    }
+
+    /// Device-signed signalling of one verification session.
+    public func callSignalling(for session: VerificationSession) throws -> CallSignalling {
+        guard keyManager.effectiveCredentialID != nil else { throw NEXUSSignError.notRegistered }
+        return DeviceCallSignalling(sessionID: session.sessionID, network: networkClient)
+    }
+
     /// Asks for biometric confirmation showing the signed transaction, signs
     /// the canonical bytes and submits the signature.
     public func approve(authorization: NexusAuthorization) async throws -> NEXUSVerificationOutcome {
@@ -101,12 +142,14 @@ public final class NEXUSSignSDK {
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else {
             throw Self.biometryError(policyError)
         }
-        context.localizedReason = signed.confirmationText
+        context.localizedReason = signed.confirmationText(labels: config.promptLabels)
         // The key reference must be fetched with this context for the system
         // prompt to use it (and its localizedReason).
-        let signature = try withBiometryCheck {
-            guard let privateKey = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
-            return try keyManager.sign(payload: canonicalBytes, using: privateKey)
+        let signature = try await offCooperativePool {
+            try self.withBiometryCheck {
+                guard let privateKey = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                return try self.keyManager.sign(payload: canonicalBytes, using: privateKey)
+            }
         }
         do {
             return try await networkClient.signAuthorization(authorizationID: signed.authorizationId, signature: signature).status
@@ -126,7 +169,7 @@ public final class NEXUSSignSDK {
         let parameters = try await networkClient.recoveryParameters()
         let salt = try Self.validated(parameters)
         guard let nexusID = parameters.nexusId, parameters.credentialId == credentialID else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Recovery parameters are for another device")
+            throw NEXUSSignError.invalidServerResponse(detail: "recovery parameters are for another device")
         }
 
         let context = LAContext()
@@ -135,22 +178,24 @@ public final class NEXUSSignSDK {
             throw Self.biometryError(policyError)
         }
         context.localizedReason = config.recoverySetupPromptText
-        let signingKey = try withBiometryCheck { () throws -> SecKey in
-            guard let key = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
-            return key
+        let signingKey = try await offCooperativePool {
+            try self.withBiometryCheck { () throws -> SecKey in
+                guard let key = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                return key
+            }
         }
 
         let phrase = try RecoveryPhrase.generate()
         let recoveryKey = P256.Signing.PrivateKey()
         let recoverySPKI = recoveryKey.publicKey.derRepresentation
-        var seed = RecoveryProtocol.seed(phrase: phrase, salt: salt, iterations: parameters.iterations)
+        var seed = try await offCooperativePool { RecoveryProtocol.seed(phrase: phrase, salt: salt, iterations: parameters.iterations) }
         defer { seed.resetBytes(in: 0..<seed.count) }
         let wrapKey = RecoveryProtocol.wrapKey(seed: seed, nexusID: nexusID)
         let wrapped = try RecoveryProtocol.wrap(recoveryKey, wrapKey: wrapKey,
                                                 associatedData: RecoveryProtocol.associatedData(nexusID: nexusID, recoveryPublicKeySPKI: recoverySPKI))
         let setupInput = RecoveryProtocol.setupSigningInput(nexusID: nexusID, credentialID: credentialID, saltBase64: parameters.salt,
                                                             recoveryPublicKeySPKI: recoverySPKI, wrapped: wrapped)
-        let signature = try withBiometryCheck { try keyManager.sign(payload: setupInput, using: signingKey) }
+        let signature = try await offCooperativePool { try self.withBiometryCheck { try self.keyManager.sign(payload: setupInput, using: signingKey) } }
         try await networkClient.configureRecovery(salt: parameters.salt, recoveryPublicKeyPEM: recoveryKey.publicKey.pemRepresentation,
                                                   wrappedRecoveryKey: wrapped, signature: signature)
         return phrase
@@ -168,10 +213,10 @@ public final class NEXUSSignSDK {
               let recoveryPublicKeyPEM = session.recoveryPublicKeyPem,
               let recoverySPKI = RecoveryProtocol.spki(fromPEM: recoveryPublicKeyPEM),
               let wrapped = session.wrappedRecoveryKey.flatMap({ Data(base64Encoded: $0) }) else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Invalid recovery session")
+            throw NEXUSSignError.invalidRecoverySession(detail: "session ID, nonce, recovery key or wrapped key missing or malformed")
         }
         let salt = try Self.validated(session.parameters)
-        var seed = RecoveryProtocol.seed(phrase: words, salt: salt, iterations: session.parameters.iterations)
+        var seed = try await offCooperativePool { RecoveryProtocol.seed(phrase: words, salt: salt, iterations: session.parameters.iterations) }
         defer { seed.resetBytes(in: 0..<seed.count) }
         let wrapKey = RecoveryProtocol.wrapKey(seed: seed, nexusID: session.nexusId)
         let recoveryKey = try RecoveryProtocol.unwrap(wrapped, wrapKey: wrapKey,
@@ -186,7 +231,7 @@ public final class NEXUSSignSDK {
             result = try await withReplacementKeys(
                 register: { keys in
                     guard let newSigningSPKI = RecoveryProtocol.spki(fromPEM: keys.signing) else {
-                        throw NEXUSSignError.serverError(statusCode: 0, message: "Invalid signing key")
+                        throw NEXUSSignError.cryptographicOperationFailed(detail: "the new signing key could not be encoded")
                     }
                     let proof = try RecoveryProtocol.sign(
                         RecoveryProtocol.proofSigningInput(sessionID: session.sessionId, nonceBase64: session.nonce,
@@ -195,7 +240,7 @@ public final class NEXUSSignSDK {
                     let attestation = await self.buildAttestationPayload(challenge: nonce, keys: keys)
                     return try await self.networkClient.recover(session: session, proof: proof, keys: keys, attestation: attestation)
                 },
-                confirmed: { (credentialID: $0.credentialId, offlineServerPublicKeyPEM: $0.offlineServerPublicKeyPem,
+                confirmed: { (credentialID: $0.credentialId, offlineServerPublicKeyPEM: $0.offlineServerPublicKeyPem, offlineKeyAgreement: $0.offlineKeyAgreement,
                               deviceSignatures: $0.requestAuthentication == "DEVICE_SIGNATURE") }
             )
         } catch NEXUSSignError.serverError(let statusCode, _) where statusCode == 401 {
@@ -210,6 +255,7 @@ public final class NEXUSSignSDK {
     /// authorization. No network is used. Render the confirmation screen from
     /// `challenge.transaction`.
     public func readOfflineChallenge(qrPayload: String) throws -> NexusOfflineChallenge {
+        let version = try DeviceProtocol.qrPayloadVersion(qrPayload)
         let bytes = try DeviceProtocol.qrPayloadBytes(qrPayload)
         let transaction: NexusSignedTransaction
         do {
@@ -221,15 +267,36 @@ public final class NEXUSSignSDK {
             throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "the QR code is for another device")
         }
         guard let expiry = transaction.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
-        return NexusOfflineChallenge(transaction: transaction, canonicalPayload: bytes)
+        return NexusOfflineChallenge(transaction: transaction, canonicalPayload: bytes, requiresDeviceSignature: version >= 2,
+                                     serverPublicKeyPEM: try DeviceProtocol.qrServerPublicKeyPEM(qrPayload))
     }
 
     /// Asks for biometric confirmation showing the transaction and returns the
     /// 8-digit code the customer types on the bank's screen. Works without
     /// network. The code is valid only for this exact transaction.
+    ///
+    /// Offline confirmation v2 (`challenge.requiresDeviceSignature`): the one
+    /// biometric evaluation of the context authorizes the signing key, which
+    /// signs the transaction, and the offline key. The signature is stored
+    /// before the code is computed. Call `submitPendingOfflineSignatures()`
+    /// whenever the app is online; Auth Core confirms the payment when the
+    /// signature arrives.
     public func confirmOffline(_ challenge: NexusOfflineChallenge) async throws -> String {
         guard let credentialID = keyManager.effectiveCredentialID else { throw NEXUSSignError.notRegistered }
-        guard let serverKey = keyManager.effectiveOfflineServerPublicKeyPEM else { throw NEXUSSignError.offlineConfirmationUnavailable }
+        // Offline v3 (finding D-01): a device enrolled for a key per
+        // authorization takes the key from the QR code and never uses a
+        // static one; a device enrolled earlier keeps the static key.
+        let perAuthorization = keyManager.effectiveOfflineKeyAgreement == "PER_AUTHORIZATION"
+        let serverKey: String
+        if perAuthorization {
+            guard let key = challenge.serverPublicKeyPEM else { throw NEXUSSignError.offlineConfirmationUnavailable }
+            serverKey = key
+        } else {
+            guard challenge.serverPublicKeyPEM == nil, let key = keyManager.effectiveOfflineServerPublicKeyPEM else {
+                throw NEXUSSignError.offlineConfirmationUnavailable
+            }
+            serverKey = key
+        }
         guard let expiry = challenge.transaction.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
 
         let context = LAContext()
@@ -237,12 +304,59 @@ public final class NEXUSSignSDK {
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else {
             throw Self.biometryError(policyError)
         }
-        context.localizedReason = challenge.transaction.confirmationText
-        // The key agreement itself shows the biometric prompt of `context`.
-        var shared = try withBiometryCheck { try keyManager.offlineSharedSecret(serverPublicKeyPEM: serverKey, context: context) }
+        context.localizedReason = challenge.transaction.confirmationText(labels: config.promptLabels)
+        if challenge.requiresDeviceSignature {
+            guard UUID(uuidString: challenge.transaction.authorizationId) != nil else {
+                throw NEXUSSignError.authorizationPayloadInvalid(reason: "invalid_qr", detail: "authorization ID is not a UUID")
+            }
+            // Evaluate once; both Secure Enclave keys are then used with this
+            // already-evaluated context, without a second prompt.
+            do {
+                _ = try await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: challenge.transaction.confirmationText(labels: config.promptLabels))
+            } catch {
+                throw NEXUSSignError.authenticationDenied
+            }
+            let signature = try await offCooperativePool {
+                try self.withBiometryCheck {
+                    guard let privateKey = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                    return try self.keyManager.sign(payload: challenge.canonicalPayload, using: privateKey)
+                }
+            }
+            // Stored before the code exists: no code without its signature.
+            try offlineSignatures.add(authorizationID: challenge.transaction.authorizationId, signature: signature)
+        }
+        // The key agreement itself shows the biometric prompt of `context`
+        // (v1); in v2 the context is already evaluated.
+        var shared = try await offCooperativePool {
+            try self.withBiometryCheck { try self.keyManager.offlineSharedSecret(serverPublicKeyPEM: serverKey, context: context) }
+        }
         defer { shared.resetBytes(in: 0..<shared.count) }
-        let key = DeviceProtocol.deriveOfflineKey(sharedSecret: shared, credentialID: credentialID)
+        let key = perAuthorization
+            ? DeviceProtocol.deriveOfflineKeyPerAuthorization(sharedSecret: shared, credentialID: credentialID, authorizationID: challenge.transaction.authorizationId)
+            : DeviceProtocol.deriveOfflineKey(sharedSecret: shared, credentialID: credentialID)
         return DeviceProtocol.offlineCode(tag: DeviceProtocol.offlineTag(key: key, canonicalPayload: challenge.canonicalPayload))
+    }
+
+    /// Offline confirmation v2: uploads the signatures made by
+    /// `confirmOffline` that Auth Core does not have yet. Call it when the app
+    /// starts and whenever it regains a connection. Signatures Auth Core
+    /// accepted, or can never accept, are removed; the others are kept.
+    @discardableResult
+    public func submitPendingOfflineSignatures() async -> OfflineSignatureDelivery {
+        guard keyManager.effectiveCredentialID != nil else {
+            return OfflineSignatureDelivery(delivered: 0, refused: 0, pending: offlineSignatures.pending().count)
+        }
+        return await offlineSignatures.deliver { item in
+            guard UUID(uuidString: item.authorizationId) != nil else { return .refused(statusCode: 0) }
+            do {
+                try await networkClient.uploadDeferredSignature(authorizationID: item.authorizationId, signatureBase64: item.signature)
+                return .accepted
+            } catch NEXUSSignError.serverError(let statusCode, _) {
+                return UploadOutcome.of(statusCode: statusCode)
+            } catch {
+                return .retry
+            }
+        }
     }
 
     // MARK: - Secure push (bank push mode NEXUS)
@@ -290,13 +404,13 @@ public final class NEXUSSignSDK {
             devicePublicKeyPEM: SubjectPublicKeyInfo.pem(fromRawECPoint: ephemeral.publicKey.x963Representation), keyID: nil)
         guard let serverPEM = response.serverPublicKeyPem,
               let serverKey = try? P256.KeyAgreement.PublicKey(pemRepresentation: serverPEM) else {
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Auth Core returned no push key agreement")
+            throw NEXUSSignError.invalidServerResponse(detail: "no push key agreement")
         }
         var shared = try ephemeral.sharedSecretFromKeyAgreement(with: serverKey).withUnsafeBytes { Data($0) }
         defer { shared.resetBytes(in: 0..<shared.count) }
         let key = PushProtocol.derivePushKey(sharedSecret: shared, credentialID: credentialID)
         guard PushProtocol.keyID(key) == response.keyId else {
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Push key agreement did not match")
+            throw NEXUSSignError.invalidServerResponse(detail: "push key agreement did not match")
         }
         try store.save(key, credentialID: credentialID)
     }
@@ -332,25 +446,88 @@ public final class NEXUSSignSDK {
     /// receives push.delivered. The notification extension can send the same
     /// receipt with `NEXUSSignPushReader.sendReceipt`.
     public func confirmPushReceipt(_ message: NexusPushMessage) async throws {
-        try await NEXUSSignPushReader(bankID: config.bankID, keychainAccessGroup: config.pushKeychainAccessGroup)
+        try await NEXUSSignPushReader(bankID: config.bankID, keychainAccessGroup: config.pushKeychainAccessGroup, certificatePins: config.certificatePins)
             .sendReceipt(for: message, baseURL: config.baseURL, timeout: config.requestTimeout)
+    }
+
+    // MARK: - Decline
+
+    /// The customer refuses the payment instead of confirming it. The bank
+    /// receives `authorization.declined` with the reason; the authorization
+    /// can no longer be confirmed.
+    public func decline(authorization: NexusAuthorization, reason: NexusDeclineReason) async throws {
+        try await networkClient.declineAuthorization(authorizationID: authorization.authorizationId, reason: reason)
+    }
+
+    // MARK: - Device replacement
+
+    /// Open device replacements the bank requested for this NEXUS ID. Show
+    /// them to the customer on this (enrolled) device.
+    public func pendingDeviceReplacements() async throws -> [NexusDeviceReplacement] {
+        try await networkClient.deviceReplacements()
+    }
+
+    /// The customer confirms the replacement: the new device can be enrolled
+    /// now instead of after the hold. After enrolment this device is revoked.
+    public func approveDeviceReplacement(replacementID: String) async throws -> NexusDeviceReplacement {
+        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.invalidArgument(detail: "malformed replacement ID") }
+        return try await networkClient.decideDeviceReplacement(replacementID: replacementID, approve: true)
+    }
+
+    /// The customer refuses the replacement ("it wasn't me"); it can never be used.
+    public func cancelDeviceReplacement(replacementID: String) async throws -> NexusDeviceReplacement {
+        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.invalidArgument(detail: "malformed replacement ID") }
+        return try await networkClient.decideDeviceReplacement(replacementID: replacementID, approve: false)
     }
 
     // MARK: - Helpers
 
+    /// Work that blocks a thread for seconds: a Secure Enclave operation that
+    /// waits for the Face ID sheet, and PBKDF2 with up to 5,000,000
+    /// iterations. It runs on this queue rather than on a thread of Swift's
+    /// cooperative pool, so other tasks of the app keep running meanwhile
+    /// (finding D-12).
+    static let blockingWorkQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "com.nexussign.sdk.blocking-work", qos: .userInitiated, attributes: .concurrent)
+        queue.setSpecific(key: blockingWorkQueueKey, value: ())
+        return queue
+    }()
+    static let blockingWorkQueueKey = DispatchSpecificKey<Void>()
+
+    static func offCooperativePool<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            blockingWorkQueue.async { continuation.resume(with: Result { try work() }) }
+        }
+    }
+
+    private func offCooperativePool<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await Self.offCooperativePool(work)
+    }
+
     /// Runs a biometry-bound key operation; when it fails because the
     /// biometric enrolment changed since the device was enrolled, reports
     /// `.credentialInvalidated` instead of a missing key or a denied prompt.
+    /// Maps a failure caused by changed biometrics to `.credentialInvalidated`
+    /// and, as Android does, deletes the dead keys and the registration
+    /// (finding D-07).
     private func withBiometryCheck<T>(_ operation: () throws -> T) throws -> T {
         do {
             return try operation()
         } catch NEXUSSignError.notRegistered where keyManager.effectiveCredentialID != nil && keyManager.biometryChangedSinceEnrolment {
-            throw NEXUSSignError.credentialInvalidated
+            throw forgetInvalidatedCredential()
         } catch NEXUSSignError.offlineConfirmationUnavailable where keyManager.effectiveCredentialID != nil && keyManager.biometryChangedSinceEnrolment {
-            throw NEXUSSignError.credentialInvalidated
+            throw forgetInvalidatedCredential()
         } catch NEXUSSignError.authenticationDenied where keyManager.biometryChangedSinceEnrolment {
-            throw NEXUSSignError.credentialInvalidated
+            throw forgetInvalidatedCredential()
+        } catch NEXUSSignError.credentialInvalidated {
+            throw forgetInvalidatedCredential()
         }
+    }
+
+    private func forgetInvalidatedCredential() -> NEXUSSignError {
+        keyManager.forgetInvalidatedCredential()
+        networkClient.deviceIdentity = nil
+        return .credentialInvalidated
     }
 
     /// Refuses parameters that would weaken the wrapping key (a malicious or
@@ -362,7 +539,7 @@ public final class NEXUSSignSDK {
               parameters.keyLength == RecoveryProtocol.keyLength,
               (100_000...5_000_000).contains(parameters.iterations),
               let salt = Data(base64Encoded: parameters.salt), salt.count >= 16 else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Recovery parameters are outside the supported range")
+            throw NEXUSSignError.invalidServerResponse(detail: "recovery parameters are outside the supported range")
         }
         return salt
     }
@@ -380,7 +557,7 @@ public final class NEXUSSignSDK {
     /// `register` succeeds, discards them otherwise.
     private func withReplacementKeys<T>(
         register: (NetworkClient.EnrolmentKeys) async throws -> T,
-        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, deviceSignatures: Bool)
+        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, offlineKeyAgreement: String?, deviceSignatures: Bool)
     ) async throws -> T {
         // One attempt at a time per process: two attempts would share the
         // replacement tags, and the second would delete the first's keys.
@@ -399,7 +576,7 @@ public final class NEXUSSignSDK {
 
     private func replaceKeys<T>(
         register: (NetworkClient.EnrolmentKeys) async throws -> T,
-        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, deviceSignatures: Bool)
+        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, offlineKeyAgreement: String?, deviceSignatures: Bool)
     ) async throws -> T {
         let prepared = try keyManager.prepareReplacementKeys()
         let result: T
@@ -417,6 +594,7 @@ public final class NEXUSSignSDK {
         let registration = confirmed(result)
         keyManager.commitReplacementKeys(credentialID: registration.credentialID,
                                          offlineServerPublicKeyPEM: registration.offlineServerPublicKeyPEM,
+                                         offlineKeyAgreement: registration.offlineKeyAgreement,
                                          deviceSignatures: registration.deviceSignatures)
         return result
     }
@@ -479,5 +657,222 @@ private actor ReplacementGate {
         } else {
             waiting.removeFirst().resume()
         }
+    }
+}
+
+// MARK: - Customer section, payment mandates, conversations with the bank
+
+extension NEXUSSignSDK {
+
+    private static func checkedID(_ value: String, _ what: String) throws -> String {
+        guard UUID(uuidString: value) != nil else { throw NEXUSSignError.invalidArgument(detail: "malformed \(what)") }
+        return value.lowercased()
+    }
+
+    /// The customer's devices ("My devices"), this one marked `thisDevice`.
+    public func devices() async throws -> [NexusDevice] {
+        let list: DeviceList = try await networkClient.deviceCall("GET", "/v1/mobile/devices")
+        return list.devices
+    }
+
+    /// Removes one of the customer's devices (another one, or this one).
+    /// Returns how many active devices remain.
+    public func removeDevice(credentialID: String) async throws -> Int {
+        let id = try Self.checkedID(credentialID, "credential ID")
+        let result: DeviceRevoked = try await networkClient.deviceCall("POST", "/v1/mobile/devices/\(id)/revoke", body: [:])
+        return result.remainingActiveDevices
+    }
+
+    /// Payments confirmed, declined or open, newest first.
+    public func history(filter: NexusHistoryFilter = .all, before: String? = nil, limit: Int = 50) async throws -> [NexusHistoryEntry] {
+        var query = "filter=\(filter.rawValue)&limit=\(max(1, min(limit, 200)))"
+        if let before, let encoded = before.addingPercentEncoding(withAllowedCharacters: .alphanumerics) { query += "&before=\(encoded)" }
+        let list: HistoryList = try await networkClient.deviceCall("GET", "/v1/mobile/history?\(query)")
+        return list.authorizations
+    }
+
+    /// The sealed evidence of one of the customer's payments, as JSON the bank's
+    /// app can show or hand to the customer; verify it with verify-evidence.
+    public func evidence(authorizationID: String) async throws -> Data {
+        let id = try Self.checkedID(authorizationID, "authorization ID")
+        let object: [String: AnyDecodable] = try await networkClient.deviceCall("GET", "/v1/mobile/authorizations/\(id)/evidence")
+        return try JSONSerialization.data(withJSONObject: object.mapValues { $0.value }, options: [.sortedKeys])
+    }
+
+    public func securityEvents(limit: Int = 50) async throws -> [NexusSecurityEvent] {
+        let list: SecurityEventList = try await networkClient.deviceCall("GET", "/v1/mobile/security-events?limit=\(max(1, min(limit, 200)))")
+        return list.events
+    }
+
+    public func notifications(limit: Int = 50) async throws -> [NexusNotification] {
+        let list: NotificationList = try await networkClient.deviceCall("GET", "/v1/mobile/notifications?limit=\(max(1, min(limit, 200)))")
+        return list.notifications
+    }
+
+    public func settings() async throws -> NexusCustomerSettings {
+        try await networkClient.deviceCall("GET", "/v1/mobile/settings")
+    }
+
+    /// Sets limits (minor units, nil for none), the video-check threshold and
+    /// channels. A relaxing change takes effect after the bank's hold: read
+    /// `effectiveAt` of the result.
+    public func updateSettings(currency: String?, perPaymentLimitMinor: String?, dailyLimitMinor: String?, videoCheckAboveMinor: String?, channels: NexusChannels) async throws -> NexusCustomerSettings {
+        let body: [String: Any] = [
+            "currency": currency as Any? ?? NSNull(), "perPaymentLimitMinor": perPaymentLimitMinor as Any? ?? NSNull(),
+            "dailyLimitMinor": dailyLimitMinor as Any? ?? NSNull(), "videoCheckAboveMinor": videoCheckAboveMinor as Any? ?? NSNull(),
+            "channels": ["push": channels.push, "audio": channels.audio, "video": channels.video],
+        ]
+        return try await networkClient.deviceCall("PUT", "/v1/mobile/settings", body: body)
+    }
+
+    /// The customer suspends their NEXUS ID; open payments are cancelled and
+    /// only the bank can reactivate it after identifying the customer.
+    public func suspendIdentity(reason: NexusSuspendReason) async throws {
+        let _: [String: String] = try await networkClient.deviceCall("POST", "/v1/mobile/identity/suspend", body: ["reason": reason.rawValue])
+    }
+
+    // MARK: Payment mandates
+
+    public func mandates() async throws -> [NexusMandate] {
+        let list: MandateList = try await networkClient.deviceCall("GET", "/v1/mobile/mandates")
+        return list.mandates
+    }
+
+    public func mandate(id: String) async throws -> NexusMandate {
+        try await networkClient.deviceCall("GET", "/v1/mobile/mandates/\(try Self.checkedID(id, "mandate ID"))")
+    }
+
+    /// Parses and checks the signed terms (`MandateTermsParser`): domain
+    /// NEXUS-SIGN/MANDATE (never payment bytes), canonical bytes with exactly
+    /// the protocol's fields, this mandate and this device, display rules on
+    /// every shown value, consistent limits and validity, SHA-256 equal to termsHash.
+    public func mandateTerms(_ mandate: NexusMandate) throws -> NexusMandateTerms {
+        guard let credentialID = keyManager.effectiveCredentialID else {
+            throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "this device is not enrolled")
+        }
+        do {
+            return try MandateTermsParser.parse(termsBase64: mandate.termsBase64, termsHash: mandate.termsHash,
+                                                mandateId: mandate.mandateId, credentialId: credentialID)
+        } catch let rejected as SignedPayload.Rejected {
+            throw NEXUSSignError.authorizationPayloadInvalid(reason: rejected.reason, detail: rejected.detail)
+        }
+    }
+
+    /// Signs the mandate after biometric authentication, with the prompt built
+    /// from the signed terms. Show `mandateTerms(_:)` to the customer first.
+    public func signMandate(_ mandate: NexusMandate) async throws -> NexusMandate {
+        let terms = try mandateTerms(mandate)
+        guard let bytes = Data(base64Encoded: mandate.termsBase64) else { throw NEXUSSignError.authorizationPayloadInvalid(reason: "invalid_json", detail: "termsBase64") }
+        let context = LAContext()
+        var policyError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else { throw Self.biometryError(policyError) }
+        context.localizedReason = terms.confirmationText
+        let signature = try await offCooperativePool {
+            try self.withBiometryCheck {
+                guard let privateKey = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                return try self.keyManager.sign(payload: bytes, using: privateKey)
+            }
+        }
+        return try await networkClient.deviceCall("POST", "/v1/mobile/mandates/\(mandate.mandateId)/signature",
+                                                  body: ["signature": signature.base64EncodedString(), "signatureFormat": "der"])
+    }
+
+    public enum MandateAction: String { case decline, suspend, resume, revoke }
+
+    public func mandate(id: String, action: MandateAction) async throws -> NexusMandate {
+        try await networkClient.deviceCall("POST", "/v1/mobile/mandates/\(try Self.checkedID(id, "mandate ID"))/\(action.rawValue)", body: [:])
+    }
+
+    // MARK: Conversations with the bank
+
+    public func conversations() async throws -> [NexusConversation] {
+        let list: ConversationList = try await networkClient.deviceCall("GET", "/v1/mobile/conversations")
+        return list.conversations
+    }
+
+    /// Opens a conversation, optionally about one of the customer's payments.
+    /// `clientMessageID` makes a retry safe.
+    public func openConversation(topic: String, message: String, authorizationID: String? = nil, attachment: NexusConversationAttachment? = nil,
+                                 clientMessageID: String = UUID().uuidString) async throws -> (NexusConversation, NexusConversationMessage) {
+        var body: [String: Any] = ["topic": topic, "body": message, "clientMessageId": clientMessageID]
+        if let authorizationID { body["authorizationId"] = try Self.checkedID(authorizationID, "authorization ID") }
+        if let attachment { body["attachment"] = Self.attachmentJSON(attachment) }
+        let opened: ConversationOpened = try await networkClient.deviceCall("POST", "/v1/mobile/conversations", body: body)
+        return (opened.conversation, opened.message)
+    }
+
+    /// Messages after `after` (0 for the whole history); the bank's messages are marked delivered.
+    public func conversationMessages(conversationID: String, after: Int = 0) async throws -> (NexusConversation, [NexusConversationMessage]) {
+        let thread: ConversationThread = try await networkClient.deviceCall("GET", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/messages?after=\(max(0, after))")
+        return (thread.conversation, thread.messages)
+    }
+
+    public func sendMessage(conversationID: String, text: String, attachment: NexusConversationAttachment? = nil, clientMessageID: String = UUID().uuidString) async throws -> NexusConversationMessage {
+        var body: [String: Any] = ["body": text, "clientMessageId": clientMessageID]
+        if let attachment { body["attachment"] = Self.attachmentJSON(attachment) }
+        let sent: MessageSent = try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/messages", body: body)
+        return sent.message
+    }
+
+    public func markRead(conversationID: String, upToSequence: Int) async throws {
+        let _: [String: Int] = try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/read", body: ["upToSequence": upToSequence])
+    }
+
+    /// "Talk to a person": the conversation waits for an operator of the bank.
+    public func requestAgent(conversationID: String) async throws -> NexusConversation {
+        try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/handover", body: [:])
+    }
+
+    // MARK: Calls the customer starts ("talk to the bank")
+
+    /// Asks the bank for a call; it waits for an operator of the bank. Use
+    /// `customerCallSignalling(for:)` with the call engine as for a
+    /// verification call. Refused with 409 `CALL_CHANNEL_NOT_ENABLED` when the
+    /// bank does not take calls on that channel, `CALL_ALREADY_OPEN` when one is open.
+    public func requestBankCall(channel: VerificationChannel, topic: String, conversationID: String? = nil) async throws -> NexusCustomerCall {
+        guard keyManager.effectiveCredentialID != nil else { throw NEXUSSignError.notRegistered }
+        var body: [String: Any] = ["channel": channel.rawValue, "topic": topic]
+        if let conversationID { body["conversationId"] = try Self.checkedID(conversationID, "conversation ID") }
+        let joined: CustomerCallJoin = try await networkClient.deviceCall("POST", "/v1/mobile/customer-calls", body: body)
+        return joined.call
+    }
+
+    public func bankCalls() async throws -> [NexusCustomerCall] {
+        let list: CustomerCallList = try await networkClient.deviceCall("GET", "/v1/mobile/customer-calls")
+        return list.calls
+    }
+
+    public func bankCall(callID: String) async throws -> NexusCustomerCall {
+        let joined: CustomerCallJoin = try await networkClient.deviceCall("GET", "/v1/mobile/customer-calls/\(try Self.checkedID(callID, "call ID"))")
+        return joined.call
+    }
+
+    /// Device-signed signalling of a call this device asked for.
+    public func customerCallSignalling(for call: NexusCustomerCall) throws -> CallSignalling {
+        guard keyManager.effectiveCredentialID != nil else { throw NEXUSSignError.notRegistered }
+        return CustomerCallSignalling(callID: try Self.checkedID(call.callId, "call ID"), network: networkClient)
+    }
+
+    public func closeConversation(conversationID: String) async throws -> NexusConversation {
+        try await networkClient.deviceCall("POST", "/v1/mobile/conversations/\(try Self.checkedID(conversationID, "conversation ID"))/close", body: [:])
+    }
+
+    private static func attachmentJSON(_ a: NexusConversationAttachment) -> [String: Any] {
+        ["reference": a.reference, "sha256": a.sha256, "mediaType": a.mediaType, "fileName": a.fileName, "sizeBytes": a.sizeBytes]
+    }
+}
+
+/// Decodes any JSON value (for passing evidence through unchanged).
+struct AnyDecodable: Decodable {
+    let value: Any
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { value = NSNull() }
+        else if let b = try? c.decode(Bool.self) { value = b }
+        else if let i = try? c.decode(Int64.self) { value = i }
+        else if let d = try? c.decode(Double.self) { value = d }
+        else if let s = try? c.decode(String.self) { value = s }
+        else if let a = try? c.decode([AnyDecodable].self) { value = a.map { $0.value } }
+        else { value = try c.decode([String: AnyDecodable].self).mapValues { $0.value } }
     }
 }

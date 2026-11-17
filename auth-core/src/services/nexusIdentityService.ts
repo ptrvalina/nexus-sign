@@ -2,7 +2,9 @@ import { randomInt } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { withTransaction, pool } from '../db/pool';
 import { recordAuditEvent } from './auditService';
+import { lockOpenAuthorizations } from './openAuthorizationLocks';
 import { forgetInactivePushRegistrations } from './pushRegistrationService';
+import { setOutcomeReason } from './outcomeReason';
 
 export interface NexusIdentityRecord {
   nexusId: string;
@@ -37,14 +39,43 @@ async function allocateNexusId(client: { query: Function }): Promise<string> {
   throw new Error('Unable to allocate a unique 9-digit NEXUS ID');
 }
 
-export async function createNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord> {
-  try {
-    return await withTransaction(async (client) => {
-    const duplicate = await client.query(
-      `SELECT nexus_id FROM nexus_identities WHERE client_id = $1 AND bank_customer_ref = $2 AND status <> 'REVOKED' FOR UPDATE`,
+/**
+ * Creates the NEXUS ID for a bank customer, or returns the one that already
+ * exists for the same bank client and customer reference (`replayed: true`).
+ *
+ * A retry after a lost response (audit finding A1-04) used to get 409 with no
+ * NEXUS ID, and the bank could neither learn the ID nor create another. The
+ * reference is scoped to the calling bank client, so returning the existing
+ * identity tells the caller nothing it does not already own.
+ */
+export async function createNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord & { replayed: boolean }> {
+  // allocateNexusId checks before inserting, so two concurrent requests can
+  // still draw the same random ID; the primary key then rejects one of them,
+  // which retries with a new ID. A violation of the customer-reference index
+  // means a concurrent request created the identity: the next attempt finds
+  // and returns it.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await insertNexusIdentity(clientId, bankCustomerRef);
+    } catch (error: unknown) {
+      const pg = error as { code?: string; constraint?: string };
+      if (pg?.code !== '23505') throw error;
+      if (attempt >= 3) {
+        if (pg.constraint === 'nexus_identities_pkey') throw new Error('Unable to allocate a unique 9-digit NEXUS ID');
+        throw new DuplicateBankCustomerError(bankCustomerRef);
+      }
+    }
+  }
+}
+
+async function insertNexusIdentity(clientId: string, bankCustomerRef: string): Promise<NexusIdentityRecord & { replayed: boolean }> {
+  return withTransaction(async (client) => {
+    const existing = await client.query<IdentityRow>(
+      `SELECT nexus_id, client_id, bank_customer_ref, status, created_at, updated_at, last_used_at
+         FROM nexus_identities WHERE client_id = $1 AND bank_customer_ref = $2 AND status <> 'REVOKED' FOR UPDATE`,
       [clientId, bankCustomerRef],
     );
-    if (duplicate.rows[0]) throw new DuplicateBankCustomerError(bankCustomerRef);
+    if (existing.rows[0]) return { ...map(existing.rows[0]), replayed: true };
 
     const nexusId = await allocateNexusId(client);
     const result = await client.query<IdentityRow>(
@@ -56,14 +87,8 @@ export async function createNexusIdentity(clientId: string, bankCustomerRef: str
     const row = result.rows[0];
     if (!row) throw new Error('NEXUS identity insert returned no row');
     await recordAuditEvent('identity_created', { nexusId }, {}, client);
-    return map(row);
-    });
-  } catch (error: unknown) {
-    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === '23505') {
-      throw new DuplicateBankCustomerError(bankCustomerRef);
-    }
-    throw error;
-  }
+    return { ...map(row), replayed: false };
+  });
 }
 
 export async function getNexusIdentityForClient(nexusId: string, clientId: string): Promise<NexusIdentityRecord> {
@@ -85,10 +110,12 @@ function map(row: IdentityRow): NexusIdentityRecord {
 
 /** Suspends an identity: open authorizations are cancelled, and signing,
  * mobile sessions and recovery are refused until it is reactivated. */
-export async function suspendNexusIdentity(nexusId: string, reason: string, actor?: string): Promise<void> {
-  await withTransaction(async (client) => {
+export async function suspendNexusIdentity(nexusId: string, reason: string, actor?: string, tx?: PoolClient): Promise<void> {
+  await inTransaction(tx, async (client) => {
+    await lockOpenAuthorizations(client, nexusId);
     const result = await client.query(`UPDATE nexus_identities SET status='SUSPENDED', updated_at=now() WHERE nexus_id=$1 AND status='ACTIVE'`, [nexusId]);
     if (result.rowCount === 0) throw new NexusIdentityNotFoundError(nexusId);
+    await setOutcomeReason(client, 'IDENTITY_SUSPENDED');
     const cancelled = await client.query(`UPDATE authorization_requests SET state='CANCELLED' WHERE nexus_id=$1 AND state='PENDING_USER'`, [nexusId]);
     await recordAuditEvent('identity_suspended', { nexusId, actor }, { reason, cancelledAuthorizations: cancelled.rowCount ?? 0 }, client);
   });
@@ -101,8 +128,10 @@ function inTransaction<T>(tx: PoolClient | undefined, work: (client: PoolClient)
 
 export async function revokeNexusIdentity(nexusId: string, reason: string, actor?: string, tx?: PoolClient): Promise<void> {
   await inTransaction(tx, async (client) => {
+    await lockOpenAuthorizations(client, nexusId);
     const result = await client.query(`UPDATE nexus_identities SET status='REVOKED', updated_at=now() WHERE nexus_id=$1 AND status IN ('ACTIVE','SUSPENDED')`, [nexusId]);
     if (result.rowCount === 0) throw new NexusIdentityNotFoundError(nexusId);
+    await setOutcomeReason(client, 'IDENTITY_REVOKED');
     await client.query(`UPDATE credentials SET state='REVOKED', revoked_at=now() WHERE nexus_id=$1 AND state = 'ACTIVE'`, [nexusId]);
     const cancelled = await client.query(`UPDATE authorization_requests SET state='CANCELLED' WHERE nexus_id=$1 AND state='PENDING_USER'`, [nexusId]);
     await recordAuditEvent('identity_revoked', { nexusId, actor }, { reason, cancelledAuthorizations: cancelled.rowCount ?? 0 }, client);

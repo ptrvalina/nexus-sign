@@ -1,7 +1,10 @@
 // Enrolling a new device for an identity that already has one must not
-// silently take the identity over (NXS-002): it needs the bank's explicit
+// silently take the identity over: it needs the bank's explicit
 // replacement authorization, which is audited, sealed into the evidence
-// chain, reported by webhook and announced on the replaced device.
+// chain, reported by webhook and announced on the replaced device. Since the
+// A2-01 fix the bank's request is held until the enrolled device approves it
+// (or the hold passes; device-replacement-hold.test.mjs), so these tests
+// approve it from the old device first.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
@@ -24,6 +27,15 @@ describe('device replacement', { skip: skipWithoutServices }, () => {
     bank = await bankSession(server, await server.registerBank('bank-replace', { webhookUrl: 'https://hooks.bank.example/nexus', pushMode: 'NEXUS' }));
   });
   after(async () => { await server?.stop(); });
+
+  async function approveOnDevice(device, replacementId) {
+    const listed = await call(server.baseUrl, 'GET', '/v1/mobile/device-replacements', { device });
+    assert.equal(listed.status, 200, listed.text);
+    assert.ok(listed.json.replacements.some((r) => r.replacementId === replacementId));
+    const approved = await call(server.baseUrl, 'POST', `/v1/mobile/device-replacements/${replacementId}/approve`, { device, body: {} });
+    assert.equal(approved.status, 200, approved.text);
+    assert.equal(approved.json.state, 'APPROVED');
+  }
 
   test('a bootstrap token for an identity with an enrolled device is refused without a replacement authorization', async () => {
     const { nexusId } = await bank.createIdentity();
@@ -75,6 +87,10 @@ describe('device replacement', { skip: skipWithoutServices }, () => {
 
     const invalid = await bank.bootstrapToken(nexusId, { replacement: { method: 'SOMETHING', reference: 'x' } });
     assert.equal(invalid.status, 400);
+    const held = await bank.bootstrapToken(nexusId, { replacement: { method: 'BRANCH_VISIT', reference: 'case-2026-0042' } });
+    assert.equal(held.status, 202, held.text);
+    assert.equal(held.json.status, 'REPLACEMENT_PENDING');
+    await approveOnDevice(oldDevice, held.json.replacementId);
     const token = await bank.bootstrapToken(nexusId, { replacement: { method: 'BRANCH_VISIT', reference: 'case-2026-0042' } });
     assert.equal(token.status, 201, token.text);
     const newDevice = await enrolWithToken(server, nexusId, token.json.accessToken);
@@ -112,8 +128,12 @@ describe('device replacement', { skip: skipWithoutServices }, () => {
 
   test('a replacement token cannot be used for another identity', async () => {
     const first = await bank.createIdentity();
-    await bank.enrolDevice(first.nexusId);
+    const firstDevice = await bank.enrolDevice(first.nexusId);
+    const held = await bank.bootstrapToken(first.nexusId, { replacement: { method: 'VIDEO_IDENTIFICATION', reference: 'v-1' } });
+    assert.equal(held.status, 202, held.text);
+    await approveOnDevice(firstDevice, held.json.replacementId);
     const token = await bank.bootstrapToken(first.nexusId, { replacement: { method: 'VIDEO_IDENTIFICATION', reference: 'v-1' } });
+    assert.equal(token.status, 201, token.text);
     const second = await bank.createIdentity();
     const credentialsBefore = await server.db.query(`SELECT count(*)::int AS n FROM credentials WHERE nexus_id = $1`, [second.nexusId]);
     const device = await enrolWithToken(server, first.nexusId, token.json.accessToken);

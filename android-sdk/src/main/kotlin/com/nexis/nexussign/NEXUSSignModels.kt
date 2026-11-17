@@ -105,12 +105,42 @@ class NexusOfflineChallenge internal constructor(
     /** The transaction exactly as it is confirmed; render the screen from this. */
     val transaction: NexusSignedTransaction,
     internal val canonicalPayload: ByteArray,
+    /** Offline confirmation v2 (QR `NXS2.`): [NEXUSSignSDK.confirmOffline]
+     * also signs the transaction and keeps the signature for upload. */
+    val requiresDeviceSignature: Boolean = false,
 )
 
 enum class NEXUSVerificationOutcome { VERIFIED, FAILED, EXPIRED }
+
+/**
+ * A device replacement the bank requested for this customer's NEXUS ID
+ * (audit finding A2-01). Show it on the enrolled device: the customer
+ * approves it (the new device can be enrolled at once) or cancels it
+ * ("it wasn't me"). Without a decision it becomes usable at [notBefore].
+ */
+@Serializable
+data class NexusDeviceReplacement(
+    val replacementId: String,
+    val nexusId: String,
+    /** BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION or OTHER. */
+    val method: String,
+    val reference: String,
+    /** PENDING or APPROVED while open; CANCELLED, USED or EXPIRED afterwards. */
+    val state: String,
+    val requestedAt: String,
+    val notBefore: String,
+    val expiresAt: String,
+    val usable: Boolean,
+)
+
+/** Why the customer declined a payment. [NOT_ME] ("it wasn't me") is reported to the bank as a fraud signal. */
+enum class NexusDeclineReason { NOT_ME, WRONG_DETAILS, OTHER }
+
+@Serializable
+internal data class DeviceReplacementList(val replacements: List<NexusDeviceReplacement>)
 
 @Serializable
 internal data class VerifyResponse(val status: String, val reason: String? = null)
 
 @Serializable
-internal data class ErrorResponse(val error: String? = null, val serverTime: Long? = null)
+internal data class ErrorResponse(val error: String? = null, val serverTime: Long? = null, val code: String? = null)

@@ -30,9 +30,14 @@ FIELDS = frozenset({
 
 AMOUNT = re.compile(r'^(0|[1-9][0-9]{0,29})$')
 CURRENCY = re.compile(r'^[A-Z]{3}$')
+# Protocol v1 formats: lowercase UUIDs, 9-digit NEXUS ID, 32-byte nonce in lowercase hex.
+UUID_V1 = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+NEXUS_ID = re.compile(r'^[0-9]{9}$')
+NONCE = re.compile(r'^[0-9a-f]{64}$')
 BENEFICIARY_KEY = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 BENEFICIARY_MAX_FIELDS = 16
-BENEFICIARY_MAX_VALUE_LENGTH = 512
+# ISO 20022 Max140Text, in UTF-16 code units (; 512 until 2.0.0-rc.2).
+BENEFICIARY_MAX_VALUE_LENGTH = 140
 TIMESTAMP = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$')
 
 
@@ -131,18 +136,78 @@ def validate_beneficiary(beneficiary):
             return f'beneficiary.{key} must be a string'
         if len(value.encode('utf-16-le', 'surrogatepass')) // 2 > BENEFICIARY_MAX_VALUE_LENGTH:
             return f'beneficiary.{key} is longer than {BENEFICIARY_MAX_VALUE_LENGTH} characters'
-        if not is_display_safe(value):
-            return f'beneficiary.{key} contains a control, format or separator character'
+        if value == '':
+            return f'beneficiary.{key} is empty'
+        problem = display_text_problem(value)
+        if problem:
+            return f'beneficiary.{key}: {problem}'
+        # Finding D-02: no second account number outside the account fields.
+        if key not in ACCOUNT_KEYS and looks_like_iban(value):
+            return f'beneficiary.{key} looks like an account number'
+        if key == 'iban' and not is_valid_iban(value):
+            return 'beneficiary.iban is not a valid IBAN in electronic format'
+        if key == 'bic' and not _BIC.match(value):
+            return 'beneficiary.bic is not a valid BIC'
     return None
 
 
-_DISPLAY_UNSAFE = {'Cc', 'Cf', 'Zl', 'Zp'}
+_DISPLAY_UNSAFE = {'Cc', 'Cf', 'Zl', 'Zp', 'Cs'}
+_PROMPT_SEPARATORS = {'\u2192', '\u00b7', '\u2022'}
+ACCOUNT_KEYS = ('iban', 'account', 'account_number')
+
+
+def looks_like_iban(value):
+    """True when the value without spaces and hyphens, upper-cased, is a valid IBAN."""
+    return is_valid_iban(value.replace(' ', '').replace('-', '').upper())
+_IBAN = re.compile(r'[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\Z')
+_BIC = re.compile(r'[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?\Z')
+# Fixed code point ranges, identical in Auth Core and both SDKs, so that the
+# decision does not depend on the runtime's Unicode version.
+_CONFUSABLE_SCRIPTS = {
+    'Latin': re.compile('[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]'),
+    'Cyrillic': re.compile('[\u0400-\u052F]'),
+    'Greek': re.compile('[\u0370-\u03FF\u1F00-\u1FFF]'),
+    'Armenian': re.compile('[\u0530-\u058F]'),
+    'Cherokee': re.compile('[\u13A0-\u13FF\uAB70-\uABBF]'),
+}
 
 
 def is_display_safe(text):
     """Same rule as Auth Core and the SDKs: no control, format (bidi,
-    zero-width) or line/paragraph separator characters in displayed text."""
+    zero-width), line/paragraph separator or lone surrogate characters."""
     return not any(unicodedata.category(ch) in _DISPLAY_UNSAFE for ch in text)
+
+
+def display_text_problem(text):
+    """The display text rules of authorization protocol v1 for values the
+    customer reads (beneficiary values, transaction_reference); returns the
+    broken rule or None. Mirrors displayTextViolation in Auth Core."""
+    if not is_display_safe(text):
+        return 'control, format or separator character'
+    if any(ch in _PROMPT_SEPARATORS for ch in text):
+        return 'the characters \u2192 \u00b7 \u2022 are reserved for the confirmation prompt'
+    if unicodedata.normalize('NFC', text) != text:
+        return 'not in Unicode Normalization Form C'
+    if unicodedata.normalize('NFKC', text) != text:
+        return 'compatibility characters are not allowed'
+    if any(unicodedata.category(ch) == 'Zs' and ch != ' ' for ch in text):
+        return 'only the ASCII space is allowed'
+    if text[:1] == ' ' or text[-1:] == ' ':
+        return 'leading or trailing space'
+    if '  ' in text:
+        return 'repeated spaces'
+    if any(unicodedata.category(ch) == 'Nd' and ch not in '0123456789' for ch in text):
+        return 'only ASCII digits are allowed'
+    if sum(1 for pattern in _CONFUSABLE_SCRIPTS.values() if pattern.search(text)) > 1:
+        return 'Latin, Cyrillic, Greek, Armenian and Cherokee letters mixed in one value'
+    return None
+
+
+def is_valid_iban(value):
+    if not _IBAN.match(value) or not 2 <= int(value[2:4]) <= 98:
+        return False
+    rearranged = value[4:] + value[:4]
+    return int(''.join(str(int(ch, 36)) for ch in rearranged)) % 97 == 1
 
 
 # --- Strict parser (what a verifying device does) ---
@@ -217,9 +282,19 @@ def parse_signed_payload(data):
         raise Rejected('invalid_value', 'currency')
     if not TIMESTAMP.match(obj['issued_at']) or not TIMESTAMP.match(obj['expires_at']):
         raise Rejected('invalid_value', 'timestamps')
+    if not UUID_V1.match(obj['authorization_id']) or not UUID_V1.match(obj['credential_id']):
+        raise Rejected('invalid_value', 'authorization_id/credential_id')
+    if not NEXUS_ID.match(obj['nexus_id']):
+        raise Rejected('invalid_value', 'nexus_id')
+    if not NONCE.match(obj['nonce']):
+        raise Rejected('invalid_value', 'nonce')
     for key in FIELDS - {'beneficiary'}:
         if not is_display_safe(obj[key]):
             raise Rejected('invalid_value', f'{key} contains a control, format or separator character')
+    for key in ('transaction_reference', 'operation_type'):
+        problem = display_text_problem(obj[key])
+        if problem:
+            raise Rejected('invalid_value', f'{key}: {problem}')
     return {k: (dict(v) if isinstance(v, dict) else str(v)) for k, v in obj.items()}
 
 

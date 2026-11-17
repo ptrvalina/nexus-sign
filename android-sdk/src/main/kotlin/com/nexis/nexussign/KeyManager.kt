@@ -288,6 +288,13 @@ internal class KeyManager(config: NEXUSSignConfig, aliasStore: ActiveAliasStore)
 
     // --- Reporting ---
 
+    /** DER SubjectPublicKeyInfo of the active signing key, read from the Keystore. */
+    fun activeSigningPublicKeyInfo(): ByteArray? = try {
+        keyStore.getCertificate(slots.active())?.publicKey?.encoded
+    } catch (e: Exception) {
+        throw NEXUSSignError.KeyOperationFailed(e)
+    }
+
     /** Where the active signing key lives. */
     fun securityLevel(): SecurityLevel = securityLevel(slots.active())
 

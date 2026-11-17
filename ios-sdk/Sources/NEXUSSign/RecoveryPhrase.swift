@@ -7,11 +7,6 @@ import CryptoKit
 /// key that wraps the recovery key (see `RecoveryProtocol`).
 enum RecoveryPhrase {
 
-    enum GenerationError: Error {
-        case wordlistUnavailable
-        case randomGenerationFailed(OSStatus)
-    }
-
     /// Generates a fresh 12-word phrase from 128 bits of
     /// `SecRandomCopyBytes` entropy. Call this once, right after a
     /// successful `bootstrap()`, show the phrase to the customer, and
@@ -21,7 +16,7 @@ enum RecoveryPhrase {
         var entropy = [UInt8](repeating: 0, count: 16) // 128 bits
         let status = SecRandomCopyBytes(kSecRandomDefault, entropy.count, &entropy)
         guard status == errSecSuccess else {
-            throw GenerationError.randomGenerationFailed(status)
+            throw NEXUSSignError.randomGenerationFailed(status: status)
         }
         return try words(fromEntropy: entropy)
     }
@@ -76,7 +71,7 @@ enum RecoveryPhrase {
             let end = allBits.index(index, offsetBy: 11)
             let chunk = String(allBits[index..<end])
             guard let wordIndex = Int(chunk, radix: 2), wordIndex < wordlist.count else {
-                throw GenerationError.wordlistUnavailable
+                throw NEXUSSignError.configurationInvalid(detail: "the recovery word list is missing from the SDK bundle")
             }
             result.append(wordlist[wordIndex])
             index = end
@@ -115,7 +110,7 @@ enum RecoveryPhrase {
     }()
 
     private static func loadWordlist() throws -> [String] {
-        guard let wordlist else { throw GenerationError.wordlistUnavailable }
+        guard let wordlist else { throw NEXUSSignError.configurationInvalid(detail: "the recovery word list is missing from the SDK bundle") }
         return wordlist
     }
 }

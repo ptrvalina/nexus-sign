@@ -1,12 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../middleware/auth';
-import { createNexusIdentity, getNexusIdentityForClient } from '../services/nexusIdentityService';
+import { createNexusIdentity, getNexusIdentityForClient, reactivateNexusIdentity, suspendNexusIdentity } from '../services/nexusIdentityService';
+import { getSettings, listDevices } from '../services/customerAccountService';
+import { bankClose, bankConversation, botSend, verifyConversation } from '../services/conversationService';
+import { bankCall } from '../services/customerCallService';
+import { createMandate, getMandateForClient, listMandatesForIdentity, requestMandateDebit, withdrawMandate } from '../services/mandateService';
 import { getCredentialForClient, revokeCredentialForClient } from '../services/credentialService';
 import { createAuthorization } from '../services/authorizationService';
 import { getAuthorizationForClient } from '../services/authorizationRecord';
+import { reportedState } from '../services/authorizationExpiry';
+import { confirmationView } from '../services/authorizationEvidenceCheck';
 import { confirmAuthorizationOffline, getOfflineChallenge, verifyAuthorization } from '../services/authorizationConfirmation';
 import { finalizeBankTransaction, getBankTransactionState, requestCommit } from '../services/bankTransactionService';
+import { cancelAuthorizationByBank } from '../services/authorizationDecline';
 import { completeVerificationSession, escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
 import { getAuthorizationEvidencePosition, getChainHead, getEvidenceChain, getEvidenceForAuthorization } from '../services/evidenceService';
 import { evidencePublicKeys } from '../services/credentialIntegrity';
@@ -14,7 +21,6 @@ import { pool } from '../db/pool';
 import { getPushMessageForClient, sendPushMessage, type PushMessageRecord } from '../services/pushService';
 import { PUSH_BODY_MAX, PUSH_CATEGORIES, PUSH_DATA_KEY_PATTERN, PUSH_DATA_MAX_FIELDS, PUSH_DATA_VALUE_MAX, PUSH_TITLE_MAX } from '../services/pushProtocol';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
-import { requireGatewayMtls } from '../middleware/mtlsGateway';
 import { env } from '../config/env';
 import { BENEFICIARY_KEY_PATTERN, BENEFICIARY_MAX_FIELDS, BENEFICIARY_MAX_VALUE_LENGTH } from '../services/canonicalAuthorization';
 import { UnauthorizedError, ValidationError } from '../services/errors';
@@ -99,7 +105,11 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
     try {
       const body = z.object({ bankCustomerRef: z.string().min(1).max(128) }).parse(req.body);
       const identity = await createNexusIdentity(clientIdOf(req), body.bankCustomerRef);
-      res.status(201).json({ nexusId: identity.nexusId, status: identity.status, createdAt: identity.createdAt.toISOString() });
+      // 200 with replayed=true: the identity already existed for this
+      // customer reference (a retry after a lost response).
+      res.status(identity.replayed ? 200 : 201).json({
+        nexusId: identity.nexusId, status: identity.status, createdAt: identity.createdAt.toISOString(), replayed: identity.replayed,
+      });
     } catch (e) { next(e); }
   });
 
@@ -114,6 +124,125 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
         lastUsedAt: identity.lastUsedAt?.toISOString() ?? null,
         evidenceHead: await getChainHead(pool, identity.nexusId),
       });
+    } catch (e) { next(e); }
+  });
+
+  // --- Conversations: the bank's bot answers and hands over ---
+
+  // --- Calls the customer started (state for reconciliation; events arrive by webhook) ---
+  router.get('/v1/customer-calls/:callId', async (req: AuthenticatedRequest, res, next) => {
+    try { res.json(await bankCall(clientIdOf(req), z.string().uuid().parse(req.params.callId))); } catch (e) { next(e); }
+  });
+
+  router.get('/v1/conversations/:conversationId', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const after = z.coerce.number().int().min(0).default(0).parse(req.query.after);
+      res.json(await bankConversation(clientIdOf(req), z.string().uuid().parse(req.params.conversationId), after));
+    } catch (e) { next(e); }
+  });
+
+  /** The bank's bot answers; with handover=true it passes the conversation to a person. */
+  router.post('/v1/conversations/:conversationId/bot-messages', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ body: z.string().min(1).max(4000), clientMessageId: z.string().min(1).max(64).nullable().optional(),
+        attachment: z.object({ reference: z.string(), sha256: z.string(), mediaType: z.string(), fileName: z.string(), sizeBytes: z.number().int() }).strict().nullable().optional(), handover: z.boolean().optional(), handoverReason: z.string().min(1).max(200).optional() }).strict().parse(req.body);
+      const sent = await botSend(clientIdOf(req), z.string().uuid().parse(req.params.conversationId), body);
+      res.status(sent.replayed ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/conversations/:conversationId/close', async (req: AuthenticatedRequest, res, next) => {
+    try { res.json(await bankClose(clientIdOf(req), z.string().uuid().parse(req.params.conversationId))); } catch (e) { next(e); }
+  });
+
+  /** Recomputes the conversation's hash chain. */
+  router.get('/v1/conversations/:conversationId/integrity', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const problems = await verifyConversation(clientIdOf(req), z.string().uuid().parse(req.params.conversationId));
+      res.json({ intact: problems.length === 0, problems });
+    } catch (e) { next(e); }
+  });
+
+  // --- Recurring payment mandates (presentation pages 17 to 19) ---
+
+  const minor = z.string().regex(/^[1-9]\d{0,29}$/);
+  router.post('/v1/mandates', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({
+        nexusId: nexusIdSchema, credentialId: z.string().uuid(), mandateReference: z.string().min(1).max(128),
+        payee: z.record(z.string(), z.string()), currency: z.string().regex(/^[A-Z]{3}$/), perPaymentLimitMinor: minor, totalLimitMinor: minor.nullable().default(null),
+        frequency: z.enum(['WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY']), validFrom: z.string().datetime(), validUntil: z.string().datetime(),
+        termsVersion: z.string().min(1).max(64), offerExpiresInSeconds: z.number().int().min(60).max(7 * 24 * 3600).optional(),
+      }).strict().parse(req.body);
+      res.status(201).json(await createMandate(clientIdOf(req), { ...body, credentialId: body.credentialId.toLowerCase() }));
+    } catch (e) { next(e); }
+  });
+
+  router.get('/v1/mandates/:mandateId', async (req: AuthenticatedRequest, res, next) => {
+    try { res.json(await getMandateForClient(clientIdOf(req), z.string().uuid().parse(req.params.mandateId))); } catch (e) { next(e); }
+  });
+
+  router.get('/v1/nexus-identities/:nexusId/mandates', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      res.json({ mandates: await listMandatesForIdentity(identity.nexusId, clientIdOf(req)) });
+    } catch (e) { next(e); }
+  });
+
+  /** Asked before every debit: allowed only inside the signed terms. */
+  router.post('/v1/mandates/:mandateId/debits', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ debitReference: z.string().min(1).max(128), amountMinor: minor, currency: z.string().regex(/^[A-Z]{3}$/) }).strict().parse(req.body);
+      const decision = await requestMandateDebit(clientIdOf(req), z.string().uuid().parse(req.params.mandateId), body);
+      if (decision.decision === 'ALLOWED') res.status(decision.replayed ? 200 : 201).json(decision);
+      else res.status(409).json({ error: `Debit refused: ${decision.reason}`, code: 'MANDATE_DEBIT_REFUSED', ...decision });
+    } catch (e) { next(e); }
+  });
+
+  /** The bank withdraws a mandate; it cannot change one. */
+  router.post('/v1/mandates/:mandateId/withdraw', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ reason: z.string().min(1).max(64) }).strict().parse(req.body);
+      res.json(await withdrawMandate(hsmAdapter, clientIdOf(req), z.string().uuid().parse(req.params.mandateId), body.reason));
+    } catch (e) { next(e); }
+  });
+
+  // --- Suspension by the bank (lost phone reported by phone, fraud) ---
+
+  router.post('/v1/nexus-identities/:nexusId/suspend', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      const body = z.object({ reason: z.string().min(1).max(128) }).strict().parse(req.body);
+      await suspendNexusIdentity(identity.nexusId, `BANK:${body.reason}`, `bank:${clientIdOf(req)}`);
+      res.json({ nexusId: identity.nexusId, status: 'SUSPENDED' });
+    } catch (e) { next(e); }
+  });
+
+  /** After the bank re-identified the customer (method and the bank's case reference are audited). */
+  router.post('/v1/nexus-identities/:nexusId/reactivate', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      const body = z.object({
+        reidentification: z.object({ method: z.enum(['BRANCH_VISIT', 'VIDEO_IDENTIFICATION', 'IN_APP_STRONG_AUTHENTICATION', 'OTHER']), reference: z.string().min(1).max(128) }).strict(),
+      }).strict().parse(req.body);
+      await reactivateNexusIdentity(identity.nexusId, `BANK:${body.reidentification.method}:${body.reidentification.reference}`, `bank:${clientIdOf(req)}`);
+      res.json({ nexusId: identity.nexusId, status: 'ACTIVE' });
+    } catch (e) { next(e); }
+  });
+
+  /** The identity's devices, for the bank's support and console. */
+  router.get('/v1/nexus-identities/:nexusId/devices', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      res.json({ devices: await listDevices(identity.nexusId, '') });
+    } catch (e) { next(e); }
+  });
+
+  /** The customer's settings and limits (the bank applies its own on top). */
+  router.get('/v1/nexus-identities/:nexusId/settings', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const identity = await getNexusIdentityForClient(nexusIdSchema.parse(req.params.nexusId), clientIdOf(req));
+      res.json(await getSettings(identity.nexusId));
     } catch (e) { next(e); }
   });
 
@@ -194,8 +323,33 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
   router.get('/v1/authorizations/:authorizationId', async (req: AuthenticatedRequest, res, next) => {
     try {
       const auth = await getAuthorizationForClient(uuidSchema.parse(req.params.authorizationId), clientIdOf(req));
+      // An explicit view: the fields of the contract (openapi.yaml,
+      // Authorization), not whatever the record holds (finding A1-12).
       res.json({
-        ...auth,
+        authorizationId: auth.authorizationId,
+        nexusId: auth.nexusId,
+        credentialId: auth.credentialId,
+        transactionReference: auth.transactionReference,
+        operationType: auth.operationType,
+        amountMinor: auth.amountMinor,
+        currency: auth.currency,
+        beneficiary: auth.beneficiary,
+        policyReference: auth.policyReference,
+        policyVersion: auth.policyVersion,
+        canonicalPayloadHash: auth.canonicalPayloadHash,
+        nonce: auth.nonce,
+        signature: auth.signature,
+        signatureAlgorithm: auth.signatureAlgorithm,
+        signatureFormat: auth.signatureFormat,
+        confirmationMethod: auth.confirmationMethod,
+        offlineCodeAcceptedAt: auth.offlineCodeAcceptedAt?.toISOString() ?? null,
+        offlineSignatureDeadline: auth.offlineSignatureDeadline?.toISOString() ?? null,
+        offlineUnsignedReason: auth.offlineUnsignedReason,
+        state: reportedState(auth),
+        // True only for VERIFIED with sealed evidence that verifies now (HSM
+        // seal, binding, terms, device signature with the enrolment key): the
+        // state column alone does not set it. OFFLINE_PROVISIONAL never.
+        ...(await confirmationView(auth.authorizationId, clientIdOf(req), reportedState(auth))),
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,
@@ -266,18 +420,15 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
     } catch (e) { next(e); }
   });
 
-  /** Result of an audio/video check, reported by the bank's verification
-   * gateway. Requires gateway mTLS whenever REQUIRE_MTLS_HEADER is set. */
-  router.post('/v1/authorizations/:authorizationId/verification-sessions/:sessionId/complete', requireGatewayMtls, async (req: AuthenticatedRequest, res, next) => {
+  /** Result of an audio/video check: a result token (JWS) signed by a
+   * verification provider registered for this bank, relayed by the
+   * bank's verification gateway. Requires gateway mTLS whenever
+   * REQUIRE_MTLS_HEADER is set. */
+  router.post('/v1/authorizations/:authorizationId/verification-sessions/:sessionId/complete', async (req: AuthenticatedRequest, res, next) => {
     try {
-      const body = z.object({
-        sessionNonce: z.string().min(20).max(128),
-        result: z.enum(['VERIFIED', 'FAILED']),
-        providerReference: z.string().min(1).max(128),
-        assertion: z.string().min(1).max(4096),
-      }).parse(req.body);
+      const body = z.object({ resultToken: z.string().min(1).max(8192) }).strict().parse(req.body);
       res.json(await completeVerificationSession(uuidSchema.parse(req.params.authorizationId), clientIdOf(req),
-        uuidSchema.parse(req.params.sessionId), body.sessionNonce, body.result, body.providerReference, body.assertion));
+        uuidSchema.parse(req.params.sessionId), body.resultToken));
     } catch (e) { next(e); }
   });
 
@@ -300,6 +451,15 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
   });
 
   // --- Bank transaction ---
+
+  /** The bank withdraws an authorization the customer has not confirmed. */
+  router.post('/v1/authorizations/:authorizationId/cancel', async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ reason: z.enum(['ORDER_CHANGED', 'FRAUD_SUSPECTED', 'CUSTOMER_REQUEST', 'OTHER']) }).parse(req.body);
+      res.json(await cancelAuthorizationByBank(uuidSchema.parse(req.params.authorizationId), clientIdOf(req), body.reason,
+        { actor: `bank:${clientIdOf(req)}`, ipAddress: req.ip, userAgent: req.header('user-agent') }));
+    } catch (e) { next(e); }
+  });
 
   router.post('/v1/authorizations/:authorizationId/bank-commit-request', async (req: AuthenticatedRequest, res, next) => {
     try {

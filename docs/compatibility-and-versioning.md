@@ -7,13 +7,13 @@
 | Release | `VERSION` at the repository root (2.0.0-rc.2) | Also `version` in `auth-core/package.json`, `info.version` in `auth-core/openapi.yaml` and `sandbox/openapi.yaml`, `NEXUSSignVersion.current` (iOS) and `NEXUS_SIGN_SDK_VERSION` (Android); `npm run check:repository` fails when they differ |
 | Auth Core API | Path prefix `/v1` | `auth-core/openapi.yaml` |
 | Authorization protocol | `protocol_version: "1"`, `domain: "NEXUS-SIGN/TRANSACTION-AUTH"` | [authorization-protocol-v1.md](protocol/authorization-protocol-v1.md), `auth-core/test-vectors/signed-payload-v1.json` |
-| Device protocols | `NEXUS-SIGN/DEVICE-REQUEST/v1`, `NEXUS-SIGN/OFFLINE/v1`, `NEXUS-SIGN/OFFLINE-CODE/v1`, QR prefix `NXS1.` | [device authentication and offline confirmation](protocol/device-authentication-and-offline-confirmation.md), `auth-core/test-vectors/device-protocols-v1.json` |
+| Device protocols | `NEXUS-SIGN/DEVICE-REQUEST/v1`, `NEXUS-SIGN/OFFLINE/v1`, `NEXUS-SIGN/OFFLINE-CODE/v1`, QR prefixes `NXS1.` (v1, code only) and `NXS2.` (v2, deferred device signature) | [device authentication and offline confirmation](protocol/device-authentication-and-offline-confirmation.md), `auth-core/test-vectors/device-protocols-v1.json` |
 | Evidence | `schemaVersion: "3"` in the sealed payload, record types `AUTHORIZATION`, `CREDENTIAL_ENROLLED`, `RECOVERY_CONFIGURED` | [evidence-format.md](protocol/evidence-format.md), [ADR 0009](adr/0009-evidence-schema-3.md) |
 | Recovery protocol | `protocol: 2`; `NEXUS-SIGN/RECOVERY-WRAP/v2` (HKDF salt), `NEXUS-SIGN/RECOVERY-KEY/v2` (associated data), `NEXUS-SIGN/RECOVERY-SETUP/v2`, `NEXUS-SIGN/RECOVERY-PROOF/v2` (signing inputs) | [recovery protocol 2](protocol/recovery-protocol-v2.md), `auth-core/test-vectors/recovery-v2.json` |
 | Android key attestation challenge | `NEXUS-SIGN/KEY-ATTESTATION/v1` | [attestation](security/attestation.md#android-key-attestation), `key_attestation` in `auth-core/test-vectors/device-protocols-v1.json` |
 | Secure push | `NEXUS-SIGN/PUSH/v1`, `NEXUS-SIGN/PUSH-RECEIPT/v1`, envelope `v: 1` | [secure push](protocol/secure-push.md), `auth-core/test-vectors/secure-push-v1.json` |
-| Webhook signature | `v1=` prefix of `X-NEXUS-SIGN-Signature` | [bank backend guide](integration/bank-backend-guide.md#webhooks) |
-| Database schema | Numbered migrations (`002` to `018`) | `auth-core/migrations/`, `auth-core/src/db/schema.sql` |
+| Webhook signature | `v1=` prefix of each comma-separated entry of `X-NEXUS-SIGN-Signature` (two entries during a secret rotation overlap) | [bank backend guide](integration/bank-backend-guide.md#webhooks) |
+| Database schema | Numbered migrations (`002` to `022`) | `auth-core/migrations/`, `auth-core/src/db/schema.sql` |
 
 Auth Core, the iOS SDK, the Android SDK and the sandbox are released together under the repository version. The Swift package and the Android library declare no version of their own; a host app takes both SDKs from the same repository release.
 
@@ -78,18 +78,18 @@ Release 2.0 changes the behaviour of existing `/v1` endpoints in place instead o
 
 | Endpoint or behaviour | Change in 2.0 |
 |---|---|
-| Bank token issuance and every bank API call | With `REQUIRE_MTLS_HEADER`, refused (401, audit event `bank_certificate_mismatch`) unless the gateway's client certificate fingerprint is registered for the client (NXS-012) |
-| `POST /v1/mobile/sessions` | 409 `ACTIVE_CREDENTIAL_EXISTS` while the identity has an `ACTIVE` credential, unless the token request carries `replacement {method, reference}` (NXS-002). From 2.0.0-rc.2 it issues only `BOOTSTRAP` tokens; `purpose: SESSION` returns 400 |
+| Bank token issuance and every bank API call | With `REQUIRE_MTLS_HEADER`, refused (401, audit event `bank_certificate_mismatch`) unless the gateway's client certificate fingerprint is registered for the client |
+| `POST /v1/mobile/sessions` | 409 `ACTIVE_CREDENTIAL_EXISTS` while the identity has an `ACTIVE` credential, unless the token request carries `replacement {method, reference}`. From 2.0.0-rc.2 it issues only `BOOTSTRAP` tokens; `purpose: SESSION` returns 400 |
 | `POST /v1/nexus-identities/{nexusId}/credentials`, `POST /v1/credentials/{credentialId}/rotate` | Removed in 2.0.0-rc.2 (404). Devices enrol only through `POST /v1/mobile/bootstrap` |
 | `POST /v1/mobile/bootstrap`, `POST /v1/recovery/sessions/{sessionId}/complete` | From 2.0.0-rc.2 `authPublicKeyPem` is required (400 without it); the response always carries `requestAuthentication: DEVICE_SIGNATURE` and no access token |
-| `POST /v1/mobile/bootstrap`, recovery completion (Android) | Refused with 403 without Keystore key attestation chains that meet `ANDROID_KEY_SECURITY_POLICY`, when attestation is required (NXS-006) |
-| `POST /v1/mobile/recovery/setup` | Accepts only protocol 2: `salt`, `recoveryPublicKeyPem`, `wrappedRecoveryKey` and a `signature` by the biometric signing key (NXS-003, NXS-024) |
-| `POST /v1/recovery/sessions` | 409 `RECOVERY_PROTOCOL_RETIRED` for protocol 1 identities; 409 `RECOVERY_LOCKED` after 10 failed proofs in 24 hours; 409 `RECOVERY_INTEGRITY`; the response adds `recoveryPublicKeyPem` and `wrappedRecoveryKey` (NXS-003, NXS-031) |
-| `POST /v1/recovery/sessions/{sessionId}/complete` | The proof is an ECDSA signature by the recovery key over the protocol 2 proof signing input, not an HMAC of the nonce; 409 `RECOVERY_INTEGRITY` (NXS-003) |
-| `POST /v1/authorizations` | 409 `CREDENTIAL_NOT_ATTESTED` with `REQUIRE_VALID_ATTESTATION` for a credential whose attestation is not `VERIFIED` (NXS-025) |
-| `POST /v1/authorizations/{id}/bank-commit-request` | 409 `IDENTITY_NOT_ACTIVE`, `CREDENTIAL_NOT_ACTIVE`, `CONFIRMATION_TOO_OLD` (NXS-030) |
-| Device-signed requests, confirmations, recovery setup | Refused for a credential whose keys do not match its sealed enrolment record (NXS-004); existing credentials need `sealCredentialBaseline` once |
-| Evidence exports (`GET /v1/authorizations/{id}/evidence`, `GET /v1/nexus-identities/{nexusId}/evidence`) | Evidence schema 3: new record types in the chain, `chainSequence`, `sealKeyId`, `evidencePublicKeys`, the chain `head`; a single authorization export carries `credentialEnrolment` (NXS-004, NXS-005, NXS-016) |
+| `POST /v1/mobile/bootstrap`, recovery completion (Android) | Refused with 403 without Keystore key attestation chains that meet `ANDROID_KEY_SECURITY_POLICY`, when attestation is required |
+| `POST /v1/mobile/recovery/setup` | Accepts only protocol 2: `salt`, `recoveryPublicKeyPem`, `wrappedRecoveryKey` and a `signature` by the biometric signing key |
+| `POST /v1/recovery/sessions` | 409 `RECOVERY_PROTOCOL_RETIRED` for protocol 1 identities; 409 `RECOVERY_LOCKED` after 10 failed proofs in 24 hours; 409 `RECOVERY_INTEGRITY`; the response adds `recoveryPublicKeyPem` and `wrappedRecoveryKey` |
+| `POST /v1/recovery/sessions/{sessionId}/complete` | The proof is an ECDSA signature by the recovery key over the protocol 2 proof signing input, not an HMAC of the nonce; 409 `RECOVERY_INTEGRITY` |
+| `POST /v1/authorizations` | 409 `CREDENTIAL_NOT_ATTESTED` with `REQUIRE_VALID_ATTESTATION` for a credential whose attestation is not `VERIFIED` |
+| `POST /v1/authorizations/{id}/bank-commit-request` | 409 `IDENTITY_NOT_ACTIVE`, `CREDENTIAL_NOT_ACTIVE`, `CONFIRMATION_TOO_OLD` |
+| Device-signed requests, confirmations, recovery setup | Refused for a credential whose keys do not match its sealed enrolment record; existing credentials need `sealCredentialBaseline` once |
+| Evidence exports (`GET /v1/authorizations/{id}/evidence`, `GET /v1/nexus-identities/{nexusId}/evidence`) | Evidence schema 3: new record types in the chain, `chainSequence`, `sealKeyId`, `evidencePublicKeys`, the chain `head`; a single authorization export carries `credentialEnrolment` |
 | Webhooks | New event types `credential.replaced`, `recovery.configured`, `identity.recovered` |
 
 Additive changes in the same release (new response fields such as `evidenceHead` and `evidence`, the `replacement` request field) follow the ordinary rules. The admin console API (`/admin/api`) is not part of the versioned `/v1` API; its changes (TOTP login, bank scope, four-eyes approval with 202 responses) are listed in the [upgrade guide](operations/upgrade-2.0.md#breaking-changes-for-bank-backends) with every step a deployment and a bank backend take.

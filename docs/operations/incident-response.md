@@ -94,7 +94,7 @@ Indicators: `oauth_token_issued` from unexpected `ip_address` or with an unexpec
 
 ### Unauthorized device replacement
 
-Indicators: a customer reports the replacement notice; `credential.replaced` webhook or `credential_replaced` event without a matching bank case.
+Indicators: a customer reports the replacement notice; `credential.replaced` or `credential.replacement_requested` webhook, or `credential_replaced` event, without a matching bank case; `credential.replacement_cancelled` (the customer refused a replacement).
 
 1. Suspend the identity.
 2. Compare `credential_replacement_authorized` (`actor`, `details.method`, `details.reference`, `ip_address`) with the bank's case records.

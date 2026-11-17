@@ -9,8 +9,13 @@ import { createHash, createHmac, hkdfSync } from 'node:crypto';
 
 const DEVICE_REQUEST_DOMAIN = 'NEXUS-SIGN/DEVICE-REQUEST/v1';
 export const OFFLINE_KDF_SALT = 'NEXUS-SIGN/OFFLINE/v1';
+/** Offline v3 (finding D-01): a fresh Auth Core key for each authorization. */
+export const OFFLINE_KDF_SALT_V3 = 'NEXUS-SIGN/OFFLINE/v3';
 export const OFFLINE_CODE_DOMAIN = 'NEXUS-SIGN/OFFLINE-CODE/v1';
-const OFFLINE_QR_PREFIX = 'NXS1.';
+/** v1: code only. v2: the device also signs the bytes (deferred signature,
+ * docs/protocol/offline-confirmation-v2-deferred-signature.md); SDKs up to
+ * 2.0.0 refuse it, so they cannot leave a payment provisional. */
+const OFFLINE_QR_PREFIX = { 1: 'NXS1.', 2: 'NXS2.', 3: 'NXS3.' } as const;
 export const OFFLINE_CODE_DIGITS = 8;
 
 export interface DeviceRequestParts {
@@ -62,7 +67,24 @@ export function offlineCodeFromTag(tag: Buffer): string {
   return String(binary % 10 ** OFFLINE_CODE_DIGITS).padStart(OFFLINE_CODE_DIGITS, '0');
 }
 
+/**
+ * Offline v3 key (finding D-01): HKDF-SHA256 over the ECDH shared secret of
+ * the device offline key and Auth Core's key for this one authorization,
+ * bound to the credential and the authorization. A secret taken from the
+ * device process serves this authorization only.
+ */
+export function deriveOfflineKeyPerAuthorization(sharedSecret: Buffer, credentialId: string, authorizationId: string): Buffer {
+  if (sharedSecret.length !== 32) throw new Error('ECDH shared secret must be 32 bytes');
+  const info = Buffer.concat([Buffer.from(credentialId, 'utf8'), Buffer.from([0]), Buffer.from(authorizationId, 'utf8')]);
+  return Buffer.from(hkdfSync('sha256', sharedSecret, Buffer.from(OFFLINE_KDF_SALT_V3, 'utf8'), info, 32));
+}
+
+/** v3 QR content: `NXS3.` + base64url(canonical bytes) + `.` + base64url(DER SPKI of Auth Core's key for this authorization). */
+export function offlineQrPayloadV3(canonicalPayload: Buffer, serverPublicKeySpki: Buffer): string {
+  return `${OFFLINE_QR_PREFIX[3]}${canonicalPayload.toString('base64url')}.${serverPublicKeySpki.toString('base64url')}`;
+}
+
 /** QR content: prefix + base64url(canonical bytes). */
-export function offlineQrPayload(canonicalPayload: Buffer): string {
-  return OFFLINE_QR_PREFIX + canonicalPayload.toString('base64url');
+export function offlineQrPayload(canonicalPayload: Buffer, version: 1 | 2 = 1): string {
+  return OFFLINE_QR_PREFIX[version] + canonicalPayload.toString('base64url');
 }

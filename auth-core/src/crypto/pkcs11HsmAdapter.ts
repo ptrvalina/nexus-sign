@@ -4,6 +4,7 @@ import type { EvidenceSeal, HsmAdapter } from './hsmAdapter';
 import { parseP256PublicKey } from './p256PublicKey';
 import { derToRaw, rawToDer } from './ecdsaSignatureFormat';
 import { env } from '../config/env';
+import { HsmTimeoutError } from './hsmErrors';
 
 /**
  * HSM adapter over PKCS#11 (pkcs11js). Tested with SoftHSM2
@@ -13,13 +14,22 @@ import { env } from '../config/env';
  * Security properties:
  * - The evidence key is selected by token label, key label and optionally
  *   CKA_ID, and must be unique: two matching keys are an error, never a
- *   choice. The private key must be sensitive, non-extractable and a P-256
- *   signing key; the public key with the same label and ID must belong to it
+ *   choice. The private key must be a P-256 signing key, sensitive and
+ *   non-extractable, generated in the HSM and never extractable or
+ *   non-sensitive (CKA_LOCAL, CKA_NEVER_EXTRACTABLE, CKA_ALWAYS_SENSITIVE); the public key with the same label and ID must belong to it
  *   (checked by the self-test).
- * - Sign and verify run on a pool of logged-in sessions through the async
- *   pkcs11js calls, so the event loop is never blocked by the HSM, and every
- *   operation has a deadline (HSM_OPERATION_TIMEOUT_MS). A session whose
- *   operation timed out is never reused; it is closed once the call returns.
+ * - Sign and verify run on a pool of logged-in sessions. C_SignAsync and
+ *   C_VerifyAsync run on libuv worker threads; every operation has a deadline
+ *   (HSM_OPERATION_TIMEOUT_MS) that starts before its first PKCS#11 call. A
+ *   session whose operation timed out is never reused; it is closed once the
+ *   call returns.
+ * - pkcs11js has no asynchronous form of C_OpenSession, C_Login,
+ *   C_FindObjects*, C_GetAttributeValue, C_SignInit, C_VerifyInit,
+ *   C_CreateObject or C_DestroyObject. In the service this adapter runs in a
+ *   worker thread (pkcs11Worker.ts, hsmWorkerHost.ts), so a stall in one of
+ *   them blocks that thread, not the event loop; the host bounds every call.
+ *   healthCheck() fills the pool, so requests open a session only after one
+ *   was retired.
  * - A lost session (HSM restart, failover) is discarded and the operation is
  *   retried once on a new session; a module that lost its initialisation is
  *   finalised and initialised again. Nothing falls back to software keys.
@@ -42,12 +52,7 @@ export interface Pkcs11Options {
   keyVersion: number;
 }
 
-export class HsmTimeoutError extends Error {
-  constructor(operation: string, timeoutMs: number) {
-    super(`HSM ${operation} timed out after ${timeoutMs} ms`);
-    this.name = 'HsmTimeoutError';
-  }
-}
+export { HsmTimeoutError };
 
 interface PooledSession {
   handle: Buffer;
@@ -85,6 +90,8 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   private stuckCalls = 0;
   /** Increments when the module is initialised again; older sessions are dead. */
   private generation = 0;
+  /** Set while the module is being re-initialised; new calls wait for it. */
+  private reinitializing: Promise<void> | null = null;
   private evidencePublicKey: { pem: string; keyId: string } | null = null;
   private closed = false;
 
@@ -150,6 +157,7 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   /** Signs a probe and checks it with the published public key, so a wrong
    * key pairing or an unusable token is found before traffic arrives. */
   async healthCheck(): Promise<void> {
+    this.fillPool();
     const probe = createHash('sha256').update('NEXUS-SIGN-HSM-HEALTH-CHECK').digest();
     const { signature } = await this.signEvidence(probe);
     if (!cryptoVerify('sha256', probe, { key: await this.evidencePublicKeyPem(), dsaEncoding: 'der' }, signature)) {
@@ -180,10 +188,20 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   private async run<T>(operation: string, work: (session: PooledSession) => Promise<T>): Promise<T> {
     for (let attempt = 1; ; attempt += 1) {
       const session = await this.acquire();
+      // The deadline starts before work() runs: its synchronous PKCS#11 calls
+      // (C_SignInit, C_CreateObject, ...) count against it. A timer cannot
+      // fire while they block the thread, so the time they took is measured.
+      const started = Date.now();
       const pending = work(session);
+      const remaining = this.options.operationTimeoutMs - (Date.now() - started);
+      if (remaining <= 0) {
+        pending.catch(() => { /* the session is retired either way */ });
+        this.retire(session, pending);
+        throw new HsmTimeoutError(operation, this.options.operationTimeoutMs);
+      }
       let timer: NodeJS.Timeout | undefined;
       const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new HsmTimeoutError(operation, this.options.operationTimeoutMs)), this.options.operationTimeoutMs);
+        timer = setTimeout(() => reject(new HsmTimeoutError(operation, this.options.operationTimeoutMs)), remaining);
       });
       try {
         const result = await Promise.race([pending, deadline]);
@@ -200,7 +218,7 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
         // or in an unknown state: it is not reused.
         this.retire(session);
         const message = messageOf(error);
-        if (isModuleLost(message)) this.reinitialize();
+        if (isModuleLost(message)) await this.reinitialize();
         if ((isSessionLost(message) || isModuleLost(message)) && attempt < 2) continue;
         throw error;
       } finally {
@@ -210,6 +228,7 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   }
 
   private async acquire(): Promise<PooledSession> {
+    if (this.reinitializing) await this.reinitializing;
     if (this.closed) throw new Error('HSM adapter closed');
     // Every timed-out call still holds a libuv worker thread (shared with
     // DNS, file and scrypt work) until the HSM answers. Once as many calls as
@@ -239,6 +258,20 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
       waiter.reject = (error) => { clearTimeout(timer); reject(error); };
       this.waiting.push(waiter);
     });
+  }
+
+  /** Opens idle sessions up to the pool size (synchronous PKCS#11 calls),
+   * so request paths reuse them instead of opening one. */
+  private fillPool(): void {
+    while (!this.closed && this.openSessions < this.options.poolSize && this.stuckCalls === 0) {
+      this.openSessions += 1;
+      try {
+        this.release(this.openSession());
+      } catch (error) {
+        this.openSessions -= 1;
+        throw error;
+      }
+    }
   }
 
   private release(session: PooledSession): void {
@@ -271,14 +304,33 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
     try { this.pkcs11.C_CloseSession(session.handle); } catch { /* already gone */ }
   }
 
-  private reinitialize(): void {
+  /**
+   * Finalises and initialises the module again after it reported itself lost.
+   * C_Finalize while other threads are inside the module is undefined
+   * behaviour (PKCS#11 v2.40 §5.4; vendor modules can crash the process), so
+   * new calls wait and the calls in flight are drained first (finding B-08).
+   * If they do not return within the operation timeout, the module is not
+   * finalised: the call fails, and the readiness check reports the HSM.
+   */
+  private reinitialize(): Promise<void> {
+    if (this.reinitializing) return this.reinitializing;
     this.generation += 1;
     // Idle sessions die with the module; sessions in use are retired when
     // they come back (generation check in release()).
     this.openSessions -= this.idle.length;
     this.idle.splice(0);
-    try { this.pkcs11.C_Finalize(); } catch { /* not initialised */ }
-    this.initialize();
+    this.reinitializing = (async () => {
+      const deadline = Date.now() + this.options.operationTimeoutMs;
+      while (this.openSessions > 0 || this.stuckCalls > 0) {
+        if (Date.now() >= deadline) {
+          throw new HsmTimeoutError('module re-initialisation (calls still in the module)', this.options.operationTimeoutMs);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      try { this.pkcs11.C_Finalize(); } catch { /* not initialised */ }
+      this.initialize();
+    })().finally(() => { this.reinitializing = null; });
+    return this.reinitializing;
   }
 
   private openSession(): PooledSession {
@@ -346,13 +398,19 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
     const attributes = this.pkcs11.C_GetAttributeValue(session, key, [
       { type: Pkcs11js.CKA_KEY_TYPE }, { type: Pkcs11js.CKA_SIGN }, { type: Pkcs11js.CKA_SENSITIVE },
       { type: Pkcs11js.CKA_EXTRACTABLE }, { type: Pkcs11js.CKA_EC_PARAMS },
+      { type: Pkcs11js.CKA_LOCAL }, { type: Pkcs11js.CKA_NEVER_EXTRACTABLE }, { type: Pkcs11js.CKA_ALWAYS_SENSITIVE },
     ]);
-    const [keyType, canSign, sensitive, extractable, params] = attributes.map((a) => a.value as Buffer);
+    const [keyType, canSign, sensitive, extractable, params, local, neverExtractable, alwaysSensitive] = attributes.map((a) => a.value as Buffer);
     if (!keyType || ulong(keyType) !== Pkcs11js.CKK_EC) throw new Error('The HSM evidence key is not an EC key');
     if (!params || !params.equals(P256_PARAMS)) throw new Error('The HSM evidence key is not on curve P-256');
     if (!isTrue(canSign)) throw new Error('The HSM evidence key is not allowed to sign (CKA_SIGN)');
     if (!isTrue(sensitive)) throw new Error('The HSM evidence key must be sensitive (CKA_SENSITIVE)');
     if (isTrue(extractable)) throw new Error('The HSM evidence key must not be extractable (CKA_EXTRACTABLE)');
+    // Provenance (audit finding B-02): a key generated inside the HSM and
+    // never exportable, not one imported from a copy that may exist elsewhere.
+    if (!isTrue(local)) throw new Error('The HSM evidence key must be generated in the HSM (CKA_LOCAL), not imported');
+    if (!isTrue(neverExtractable)) throw new Error('The HSM evidence key must never have been extractable (CKA_NEVER_EXTRACTABLE)');
+    if (!isTrue(alwaysSensitive)) throw new Error('The HSM evidence key must always have been sensitive (CKA_ALWAYS_SENSITIVE)');
   }
 
   private readPublicKey(session: Buffer): { pem: string; keyId: string } {

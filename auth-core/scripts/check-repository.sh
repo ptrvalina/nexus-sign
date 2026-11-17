@@ -47,4 +47,35 @@ if [ -n "$mismatched" ]; then
   printf 'Version differs from VERSION (%s):%s\n' "$version" "$mismatched" >&2
   exit 1
 fi
+latest=$(ls auth-core/migrations | grep -E '^[0-9]{3}_.*\.sql$' | sort | tail -1 | cut -c1-3)
+stated=$(sed -n 's/^-- schema-version: \([0-9]\{3\}\)$/\1/p' auth-core/src/db/schema.sql)
+if [ "$latest" != "$stated" ]; then
+  printf 'auth-core/src/db/schema.sql states schema-version %s, the last migration is %s: append the migration to schema.sql and update the line\n' "$stated" "$latest" >&2
+  exit 1
+fi
+codes=$(grep -rhoE "ConflictError\([^;]*'[A-Z][A-Z0-9_]{3,}'\)" auth-core/src | grep -oE "'[A-Z][A-Z0-9_]{3,}'\)$" | tr -d "')" | sort -u)
+undocumented=""
+for code in $codes; do
+  grep -q "\`$code\`" docs/reference/error-responses.md || undocumented="$undocumented $code"
+done
+if [ -n "$undocumented" ]; then
+  printf 'Conflict codes raised by Auth Core but missing from docs/reference/error-responses.md:%s\n' "$undocumented" >&2
+  exit 1
+fi
+# Relative links between Markdown documents must point at existing files
+# (documents are renamed and merged; a dangling link hides evidence).
+broken=$(printf '%s\n' "$files" | grep -E '\.md$' | python3 -c '
+import os, re, sys
+for f in sys.stdin.read().split():
+    if not os.path.isfile(f): continue
+    text = re.sub(r"```.*?```", "", open(f, encoding="utf8").read(), flags=re.S)
+    for m in re.finditer(r"\]\(([^)\s]+)\)", text):
+        target = m.group(1).split("#")[0]
+        if target and not re.match(r"^[a-z]+:", target) and not os.path.exists(os.path.normpath(os.path.join(os.path.dirname(f), target))):
+            print(f"{f}: {m.group(1)}")
+')
+if [ -n "$broken" ]; then
+  printf 'Broken relative links in Markdown:\n%s\n' "$broken" >&2
+  exit 1
+fi
 echo 'ok: repository hygiene'

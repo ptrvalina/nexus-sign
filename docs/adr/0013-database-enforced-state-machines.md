@@ -30,6 +30,7 @@ Superseded in part by [0016](0016-remove-compatibility-paths.md): migration 018 
 - The triggers cover updates, not inserts or deletes. Inserted credentials are caught by the runtime integrity check against sealed enrolments ([ADR 0009](0009-evidence-schema-3.md)); inserted authorizations have no evidence record.
 - A superuser or the database provider's administrative role can still disable triggers. This is covered by logging their DDL and by the sealed evidence, not by the triggers.
 - The schema permits states the application does not use (`CREATED`, `DELIVERING`, `SIGNED`, `CONSUMED` for authorizations, `PENDING` and `SUSPENDED` for credentials).
+- **Update (2.0, migration 018, ADR 0016; finding C-17):** those states were removed. The authorization states are now `PENDING_USER`, `VERIFIED`, `EXPIRED`, `REJECTED`, `CANCELLED`, `OFFLINE_PROVISIONAL` and `OFFLINE_UNSIGNED`; credentials are `ACTIVE` or `REVOKED`. The transitions listed under Decision are the original ones; the triggers of `schema.sql` are authoritative.
 - Bank-side rotation, which inserts the new credential before revoking the old one, is refused by the one-`ACTIVE` index for an `ACTIVE` credential.
 - Specification: [state machines](../architecture/state-machines.md). Test: `test/integration/state-machine.test.mjs`, including a property test of random transitions.
 
@@ -38,4 +39,4 @@ Superseded in part by [0016](0016-remove-compatibility-paths.md): migration 018 
 Changes made after this decision, in the same release:
 
 - Bank-side rotation now revokes the old credential before inserting the new one, so the one-`ACTIVE` index no longer refuses it (`rotateCredential` in `credentialService.ts`).
-- Migration 017 also adds `BEFORE DELETE` triggers that refuse deleting rows of `authorization_requests`, `credentials`, `nexus_identities`, `recovery_sessions` and `admin_approvals`, and `scripts/db/roles.sql` grants `nexus_app` `DELETE` only on `push_registrations`. Inserts remain uncovered by the triggers.
+- Migration 017 also adds `BEFORE DELETE` triggers that refuse deleting rows of `authorization_requests`, `credentials`, `nexus_identities`, `recovery_sessions` and `admin_approvals`, and `scripts/db/roles.sql` grants `nexus_app` `DELETE` only on `push_registrations`. Inserts remain uncovered by the triggers. Amended by migration 024 (audit finding C-05): authorization inserts are checked (`authorization_insert_state`); credential inserts still are not.

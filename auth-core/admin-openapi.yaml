@@ -1,0 +1,446 @@
+openapi: 3.0.3
+info:
+  title: NEXUS-SIGN admin console API
+  version: 2.0.0-rc.2
+  description: |
+    The console's API (finding A2-12), served by Auth Core under /admin/api for the bank's staff, never to customers or bank backends.
+    Authentication: session cookie from POST /admin/api/login (password and TOTP). State-changing requests from another origin are refused (403).
+    Scope: an account bound to a bank sees and changes only that bank's data; a platform account (no bank) sees all banks but decides no bank's calls.
+    Roles: viewer < operator < admin; x-minimum-role names the lowest role a route accepts (403 otherwise). Every route answers 401 without a valid session
+    (except login), 403 for a missing role or another origin, 400 for invalid input. Response bodies are described in words, not as schemas.
+    The route list is checked against src/routes/admin.ts by scripts/check-openapi-routes.mjs.
+servers: [{ url: / }]
+security: [{ adminSession: [] }]
+paths:
+  /admin/api/login:
+    post:
+      summary: Sign in with password and TOTP
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Login' } } }
+      responses:
+        '200': { description: "Signed in; session cookie set", content: { application/json: { schema: { type: object } } } }
+        '401': { description: "Wrong credentials (indistinguishable)", content: { application/json: { schema: { type: object } } } }
+        '429': { description: "Account-wide failure limit hit: password and TOTP needed (Retry-After)", content: { application/json: { schema: { type: object } } } }
+  /admin/api/logout:
+    post:
+      summary: Sign out (audited)
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { description: "Signed out", content: { application/json: { schema: { type: object } } } }
+  /admin/api/me:
+    get:
+      summary: Current session
+      x-minimum-role: viewer
+      responses:
+        '200': { description: "The session: username, role, client", content: { application/json: { schema: { type: object } } } }
+  /admin/api/stats:
+    get:
+      summary: Dashboard counts
+      x-minimum-role: viewer
+      responses:
+        '200': { description: "Counts by status (bank-scoped)", content: { application/json: { schema: { type: object } } } }
+  /admin/api/clients:
+    get:
+      summary: Bank clients
+      x-minimum-role: viewer
+      responses:
+        '200': { description: "Bank clients visible to the session", content: { application/json: { schema: { type: object } } } }
+  /admin/api/audit-logs:
+    get:
+      summary: Audit log
+      x-minimum-role: viewer
+      parameters:
+      parameters:
+        - { $ref: '#/components/parameters/nexusIdQuery' }
+        - { $ref: '#/components/parameters/eventType' }
+        - { $ref: '#/components/parameters/limit' }
+        - { $ref: '#/components/parameters/before' }
+      responses:
+        '200': { description: "Audit records (bank-scoped); the read is audited", content: { application/json: { schema: { type: object } } } }
+  /admin/api/webhook-deliveries:
+    get:
+      summary: Webhook deliveries
+      x-minimum-role: viewer
+      parameters:
+      parameters:
+        - { $ref: '#/components/parameters/webhookStatus' }
+        - { $ref: '#/components/parameters/limit' }
+      responses:
+        '200': { description: "Webhook deliveries (bank-scoped)", content: { application/json: { schema: { type: object } } } }
+  /admin/api/webhook-deliveries/{deliveryId}/redeliver:
+    post:
+      summary: Send a failed webhook again (A2-08)
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/deliveryId' }
+      responses:
+        '202': { description: "Back to PENDING with the same eventId (audited)", content: { application/json: { schema: { type: object } } } }
+        '404': { description: "No FAILED delivery of this bank", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}:
+    get:
+      summary: One NEXUS identity
+      x-minimum-role: viewer
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+      responses:
+        '200': { description: "Identity with devices and recovery state (audited)", content: { application/json: { schema: { type: object } } } }
+        '404': { description: "Not found in the session scope", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/revoke:
+    post:
+      summary: Request revocation
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Reason' } } }
+      responses:
+        '202': { description: "Approval requested (four eyes)", content: { application/json: { schema: { type: object } } } }
+        '409': { description: "A request is already pending", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/reactivate:
+    post:
+      summary: Request reactivation
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Reason' } } }
+      responses:
+        '202': { description: "Approval requested (four eyes)", content: { application/json: { schema: { type: object } } } }
+        '409': { description: "A request is already pending", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/suspend:
+    post:
+      summary: Suspend at once
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Reason' } } }
+      responses:
+        '200': { description: "SUSPENDED", content: { application/json: { schema: { type: object } } } }
+  /admin/api/approvals:
+    get:
+      summary: Approvals
+      x-minimum-role: viewer
+      parameters:
+      parameters:
+        - { $ref: '#/components/parameters/approvalStatus' }
+      responses:
+        '200': { description: "Approvals of the session scope", content: { application/json: { schema: { type: object } } } }
+  /admin/api/approvals/{approvalId}/approve:
+    post:
+      summary: Approve (another admin)
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/approvalId' }
+      responses:
+        '200': { description: "Executed", content: { application/json: { schema: { type: object } } } }
+        '403': { description: "The requester cannot approve", content: { application/json: { schema: { type: object } } } }
+        '404': { description: "Not in scope", content: { application/json: { schema: { type: object } } } }
+        '409': { description: "Not pending", content: { application/json: { schema: { type: object } } } }
+  /admin/api/approvals/{approvalId}/reject:
+    post:
+      summary: Reject
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/approvalId' }
+      responses:
+        '200': { description: "Rejected", content: { application/json: { schema: { type: object } } } }
+        '404': { description: "Not in scope", content: { application/json: { schema: { type: object } } } }
+        '409': { description: "Not pending", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/authorizations:
+    get:
+      summary: Payments of an identity
+      x-minimum-role: viewer
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+        - { $ref: '#/components/parameters/filter' }
+        - { $ref: '#/components/parameters/beforeTime' }
+      responses:
+        '200': { description: "{ authorizations }", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/mandates:
+    get:
+      summary: Mandates of an identity
+      x-minimum-role: viewer
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+      responses:
+        '200': { description: "{ mandates }", content: { application/json: { schema: { type: object } } } }
+  /admin/api/mandates/{mandateId}:
+    get:
+      summary: One mandate
+      x-minimum-role: viewer
+      parameters:
+        - { $ref: '#/components/parameters/mandateId' }
+      responses:
+        '200': { description: "Mandate with debits and evidence", content: { application/json: { schema: { type: object } } } }
+  /admin/api/mandates/{mandateId}/hold:
+    post:
+      summary: Hold a mandate
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/mandateId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ShortReason' } } }
+      responses:
+        '200': { description: "Mandate after the action", content: { application/json: { schema: { type: object } } } }
+  /admin/api/mandates/{mandateId}/release:
+    post:
+      summary: Release a held mandate
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/mandateId' }
+      responses:
+        '200': { description: "Mandate after the action", content: { application/json: { schema: { type: object } } } }
+  /admin/api/mandates/{mandateId}/withdraw:
+    post:
+      summary: Withdraw a mandate
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/mandateId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ShortReason' } } }
+      responses:
+        '200': { description: "Mandate after the action", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/devices:
+    get:
+      summary: Devices of an identity
+      x-minimum-role: viewer
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+      responses:
+        '200': { description: "Devices and pending device requests", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/devices/{credentialId}/revoke:
+    post:
+      summary: Revoke one device
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+        - { $ref: '#/components/parameters/credentialId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ShortReason' } } }
+      responses:
+        '200': { description: "REVOKED", content: { application/json: { schema: { type: object } } } }
+  /admin/api/identities/{nexusId}/device-requests/{requestId}/cancel:
+    post:
+      summary: Cancel a device replacement request
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/nexusId' }
+        - { $ref: '#/components/parameters/requestId' }
+      responses:
+        '200': { description: "The cancelled request", content: { application/json: { schema: { type: object } } } }
+  /admin/api/customer-calls:
+    get:
+      summary: Customer call queue
+      x-minimum-role: operator
+      responses:
+        '200': { description: "{ calls }: the queue of the operator's bank", content: { application/json: { schema: { type: object } } } }
+  /admin/api/customer-calls/{callId}/answer:
+    post:
+      summary: Answer a customer call
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/callId' }
+      responses:
+        '200': { description: "Call with ICE servers", content: { application/json: { schema: { type: object } } } }
+  /admin/api/customer-calls/{callId}/signals:
+    post:
+      summary: Send a call signal
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/callId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Signal' } } }
+      responses:
+        '200': { description: "Duplicate messageId", content: { application/json: { schema: { type: object } } } }
+        '201': { description: "Relayed", content: { application/json: { schema: { type: object } } } }
+    get:
+      summary: Receive call signals (long poll)
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/callId' }
+        - { $ref: '#/components/parameters/after' }
+        - { $ref: '#/components/parameters/waitMs' }
+      responses:
+        '200': { description: "{ signals, next }", content: { application/json: { schema: { type: object } } } }
+  /admin/api/customer-calls/{callId}/end:
+    post:
+      summary: End a customer call
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/callId' }
+      responses:
+        '200': { description: "Ended call", content: { application/json: { schema: { type: object } } } }
+  /admin/api/conversations:
+    get:
+      summary: Conversations
+      x-minimum-role: operator
+      responses:
+        '200': { description: "Conversations of the operator's bank", content: { application/json: { schema: { type: object } } } }
+  /admin/api/conversations/{conversationId}/claim:
+    post:
+      summary: Claim a conversation
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/conversationId' }
+      responses:
+        '200': { description: "Claimed", content: { application/json: { schema: { type: object } } } }
+  /admin/api/conversations/{conversationId}/messages:
+    get:
+      summary: Messages
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/conversationId' }
+        - { $ref: '#/components/parameters/after' }
+      responses:
+        '200': { description: "Conversation and messages", content: { application/json: { schema: { type: object } } } }
+    post:
+      summary: Send a message
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/conversationId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } }
+      responses:
+        '200': { description: "Replayed (same clientMessageId)", content: { application/json: { schema: { type: object } } } }
+        '201': { description: "Sent", content: { application/json: { schema: { type: object } } } }
+  /admin/api/conversations/{conversationId}/release:
+    post:
+      summary: Release a conversation
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/conversationId' }
+      responses:
+        '200': { description: "Released", content: { application/json: { schema: { type: object } } } }
+  /admin/api/conversations/{conversationId}/close:
+    post:
+      summary: Close a conversation
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/conversationId' }
+      responses:
+        '200': { description: "Closed", content: { application/json: { schema: { type: object } } } }
+  /admin/api/verification-calls:
+    get:
+      summary: Verification call queue
+      x-minimum-role: operator
+      responses:
+        '200': { description: "Waiting verification calls of the operator's bank", content: { application/json: { schema: { type: object } } } }
+  /admin/api/verification-calls/{sessionId}/claim:
+    post:
+      summary: Claim a verification call
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/sessionId' }
+      responses:
+        '200': { description: "Claim with terms and ICE servers", content: { application/json: { schema: { type: object } } } }
+        '409': { description: "Claimed by someone else", content: { application/json: { schema: { type: object } } } }
+  /admin/api/verification-calls/{sessionId}/signals:
+    post:
+      summary: Send a call signal
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/sessionId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Signal' } } }
+      responses:
+        '200': { description: "Duplicate messageId", content: { application/json: { schema: { type: object } } } }
+        '201': { description: "Relayed", content: { application/json: { schema: { type: object } } } }
+    get:
+      summary: Receive call signals (long poll)
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/sessionId' }
+        - { $ref: '#/components/parameters/after' }
+        - { $ref: '#/components/parameters/waitMs' }
+      responses:
+        '200': { description: "{ signals, next }", content: { application/json: { schema: { type: object } } } }
+  /admin/api/verification-calls/{sessionId}/release:
+    post:
+      summary: Release a call
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/sessionId' }
+      responses:
+        '204': { description: "Released without a result" }
+  /admin/api/verification-calls/{sessionId}/decision:
+    post:
+      summary: Record VERIFIED or FAILED
+      x-minimum-role: operator
+      parameters:
+        - { $ref: '#/components/parameters/sessionId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Decision' } } }
+      responses:
+        '200': { description: "The verification plan after the result", content: { application/json: { schema: { type: object } } } }
+components:
+  securitySchemes:
+    adminSession: { type: apiKey, in: cookie, name: nexus_admin_session }
+  parameters:
+    nexusId: { name: nexusId, in: path, required: true, schema: { type: string, pattern: '^\d{9}$' } }
+    deliveryId: { name: deliveryId, in: path, required: true, schema: { type: string } }
+    approvalId: { name: approvalId, in: path, required: true, schema: { type: string } }
+    mandateId: { name: mandateId, in: path, required: true, schema: { type: string, format: uuid } }
+    credentialId: { name: credentialId, in: path, required: true, schema: { type: string, format: uuid } }
+    requestId: { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+    callId: { name: callId, in: path, required: true, schema: { type: string, format: uuid } }
+    conversationId: { name: conversationId, in: path, required: true, schema: { type: string, format: uuid } }
+    sessionId: { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+    nexusIdQuery: { name: nexusId, in: query, schema: { type: string, pattern: '^\d{9}$' } }
+    eventType: { name: eventType, in: query, schema: { type: string } }
+    limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+    before: { name: before, in: query, schema: { type: string, format: date-time } }
+    beforeTime: { name: before, in: query, schema: { type: string, format: date-time } }
+    webhookStatus: { name: status, in: query, schema: { type: string, enum: [PENDING, DELIVERED, FAILED] } }
+    approvalStatus: { name: status, in: query, schema: { type: string, enum: [PENDING, EXECUTED, REJECTED, EXPIRED], default: PENDING } }
+    filter: { name: filter, in: query, schema: { type: string, enum: [all, confirmed, declined, open], default: all } }
+    after: { name: after, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    waitMs: { name: waitMs, in: query, schema: { type: integer, minimum: 0, maximum: 20000, default: 0 } }
+  schemas:
+    Login:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 64 }
+        password: { type: string, minLength: 1, maxLength: 256 }
+        totp: { type: string, pattern: '^\d{6}$' }
+    Reason:
+      type: object
+      required: [reason]
+      properties: { reason: { type: string, minLength: 1, maxLength: 256 } }
+    ShortReason:
+      type: object
+      required: [reason]
+      properties: { reason: { type: string, minLength: 1, maxLength: 48 } }
+    Signal:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [offer, answer, candidate, bye], description: The operator answers; an offer from the operator is refused (offers come from the phone) }
+        payload: { description: "answer: { sdp }; candidate: an RTCIceCandidateInit; bye: { reason }" }
+        messageId: { type: string, format: uuid, description: Makes a retried POST idempotent }
+    Message:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 4000 }
+        clientMessageId: { type: string, minLength: 1, maxLength: 64, nullable: true }
+    Decision:
+      type: object
+      additionalProperties: false
+      required: [result]
+      properties: { result: { type: string, enum: [VERIFIED, FAILED] } }

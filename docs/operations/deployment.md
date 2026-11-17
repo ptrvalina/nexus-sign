@@ -15,14 +15,14 @@ NEXUS-SIGN runs inside the bank's controlled environment or private cloud. The m
 
 The repository does not contain a lockfile yet. It must be generated with access to the npm registry, reviewed and committed before an image can be built ([release checklist](release.md)). Until then the CI jobs that install dependencies fail by design.
 
-The base images (`node:22-alpine`) are referenced by tag, not by digest. Pinning them by digest needs registry access and is open (NXS-040).
+The base images (`node:22-alpine`) are referenced by tag, not by digest. Pinning them by digest needs registry access and is open.
 
 The runtime image runs as the unprivileged user `nexus`, contains `dist/`, `public/`, `src/db/schema.sql`, `migrations/` and the production dependencies, and checks `/healthz` with `HEALTHCHECK`. It sets `NODE_ENV=production` and `UV_THREADPOOL_SIZE=16`: the asynchronous PKCS#11 calls run on libuv worker threads shared with DNS, file and scrypt work, so keep `UV_THREADPOOL_SIZE` larger than `HSM_SESSION_POOL_SIZE` when changing either. `scripts/` (including `scripts/db/roles.sql` and `scripts/verify-evidence.mjs`) is not in the image; run those from a checkout of the release tag.
 
 ## Database
 
-- **New installation:** apply `auth-core/src/db/schema.sql`. It is complete and idempotent. Then apply `auth-core/scripts/db/roles.sql`.
-- **Upgrade of an existing deployment:** apply `auth-core/migrations/` in numeric order ([migrations/README.md](../../auth-core/migrations/README.md)), then `scripts/db/roles.sql` again. From 1.4.0, follow [upgrade to 2.0](upgrade-2.0.md).
+- **New installation:** `npm run migrate` on an empty database ([database migrations](database-migrations.md)); it applies `schema.sql` and starts the migration ledger. Then apply `auth-core/scripts/db/roles.sql`.
+- **Upgrade of an existing deployment:** `npm run migrate` ([database migrations](database-migrations.md); the first run on a database without a ledger needs `--adopt-at`), then `scripts/db/roles.sql` again. From 1.4.0, follow [upgrade to 2.0](upgrade-2.0.md).
 
 ### Database roles
 
@@ -77,7 +77,7 @@ Redis holds short-lived security state: bank access tokens, BOOTSTRAP tokens, de
 - a device request nonce is recorded with `SET NX` and must stay recorded for its TTL (2 x `DEVICE_REQUEST_MAX_SKEW_SECONDS` + 60 s);
 - a BOOTSTRAP token is consumed with `GETDEL` and must not reappear, because it enrols a device and, with a `replacement`, replaces the customer's current device.
 
-Requirement for the Redis deployment (NXS-021). Auth Core does not enforce this; it is an operational requirement:
+Requirement for the Redis deployment. Auth Core does not enforce this; it is an operational requirement:
 
 - No failover to an asynchronous replica that may lack recent writes. A promoted replica that missed the latest `SET NX` or `GETDEL` lets a captured device request be replayed or a consumed BOOTSTRAP token be used again.
 - Acceptable setups: a single primary with persistence (AOF with `appendfsync always` or `everysec`, accepting the loss window of the chosen setting), or replication where the primary refuses writes it cannot replicate (`min-replicas-to-write` with `min-replicas-max-lag`, or `WAIT` semantics provided by the managed service) and failover promotes only an up-to-date replica.
@@ -116,5 +116,7 @@ Production is deployed behind the bank's API gateway and WAF.
 | Android attestation | A job that refreshes `ANDROID_ATTESTATION_STATUS_FILE` ([runbook](runbooks/android-attestation-status-list.md)) |
 | Monitoring | Prometheus-compatible metrics, SIEM integration, alerting |
 | Evidence | Append-only retention with WORM or SIEM export per bank policy; banks keep the chain heads they receive |
+
+Kubernetes manifests to adapt, with a check that runs Auth Core's own posture checks over them: [`deploy/kubernetes`](../../deploy/kubernetes/README.md). The image runs as the fixed user 10001.
 
 Startup is fail-closed unless the PKCS#11 HSM, device attestation, database and Redis TLS, trusted gateway mTLS, admin MFA and webhook egress controls are all configured ([production blockers](configuration.md#production-blockers)). See the [threat model](../security/threat-model.md).

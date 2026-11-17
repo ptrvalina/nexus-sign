@@ -22,10 +22,21 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..',
 const ADMIN_DB_URL = process.env.INTEGRATION_DATABASE_URL;
 const REDIS_URL = process.env.INTEGRATION_REDIS_URL;
 
+/**
+ * With REQUIRE_ALL_INTEGRATION_SUITES=1 (set in CI) a missing service is a
+ * failure, not a skip: a required suite must never pass by not running.
+ */
+export function requiredOrSkip(reason) {
+  if (reason && process.env.REQUIRE_ALL_INTEGRATION_SUITES === '1') {
+    throw new Error(`Required integration suite cannot run: ${reason} (REQUIRE_ALL_INTEGRATION_SUITES=1)`);
+  }
+  return reason;
+}
+
 /** node:test `skip` option for suites that need PostgreSQL and Redis. */
-export const skipWithoutServices = ADMIN_DB_URL && REDIS_URL
+export const skipWithoutServices = requiredOrSkip(ADMIN_DB_URL && REDIS_URL
   ? false
-  : 'INTEGRATION_DATABASE_URL and INTEGRATION_REDIS_URL are not set';
+  : 'INTEGRATION_DATABASE_URL and INTEGRATION_REDIS_URL are not set');
 
 let redisDbCounter = 1;
 
@@ -46,8 +57,9 @@ function databaseUrl(name) {
   return url.toString();
 }
 
-/** Creates an empty database with the schema and every migration applied. */
-export async function createDatabase() {
+/** Creates an empty database with the schema and every migration applied
+ * (`{ schema: false }`: an empty database, e.g. a bank's own store). */
+export async function createDatabase({ schema = true } = {}) {
   const { Client, Pool } = require('pg');
   const name = `nexus_it_${randomBytes(6).toString('hex')}`;
   const admin = new Client({ connectionString: ADMIN_DB_URL });
@@ -62,9 +74,11 @@ export async function createDatabase() {
   await setup.connect();
   try {
     await setup.query('SET client_min_messages = warning');
-    await setup.query(readFileSync(join(ROOT, 'src/db/schema.sql'), 'utf8'));
-    for (const file of readdirSync(join(ROOT, 'migrations')).filter((f) => f.endsWith('.sql')).sort()) {
-      await setup.query(readFileSync(join(ROOT, 'migrations', file), 'utf8'));
+    if (schema) {
+      await setup.query(readFileSync(join(ROOT, 'src/db/schema.sql'), 'utf8'));
+      for (const file of readdirSync(join(ROOT, 'migrations')).filter((f) => f.endsWith('.sql')).sort()) {
+        await setup.query(readFileSync(join(ROOT, 'migrations', file), 'utf8'));
+      }
     }
   } finally {
     await setup.end();
@@ -162,13 +176,19 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
   const deadline = Date.now() + 20_000;
   for (;;) {
     const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r(undefined), 150))]);
-    if (code !== undefined) throw new Error(`Auth Core exited with ${code} during startup:\n${log}`);
+    if (code !== undefined) {
+      // Release the Redis connection, or the test process cannot exit.
+      redis.client.disconnect();
+      if (!database) await db.drop();
+      throw new Error(`Auth Core exited with ${code} during startup:\n${log}`);
+    }
     try {
       const ready = await fetch(`${baseUrl}/readyz`);
       if (ready.status === 200) break;
     } catch { /* not listening yet */ }
     if (Date.now() > deadline) {
       child.kill('SIGKILL');
+      redis.client.disconnect();
       throw new Error(`Auth Core did not become ready:\n${log}`);
     }
   }
@@ -190,6 +210,10 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
       if (!secret) throw new Error(`registerClient printed no secret:\n${output}`);
       return { clientId, secret, webhookSecret };
     },
+    /** Runs cli/verificationSetup.js (provider-add, provider-retire, operator, show). */
+    async verificationSetup(...args) {
+      return runCli('verificationSetup.js', args, env);
+    },
     /** Creates an admin with the operator CLI; returns password and TOTP secret. */
     async createAdmin(username, role, { clientId, password } = {}) {
       const args = [username, role];
@@ -201,6 +225,14 @@ export async function startAuthCore({ env: overrides = {}, database } = {}) {
         totpSecret: /totp_secret:\s*(\S+)/.exec(output)?.[1],
         output,
       };
+    },
+    /** Kills the process at once (SIGKILL: no drain, no cleanup), as a crash
+     * would; the database is kept. Then stop() only releases the resources. */
+    async crash() {
+      if (child.exitCode === null) {
+        child.kill('SIGKILL');
+        await exited;
+      }
     },
     async stop() {
       if (child.exitCode === null) {

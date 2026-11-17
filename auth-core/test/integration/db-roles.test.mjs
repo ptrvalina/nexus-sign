@@ -1,4 +1,4 @@
-// NXS-015: with scripts/db/roles.sql applied, Auth Core runs as a role that
+// With scripts/db/roles.sql applied, Auth Core runs as a role that
 // owns nothing, so it cannot disable or replace the protective triggers or
 // rewrite evidence and audit records, and the service still works.
 import { after, before, describe, test } from 'node:test';

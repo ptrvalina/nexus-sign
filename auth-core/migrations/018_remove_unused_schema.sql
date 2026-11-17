@@ -7,7 +7,7 @@
 -- - Credential states PENDING and SUSPENDED: a credential is created ACTIVE
 --   and ends REVOKED; suspension is a state of the identity, not of a key.
 -- - nexus_identities.recovery_verifier: recovery protocol 1 verifiers, which
---   work as passwords (NXS-003). Protocol 1 is no longer accepted; identities
+--   work as passwords. Protocol 1 is no longer accepted; identities
 --   still on it are refused with RECOVERY_PROTOCOL_RETIRED and set up a new
 --   phrase, so the stored verifiers have no remaining use.
 --

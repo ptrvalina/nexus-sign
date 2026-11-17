@@ -8,8 +8,8 @@ import { env } from '../config/env';
  *
  * Endpoints called directly by the embedded mobile SDK are exempt: a
  * customer's phone never holds the bank's gateway client certificate, so
- * those endpoints are authenticated by their own short-lived,
- * customer-scoped tokens instead. The exemption is an explicit allow-list of
+ * those endpoints are authenticated by device request signatures instead
+ * (or, for enrolment, a single-use BOOTSTRAP token). The exemption is an explicit allow-list of
  * device routes, matched case-insensitively because Express routing is
  * case-insensitive; the bank-facing /v1/mobile/sessions is never exempt.
  */
@@ -22,6 +22,35 @@ const DEVICE_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/verification\/escalate\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/verification-sessions\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/signature\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/deferred-signature\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/decline\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/call\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/signals\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/signals\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/verification-sessions\/[^/]+\/cancel\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/device-replacements\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/device-replacements\/[^/]+\/(approve|cancel)\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/devices\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/devices\/[^/]+\/revoke\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/customer-calls\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/customer-calls\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/customer-calls\/[^/]+\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/customer-calls\/[^/]+\/signals\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/customer-calls\/[^/]+\/(signals|end)\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/conversations\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/conversations\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/conversations\/[^/]+\/messages\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/conversations\/[^/]+\/(messages|read|handover|close)\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/mandates\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/mandates\/[^/]+\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/mandates\/[^/]+\/(signature|decline|suspend|resume|revoke)\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/history\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/authorizations\/[^/]+\/evidence\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/security-events\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/notifications\/?$/i },
+  { method: 'GET', pattern: /^\/v1\/mobile\/settings\/?$/i },
+  { method: 'PUT', pattern: /^\/v1\/mobile\/settings\/?$/i },
+  { method: 'POST', pattern: /^\/v1\/mobile\/identity\/suspend\/?$/i },
   { method: 'POST', pattern: /^\/v1\/mobile\/push-registration\/?$/i },
   { method: 'DELETE', pattern: /^\/v1\/mobile\/push-registration\/?$/i },
   { method: 'GET', pattern: /^\/v1\/mobile\/push-messages\/[^/]+\/?$/i },

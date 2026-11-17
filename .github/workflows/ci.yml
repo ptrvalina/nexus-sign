@@ -23,11 +23,11 @@ jobs:
       run:
         working-directory: auth-core
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Lockfile is committed
         run: |
           test -f package-lock.json || { echo "::error file=auth-core/package.json::package-lock.json is missing; dependencies must be installed from a reviewed lockfile (npm ci)"; exit 1; }
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -40,9 +40,17 @@ jobs:
         run: npm run build
       - name: Unit tests, protocol vectors, OpenAPI routes, repository hygiene
         run: npm run check:all
-      - name: OpenAPI contract parses
+      # Structure of the documents themselves ($refs, path parameters, valid
+      # schemas); check:all compares only the routes. PyYAML and jsonschema
+      # come from the Ubuntu archive, not from PyPI.
+      - name: OpenAPI documents are structurally valid
         run: |
-          python3 -c "import yaml; d = yaml.safe_load(open('openapi.yaml')); assert d['openapi'] == '3.0.3' and d['paths'], 'invalid OpenAPI document'"
+          sudo apt-get install -y --no-install-recommends python3-yaml python3-jsonschema
+          python3 scripts/validate-openapi.py openapi.yaml
+          python3 scripts/validate-openapi.py admin-openapi.yaml
+          python3 scripts/validate-openapi.py ../sandbox/openapi.yaml
+      - name: Kubernetes manifests follow Auth Core (production posture, probes, user)
+        run: python3 ../deploy/kubernetes/check-manifests.py
 
   auth-core-integration:
     name: auth-core / integration (PostgreSQL, Redis, SoftHSM)
@@ -74,13 +82,31 @@ jobs:
     env:
       INTEGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       INTEGRATION_REDIS_URL: redis://localhost:6379
-      SOFTHSM2_MODULE: /usr/lib/softhsm/libsofthsm2.so
-      SOFTHSM2_UTIL: /usr/bin/softhsm2-util
+      SOFTHSM2_MODULE: /opt/softhsm/lib/softhsm/libsofthsm2.so
+      SOFTHSM2_UTIL: /opt/softhsm/bin/softhsm2-util
+      # A suite that cannot run (no PostgreSQL, Redis or SoftHSM) fails the job instead of skipping.
+      REQUIRE_ALL_INTEGRATION_SUITES: '1'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: SoftHSM (PKCS#11 adapter tests)
-        run: sudo apt-get update -q && sudo apt-get install -y -q softhsm2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # Ubuntu 24.04 packages SoftHSM 2.6.1, which lacks CKM_ECDSA_SHA256 (the
+      # mechanism Auth Core signs evidence with), so the HSM suites could not run.
+      # Build the 2.7.0 release against OpenSSL, pinned to the tag's commit.
+      - name: SoftHSM 2.7.0 from source (PKCS#11 adapter tests)
+        working-directory: ${{ runner.temp }}
+        env:
+          SOFTHSM_COMMIT: 13e6e86b83748fef74046dbf0c91f664b7acc1c3 # tag 2.7.0
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q autoconf automake libtool pkg-config libssl-dev
+          git clone -q --depth 1 --branch 2.7.0 https://github.com/softhsm/SoftHSMv2 softhsm
+          cd softhsm
+          test "$(git rev-parse HEAD)" = "$SOFTHSM_COMMIT"
+          sh autogen.sh
+          ./configure --prefix=/opt/softhsm --with-crypto-backend=openssl --disable-gost
+          make -j"$(nproc)"
+          sudo make install
+          /opt/softhsm/bin/softhsm2-util --version
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -91,6 +117,104 @@ jobs:
       - run: npm run build
       - name: Integration suites (concurrency, tenant isolation, replay, HSM, evidence, recovery, admin, mTLS)
         run: npm run test:integration
+
+  auth-core-media:
+    name: auth-core / real WebRTC call (PostgreSQL, Redis, Chromium)
+    runs-on: ubuntu-24.04
+    needs: auth-core
+    defaults:
+      run:
+        working-directory: auth-core
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      INTEGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      INTEGRATION_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: auth-core/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - name: Playwright and Chromium (test tooling only, not a dependency of Auth Core)
+        run: |
+          npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Device and operator console in two browsers, media over DTLS-SRTP
+        run: npm run test:media
+
+  sdk-call-conformance:
+    name: android-sdk call state machine against Auth Core (signalling only)
+    runs-on: ubuntu-24.04
+    needs: auth-core
+    defaults:
+      run:
+        working-directory: auth-core
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      INTEGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      INTEGRATION_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: auth-core/package-lock.json
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2, also validates the wrapper checksum
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build
+      - name: Compile the SDK's unit tests first (a cold Gradle build takes longer than the driver waits for signals)
+        working-directory: android-sdk
+        run: sh ./gradlew --no-daemon compileDebugUnitTestKotlin
+      - name: SDK call controller (JVM) with this Auth Core; scripted media, real signalling
+        env:
+          NEXUS_CALL_CONFORMANCE_CMD: cd ../android-sdk && sh ./gradlew --no-daemon testDebugUnitTest --tests com.nexis.nexussign.CallConformanceTest
+        run: node --test test/media/sdk-call-conformance.test.mjs
 
   auth-core-e2e:
     name: auth-core / end-to-end (PostgreSQL, Redis)
@@ -132,10 +256,10 @@ jobs:
       OFFLINE_CONFIRMATION_ENABLED: 'true'
       PORT: '8080'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Generate throwaway encryption keys for this run
         run: echo "DEVICE_SECRET_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -166,6 +290,12 @@ jobs:
           echo "::add-mask::$SECRET"
           echo "client_secret=$SECRET" >> "$GITHUB_OUTPUT"
 
+      - name: Register a throwaway verification provider key (signs the audio/video results of the e2e flow)
+        run: |
+          openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out "$RUNNER_TEMP/provider.pem"
+          openssl ec -in "$RUNNER_TEMP/provider.pem" -pubout -out "$RUNNER_TEMP/provider.pub"
+          node dist/cli/verificationSetup.js provider-add e2e-bank smoke-provider k1 AUDIO,VIDEO "$RUNNER_TEMP/provider.pub"
+
       - name: Start Auth Core
         run: |
           nohup npm run start > server.log 2>&1 &
@@ -181,6 +311,7 @@ jobs:
         env:
           NEXUS_SIGN_SMOKE_CLIENT_ID: e2e-bank
           NEXUS_SIGN_SMOKE_CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
+          NEXUS_SIGN_SMOKE_PROVIDER_KEY: ${{ runner.temp }}/provider.pem
 
       - name: Server log
         if: always()
@@ -190,7 +321,7 @@ jobs:
     name: containers / build and health check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Auth Core image
         run: docker build -t nexus-sign/auth-core:ci auth-core
       - name: Sandbox image
@@ -202,14 +333,28 @@ jobs:
 
   ios-sdk:
     name: ios-sdk / build and unit tests
-    runs-on: macos-14
+    runs-on: macos-15
     defaults:
       run:
         working-directory: ios-sdk
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Swift package build and tests
-        run: swift test
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # Warnings are errors: the package and its tests compile warning-free, and
+      # Swift 6 concurrency diagnostics (warnings in Swift 5 mode) stay out.
+      - name: Swift package build and tests (warnings as errors)
+        run: swift test -Xswiftc -warnings-as-errors
+
+  ios-demo:
+    name: ios demo app / build
+    runs-on: macos-15
+    needs: ios-sdk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Build the demo app for iPhone against the SDK in this repository (unsigned)
+        run: |
+          xcodebuild -project demo/ios/NEXUSSignDemo.xcodeproj -scheme NEXUSSignDemo \
+            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build
 
   android-sdk:
     name: android-sdk / build and unit tests
@@ -218,14 +363,94 @@ jobs:
       run:
         working-directory: android-sdk
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4, also validates the wrapper checksum
-      - name: Unit tests and release build
-        run: sh ./gradlew --no-daemon testDebugUnitTest assembleRelease
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2, also validates the wrapper checksum
+      # Android Lint checks every API call against minSdk 28 (NewApi is an error).
+      - name: Unit tests, Android Lint and release build
+        run: sh ./gradlew --no-daemon testDebugUnitTest lintRelease assembleRelease
+
+  android-sdk-calls:
+    name: android-sdk-calls / WebRTC module build
+    runs-on: ubuntu-24.04
+    needs: android-sdk
+    defaults:
+      run:
+        working-directory: android-sdk-calls
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2, also validates the wrapper checksum
+      - name: Build against io.github.webrtc-sdk:android (pinned version)
+        run: sh ./gradlew --no-daemon assembleRelease
+      # AGP 8.5 cannot build the lint model when the core SDK comes from the
+      # included build (job 133530585047), so Lint runs against the core SDK
+      # published to Maven Local from this checkout.
+      - name: Android Lint (API calls against minSdk 28)
+        run: |
+          (cd ../android-sdk && sh ./gradlew --no-daemon publishReleasePublicationToMavenLocal)
+          sh ./gradlew --no-daemon -Pnexus.coreSdkFromMavenLocal lintRelease
+      - name: Record the resolved WebRTC artifact and its SHA-256 (provenance evidence, D-015)
+        run: |
+          find ~/.gradle/caches/modules-2/files-2.1/io.github.webrtc-sdk -type f \( -name '*.aar' -o -name '*.pom' \) -exec sha256sum {} + | tee webrtc-artifacts.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-webrtc-artifacts-sha256
+          path: android-sdk-calls/webrtc-artifacts.sha256
+          retention-days: 90
+
+  ios-sdk-calls:
+    name: ios-sdk-calls / WebRTC module build
+    runs-on: macos-15
+    needs: ios-sdk
+    defaults:
+      run:
+        working-directory: ios-sdk-calls
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Build for iPhone against stasel/WebRTC (exact version)
+        run: xcodebuild -scheme NEXUSSignCalls -destination 'generic/platform=iOS' -skipPackagePluginValidation build
+      - name: Record the resolved WebRTC package revision (provenance evidence, D-015)
+        run: cat Package.resolved 2>/dev/null || find . -name Package.resolved -exec cat {} +
+
+  android-demo:
+    name: android demo app / debug APK
+    runs-on: ubuntu-24.04
+    needs: android-sdk
+    defaults:
+      run:
+        working-directory: demo/android
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2, also validates the wrapper checksum
+      - name: Build the demo app against the SDK in this repository
+        run: sh ../../android-sdk/gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nexus-sign-demo-apk
+          path: demo/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
+  demo-bank:
+    name: demo bank / access control
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+      - name: Pairing code required for enrolment tokens (no dependencies)
+        run: node --test demo/bank-backend/test/*.test.mjs
 
   sandbox:
     name: sandbox / protocol and API tests
@@ -234,8 +459,8 @@ jobs:
       run:
         working-directory: sandbox
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'  # oldest supported version
       - name: Unit and API tests (standard library only)

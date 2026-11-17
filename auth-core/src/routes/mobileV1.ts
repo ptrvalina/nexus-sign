@@ -1,25 +1,35 @@
-import { Router, type Response } from 'express';
+import { Router, type NextFunction, type Response } from 'express';
 import { z } from 'zod';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { authenticateBankClient, type AuthenticatedRequest } from '../middleware/auth';
 import { authenticateMobileSession, type MobileAuthenticatedRequest } from '../middleware/mobileAuth';
-import { consumeMobileSession, issueBootstrapToken } from '../services/mobileSessionService';
+import { consumeMobileSession, issueBootstrapToken, type ReplacementAuthorization } from '../services/mobileSessionService';
+import { decideDeviceReplacement, listOpenReplacements, requestDeviceReplacement } from '../services/deviceReplacementService';
 import { getNexusIdentityForClient } from '../services/nexusIdentityService';
-import { createCredential, getActiveDeviceCredential, getCredentialForClient, hasEnrolledCredential } from '../services/credentialService';
+import { customerClose, customerMessages, customerRead, customerRequestsAgent, customerSend, listCustomerConversations, openConversation } from '../services/conversationService';
+import { customerMandateAction, getMandateForDevice, listMandatesForIdentity, signMandate, type CustomerMandateAction } from '../services/mandateService';
+import { createCredential, getActiveDeviceCredential, getCredentialForClient, hasEnrolledCredential, hasRevokedCredential, revokeDeviceByCustomer } from '../services/credentialService';
 import { assertCredentialIntegrity } from '../services/credentialIntegrity';
 import { recordAuditEvent } from '../services/auditService';
 import { enrolmentAttestation, platformMatches, verifyDeviceAttestation } from '../services/attestationVerificationService';
 import { env } from '../config/env';
 import { authorizationObjectOf, getAuthorizationForClient, type AuthorizationRecord } from '../services/authorizationRecord';
-import { verifyAuthorization } from '../services/authorizationConfirmation';
+import { submitDeferredSignature, verifyAuthorization } from '../services/authorizationConfirmation';
 import { canonicalizeAuthorization } from '../services/canonicalAuthorization';
+import { reportedState } from '../services/authorizationExpiry';
 import { beginRecoverySetup, completeRecoverySetup } from '../services/recoveryService';
 import { escalateVerification, getVerificationPlan, openVerificationSession } from '../services/adaptiveVerificationService';
 import { buildAttestationBinding } from '../services/attestationBinding';
 import { registerPushDevice, unregisterPushDevice, type DeviceContext } from '../services/pushRegistrationService';
 import { getPushEnvelopeForDevice, recordPushReceipt } from '../services/pushService';
+import { deviceCancel, deviceJoin, deviceSignal, deviceSignals } from '../services/verificationCall';
+import * as customerCalls from '../services/customerCallService';
 import { byIp, loginThrottle } from '../middleware/bruteForceProtection';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../services/errors';
+import { declineAuthorization } from '../services/authorizationDecline';
+import {
+  authorizationHistory, evidenceForCustomer, getSettings, listDevices, notificationHistory, securityEvents, suspendByCustomer, updateSettings,
+} from '../services/customerAccountService';
 
 const bootstrapSchema = z.object({
   publicKeyPem: z.string().min(1).max(4096),
@@ -29,7 +39,9 @@ const bootstrapSchema = z.object({
   authPublicKeyPem: z.string().min(1).max(4096),
   /** Biometric-protected key agreement key for offline confirmation. */
   offlinePublicKeyPem: z.string().min(1).max(4096).optional(),
-  deviceAttestation: z.record(z.unknown()).default({}),
+  /** PER_AUTHORIZATION: a fresh Auth Core key per offline confirmation (offline v3). */
+  offlineKeyAgreement: z.enum(['STATIC', 'PER_AUTHORIZATION']).optional(),
+  deviceAttestation: z.record(z.string(), z.unknown()).default({}),
 });
 
 const signatureSchema = z.object({
@@ -102,26 +114,61 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       if (!req.bankClientId) throw new UnauthorizedError('Missing authenticated bank client');
       const body = z.object({
         nexusId: z.string().regex(/^\d{9}$/),
-        purpose: z.literal('BOOTSTRAP', { errorMap: () => ({ message: 'Only BOOTSTRAP tokens exist; enrolled devices sign their requests' }) }).default('BOOTSTRAP'),
+        purpose: z.literal('BOOTSTRAP', { message: 'Only BOOTSTRAP tokens exist; enrolled devices sign their requests' }).default('BOOTSTRAP'),
         /** Required to enrol a device for an identity that already has one:
          * how the bank re-identified the customer, and its case reference. */
         replacement: z.object({
           method: z.enum(['BRANCH_VISIT', 'VIDEO_IDENTIFICATION', 'IN_APP_STRONG_AUTHENTICATION', 'OTHER']),
           reference: z.string().min(1).max(128),
         }).optional(),
-      }).parse(req.body);
+        /** Enrols a further device next to the active ones (migration 027),
+         * up to the bank client's max_devices_per_identity. */
+        addition: z.object({
+          method: z.enum(['BRANCH_VISIT', 'VIDEO_IDENTIFICATION', 'IN_APP_STRONG_AUTHENTICATION', 'OTHER']),
+          reference: z.string().min(1).max(128),
+        }).optional(),
+      }).refine((b) => !(b.replacement && b.addition), { message: 'replacement and addition are exclusive' }).parse(req.body);
       const identity = await getNexusIdentityForClient(body.nexusId, req.bankClientId);
       if (identity.status !== 'ACTIVE') throw new ConflictError(`NEXUS ID is ${identity.status}`);
-      if (!body.replacement && await hasEnrolledCredential(body.nexusId)) {
+      const enrolled = await hasEnrolledCredential(body.nexusId);
+      if (!body.replacement && !body.addition && enrolled) {
         throw new ConflictError(
           'The customer already has an enrolled device. Use recovery with the recovery phrase, or issue a replacement token after re-identifying the customer',
           'ACTIVE_CREDENTIAL_EXISTS');
       }
-      const session = await issueBootstrapToken(req.bankClientId, body.nexusId, body.replacement);
+      // A device that was revoked is replaced like an enrolled one, with the
+      // hold, so "revoke, then enrol" is not a way around it (A2-01).
+      const hadDevice = !enrolled && await hasRevokedCredential(body.nexusId);
+      if (!body.replacement && !body.addition && hadDevice) {
+        throw new ConflictError(
+          'This NEXUS ID had a device before. Use recovery with the recovery phrase, or request a replacement after re-identifying the customer',
+          'REPLACEMENT_REQUIRED');
+      }
       const actor = { nexusId: body.nexusId, actor: `bank:${req.bankClientId}`, ipAddress: req.ip, userAgent: req.header('user-agent') };
+      let replacement: ReplacementAuthorization | undefined;
+      if (body.addition) {
+        // A further device waits for an enrolled device's approval, or for
+        // the hold, exactly like a replacement; it revokes nothing.
+        const { replacement: request } = await requestDeviceReplacement(req.bankClientId, body.nexusId, body.addition.method, body.addition.reference, 'ADDITION');
+        if (!request.usable) {
+          res.status(202).json({ status: 'ADDITION_PENDING', replacementId: request.replacementId, kind: request.kind, state: request.state, notBefore: request.notBefore, expiresAt: request.expiresAt });
+          return;
+        }
+        replacement = { method: request.method, reference: request.reference, replacementId: request.replacementId, kind: 'ADDITION' };
+      } else if (body.replacement && (enrolled || hadDevice)) {
+        // A replacement waits for the customer's approval on the enrolled
+        // device, or for the hold to pass (deviceReplacementService).
+        const { replacement: request } = await requestDeviceReplacement(req.bankClientId, body.nexusId, body.replacement.method, body.replacement.reference);
+        if (!request.usable) {
+          res.status(202).json({ status: 'REPLACEMENT_PENDING', replacementId: request.replacementId, state: request.state, notBefore: request.notBefore, expiresAt: request.expiresAt });
+          return;
+        }
+        replacement = { method: request.method, reference: request.reference, replacementId: request.replacementId, kind: 'REPLACEMENT' };
+      }
+      const session = await issueBootstrapToken(req.bankClientId, body.nexusId, replacement);
       await recordAuditEvent('mobile_session_issued', actor, { purpose: body.purpose, expiresIn: session.expiresIn });
-      if (body.replacement) {
-        await recordAuditEvent('credential_replacement_authorized', actor, { method: body.replacement.method, reference: body.replacement.reference });
+      if (replacement) {
+        await recordAuditEvent('credential_replacement_authorized', actor, { method: replacement.method, reference: replacement.reference, replacementId: replacement.replacementId });
       }
       res.status(201).json({
         accessToken: session.token,
@@ -146,7 +193,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       try {
         await recordPushReceipt(z.string().uuid().parse(req.params.messageId), body.credentialId.toLowerCase(), body.receipt);
       } catch (error) {
-        if (error instanceof NotFoundError) await receiptThrottle.recordFailure(req).catch(() => undefined);
+        if (error instanceof NotFoundError) await receiptThrottle.recordFailure(req);
         throw error;
       }
       res.status(204).send();
@@ -192,7 +239,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const body = bootstrapSchema.parse(req.body);
       if (!req.mobileAttestationChallenge) throw new ForbiddenError('Bootstrap attestation challenge is missing or expired');
       const challenge = Buffer.from(req.mobileAttestationChallenge, 'base64url');
-      const deviceKeys = { authPublicKeyPem: body.authPublicKeyPem, offlinePublicKeyPem: body.offlinePublicKeyPem };
+      const deviceKeys = { authPublicKeyPem: body.authPublicKeyPem, offlinePublicKeyPem: body.offlinePublicKeyPem, offlineKeyAgreement: body.offlineKeyAgreement };
       const binding = buildAttestationBinding(challenge, body.publicKeyPem, deviceKeys);
       const verdict = await verifyDeviceAttestation(body.deviceAttestation, binding,
         { challenge, signingPublicKeyPem: body.publicKeyPem, authPublicKeyPem: body.authPublicKeyPem });
@@ -221,7 +268,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
         replacement: req.mobileReplacement ?? null,
         deviceKeys,
         hsm: hsmAdapter,
-        enrolment: { reason: req.mobileReplacement ? 'REPLACEMENT' : 'ENROLMENT', attestation: enrolmentAttestation(body.deviceAttestation, binding, verdict) },
+        enrolment: { reason: req.mobileReplacement ? (req.mobileReplacement.kind === 'ADDITION' ? 'ADDITION' : 'REPLACEMENT') : 'ENROLMENT', attestation: enrolmentAttestation(body.deviceAttestation, binding, verdict) },
       });
       // The device signs its own requests from now on: no token is issued.
       res.status(201).json({
@@ -233,6 +280,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
         attestationStatus: credential.attestationStatus,
         requestAuthentication: 'DEVICE_SIGNATURE',
         offlineServerPublicKeyPem: credential.offlineServerPublicKeyPem,
+        offlineKeyAgreement: credential.offlineEnabled ? credential.offlineKeyAgreement : null,
       });
     } catch (e) { next(e); }
   });
@@ -257,7 +305,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
         nonce: auth.nonce,
         issuedAt: auth.issuedAt.toISOString(),
         expiresAt: auth.expiresAt.toISOString(),
-        state: auth.state,
+        state: reportedState(auth),
         signatureAlgorithm: auth.signatureAlgorithm,
         verifiedAt: auth.verifiedAt?.toISOString() ?? null,
         canonicalPayloadBase64: canonicalizeAuthorization(authorizationObjectOf(auth)).toString('base64'),
@@ -288,6 +336,274 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const auth = await authorizationInScope(req.params.authorizationId, s);
       const body = z.object({ channel: z.enum(['AUDIO', 'VIDEO']) }).parse(req.body);
       res.status(201).json(await openVerificationSession(auth.authorizationId, s.clientId, body.channel));
+    } catch (e) { next(e); }
+  });
+
+  // --- In-app audio/video call (ADR 0017): WebRTC signalling relay ---
+
+  const callDevice = async (req: MobileAuthenticatedRequest) => {
+    const device = await deviceInScope(req);
+    return { clientId: device.clientId, nexusId: device.nexusId, credentialId: device.credentialId };
+  };
+  const sessionParam = z.string().uuid();
+
+  /** ICE servers and state of an open session of this device's authorization. */
+  router.get('/v1/mobile/verification-sessions/:sessionId/call', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      res.json(await deviceJoin(sessionParam.parse(req.params.sessionId), await callDevice(req)));
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/verification-sessions/:sessionId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ type: z.string(), payload: z.unknown().optional(), messageId: z.string().uuid().optional() }).strict().parse(req.body);
+      const sent = await deviceSignal(sessionParam.parse(req.params.sessionId), await callDevice(req), body.type, body.payload ?? null, body.messageId);
+      res.status(sent.duplicate ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+
+  /** Signals from the operator with seq > after; waits up to waitMs (long poll). */
+  router.get('/v1/mobile/verification-sessions/:sessionId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const query = z.object({ after: z.coerce.number().int().nonnegative().default(0), waitMs: z.coerce.number().int().min(0).max(20_000).default(0) }).parse(req.query);
+      res.json(await deviceSignals(sessionParam.parse(req.params.sessionId), await callDevice(req), query.after, query.waitMs));
+    } catch (e) { next(e); }
+  });
+
+  /** The customer ends or declines the call; nothing is verified or failed. */
+  router.post('/v1/mobile/verification-sessions/:sessionId/cancel', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      await deviceCancel(sessionParam.parse(req.params.sessionId), await callDevice(req));
+      res.status(204).send();
+    } catch (e) { next(e); }
+  });
+
+  // --- Device replacement (the enrolled device decides) ---
+
+  /** Open replacement requests for this device's NEXUS ID, to show to the customer. */
+  router.get('/v1/mobile/device-replacements', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ replacements: await listOpenReplacements(device.nexusId) });
+    } catch (e) { next(e); }
+  });
+
+  const replacementParam = z.string().uuid();
+  const decideReplacement = (decision: 'APPROVE' | 'CANCEL') => async (req: MobileAuthenticatedRequest, res: Response, next: (e?: unknown) => void) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json(await decideDeviceReplacement(device.credentialId, device.nexusId, replacementParam.parse(req.params.replacementId), decision));
+    } catch (e) { next(e); }
+  };
+  /** The customer approves a replacement on the enrolled device: the hold ends now. */
+  router.post('/v1/mobile/device-replacements/:replacementId/approve', decideReplacement('APPROVE'));
+  /** The customer cancels a replacement on the enrolled device ("it wasn't me"). */
+  router.post('/v1/mobile/device-replacements/:replacementId/cancel', decideReplacement('CANCEL'));
+
+  // --- The customer's own section in the bank's app (presentation pages 19-22) ---
+
+  const page = z.object({ before: z.string().datetime().optional(), limit: z.coerce.number().int().min(1).max(200).optional() });
+
+  /** "My devices": every device that held keys for this NEXUS ID. */
+  router.get('/v1/mobile/devices', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ devices: await listDevices(device.nexusId, device.credentialId) });
+    } catch (e) { next(e); }
+  });
+
+  /** The customer removes one of their devices (itself or another one). */
+  router.post('/v1/mobile/devices/:credentialId/revoke', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const target = z.string().uuid().parse(req.params.credentialId).toLowerCase();
+      const result = await revokeDeviceByCustomer(device.clientId, device.nexusId, device.credentialId, target);
+      res.json({ credentialId: target, state: 'REVOKED', remainingActiveDevices: result.remainingActive });
+    } catch (e) { next(e); }
+  });
+
+  // --- Conversations with the bank (chat, the bank's bot, handover to a person) ---
+
+  const conversationParam = z.string().uuid();
+  const attachmentSchema = z.object({ reference: z.string(), sha256: z.string(), mediaType: z.string(), fileName: z.string(), sizeBytes: z.number().int() }).strict().nullable().optional();
+
+  // --- Calls the customer starts (customerCallService.ts) ---
+  const callParam = z.string().uuid();
+  router.get('/v1/mobile/customer-calls', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json({ calls: await customerCalls.listDeviceCalls(await callDevice(req)) }); } catch (e) { next(e); }
+  });
+  router.post('/v1/mobile/customer-calls', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ channel: z.enum(['AUDIO', 'VIDEO']), topic: z.string().min(1).max(200), conversationId: z.string().uuid().nullable().optional() }).strict().parse(req.body);
+      res.status(201).json(await customerCalls.requestCustomerCall(await callDevice(req), body));
+    } catch (e) { next(e); }
+  });
+  router.get('/v1/mobile/customer-calls/:callId', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerCalls.deviceCallState(callParam.parse(req.params.callId), await callDevice(req))); } catch (e) { next(e); }
+  });
+  router.post('/v1/mobile/customer-calls/:callId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const body = z.object({ type: z.string(), payload: z.unknown().optional(), messageId: z.string().uuid().optional() }).strict().parse(req.body);
+      const sent = await customerCalls.deviceSignal(callParam.parse(req.params.callId), await callDevice(req), body.type, body.payload ?? null, body.messageId);
+      res.status(sent.duplicate ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+  router.get('/v1/mobile/customer-calls/:callId/signals', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const query = z.object({ after: z.coerce.number().int().nonnegative().default(0), waitMs: z.coerce.number().int().min(0).max(20_000).default(0) }).parse(req.query);
+      res.json(await customerCalls.deviceSignals(callParam.parse(req.params.callId), await callDevice(req), query.after, query.waitMs));
+    } catch (e) { next(e); }
+  });
+  router.post('/v1/mobile/customer-calls/:callId/end', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerCalls.deviceEnd(callParam.parse(req.params.callId), await callDevice(req))); } catch (e) { next(e); }
+  });
+
+  router.get('/v1/mobile/conversations', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json({ conversations: await listCustomerConversations((await deviceInScope(req)).nexusId) }); } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ topic: z.string().min(1).max(200), body: z.string().min(1).max(4000), authorizationId: z.string().uuid().nullable().optional(),
+        clientMessageId: z.string().min(1).max(64).nullable().optional(), attachment: attachmentSchema }).strict().parse(req.body);
+      res.status(201).json(await openConversation(device, body));
+    } catch (e) { next(e); }
+  });
+
+  /** Messages after `after` (history and polling); the bank's messages are marked delivered. */
+  router.get('/v1/mobile/conversations/:conversationId/messages', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const after = z.coerce.number().int().min(0).default(0).parse(req.query.after);
+      res.json(await customerMessages(device, conversationParam.parse(req.params.conversationId), after));
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations/:conversationId/messages', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ body: z.string().min(1).max(4000), clientMessageId: z.string().min(1).max(64).nullable().optional(), attachment: attachmentSchema }).strict().parse(req.body);
+      const sent = await customerSend(device, conversationParam.parse(req.params.conversationId), body);
+      res.status(sent.replayed ? 200 : 201).json(sent);
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations/:conversationId/read', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ upToSequence: z.number().int().min(1) }).strict().parse(req.body);
+      res.json({ marked: await customerRead(device, conversationParam.parse(req.params.conversationId), body.upToSequence) });
+    } catch (e) { next(e); }
+  });
+
+  /** "Talk to a person": the conversation waits for an operator of the bank. */
+  router.post('/v1/mobile/conversations/:conversationId/handover', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerRequestsAgent(await deviceInScope(req), conversationParam.parse(req.params.conversationId))); } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/conversations/:conversationId/close', async (req: MobileAuthenticatedRequest, res, next) => {
+    try { res.json(await customerClose(await deviceInScope(req), conversationParam.parse(req.params.conversationId))); } catch (e) { next(e); }
+  });
+
+  // --- Payment mandates: the customer signs, declines, suspends, resumes, revokes ---
+
+  router.get('/v1/mobile/mandates', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ mandates: await listMandatesForIdentity(device.nexusId) });
+    } catch (e) { next(e); }
+  });
+
+  /** The terms to show; termsBase64 are the exact bytes to sign. */
+  router.get('/v1/mobile/mandates/:mandateId', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json(await getMandateForDevice(device.nexusId, z.string().uuid().parse(req.params.mandateId)));
+    } catch (e) { next(e); }
+  });
+
+  router.post('/v1/mobile/mandates/:mandateId/signature', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ signature: z.string().min(1).max(256), signatureFormat: z.enum(['der', 'raw']) }).strict().parse(req.body);
+      res.json(await signMandate(hsmAdapter, device, z.string().uuid().parse(req.params.mandateId), body.signature, body.signatureFormat));
+    } catch (e) { next(e); }
+  });
+
+  const mandateAction = (action: CustomerMandateAction) => async (req: MobileAuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json(await customerMandateAction(hsmAdapter, device, z.string().uuid().parse(req.params.mandateId), action));
+    } catch (e) { next(e); }
+  };
+  router.post('/v1/mobile/mandates/:mandateId/decline', mandateAction('DECLINE'));
+  router.post('/v1/mobile/mandates/:mandateId/suspend', mandateAction('SUSPEND'));
+  router.post('/v1/mobile/mandates/:mandateId/resume', mandateAction('RESUME'));
+  router.post('/v1/mobile/mandates/:mandateId/revoke', mandateAction('REVOKE'));
+
+  /** Confirmations, declines and open requests, newest first. */
+  router.get('/v1/mobile/history', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const q = page.extend({ filter: z.enum(['all', 'confirmed', 'declined', 'open']).optional() }).parse(req.query);
+      res.json({ authorizations: await authorizationHistory(device.nexusId, q) });
+    } catch (e) { next(e); }
+  });
+
+  /** The sealed evidence of one of the customer's authorizations. */
+  router.get('/v1/mobile/authorizations/:authorizationId/evidence', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const auth = await authorizationInScope(req.params.authorizationId, device);
+      res.json(await evidenceForCustomer(device.nexusId, auth.authorizationId));
+    } catch (e) { next(e); }
+  });
+
+  /** The identity's security log. */
+  router.get('/v1/mobile/security-events', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ events: await securityEvents(device.nexusId, page.parse(req.query)) });
+    } catch (e) { next(e); }
+  });
+
+  /** Past notifications (the event feed); each opens with GET /v1/mobile/push-messages/{id}. */
+  router.get('/v1/mobile/notifications', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json({ notifications: await notificationHistory(device.nexusId, page.parse(req.query)) });
+    } catch (e) { next(e); }
+  });
+
+  router.get('/v1/mobile/settings', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      res.json(await getSettings(device.nexusId));
+    } catch (e) { next(e); }
+  });
+
+  const amount = z.string().regex(/^(0|[1-9]\d{0,29})$/).nullable();
+  /** Limits, video-check threshold and channels; relaxing changes wait CUSTOMER_SETTINGS_RELAX_HOLD_SECONDS. */
+  router.put('/v1/mobile/settings', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({
+        currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
+        perPaymentLimitMinor: amount, dailyLimitMinor: amount, videoCheckAboveMinor: amount,
+        channels: z.object({ push: z.boolean(), audio: z.boolean(), video: z.boolean() }).strict(),
+      }).strict().parse(req.body);
+      res.json(await updateSettings(device.clientId, device.nexusId, device.credentialId, body));
+    } catch (e) { next(e); }
+  });
+
+  /** The customer suspends their NEXUS ID; the bank reactivates it after re-identification. */
+  router.post('/v1/mobile/identity/suspend', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const body = z.object({ reason: z.enum(['LOST_DEVICE', 'SUSPECTED_FRAUD', 'OTHER']) }).strict().parse(req.body);
+      await suspendByCustomer(device.clientId, device.nexusId, device.credentialId, body.reason);
+      res.json({ nexusId: device.nexusId, status: 'SUSPENDED' });
     } catch (e) { next(e); }
   });
 
@@ -325,6 +641,33 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const result = await verifyAuthorization(hsmAdapter, auth.authorizationId, s.clientId, body.signature, body.signatureFormat,
         { ipAddress: req.ip, userAgent: req.header('user-agent') });
       res.status(result.status === 'EXPIRED' ? 410 : 200).json(result);
+    } catch (e) { next(e); }
+  });
+
+  /** The customer declines the payment on the enrolled device ("it wasn't me"). */
+  router.post('/v1/mobile/authorizations/:authorizationId/decline', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const auth = await authorizationInScope(req.params.authorizationId, device);
+      const body = z.object({ reason: z.enum(['NOT_ME', 'WRONG_DETAILS', 'OTHER']) }).parse(req.body);
+      res.json(await declineAuthorization(auth.authorizationId, device.clientId, device.credentialId, body.reason,
+        { ipAddress: req.ip, userAgent: req.header('user-agent') }));
+    } catch (e) { next(e); }
+  });
+
+  /** Offline confirmation v2: the device's signature over the bytes
+   * it confirmed offline, uploaded once it has a connection. Only from the
+   * credential the authorization names. 200 VERIFIED or ALREADY_RECORDED,
+   * 202 RECEIVED (the code has not arrived yet), 409 NOT_AWAITING_SIGNATURE,
+   * 422 INVALID_DEFERRED_SIGNATURE. */
+  router.post('/v1/mobile/authorizations/:authorizationId/deferred-signature', async (req: MobileAuthenticatedRequest, res, next) => {
+    try {
+      const device = await deviceInScope(req);
+      const auth = await authorizationInScope(req.params.authorizationId, device);
+      const body = signatureSchema.parse(req.body);
+      const result = await submitDeferredSignature(hsmAdapter, auth.authorizationId, device.clientId, device.credentialId,
+        body.signature, body.signatureFormat, { ipAddress: req.ip, userAgent: req.header('user-agent') });
+      res.status(result.status === 'RECEIVED' ? 202 : 200).json(result);
     } catch (e) { next(e); }
   });
 

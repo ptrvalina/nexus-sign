@@ -1,13 +1,14 @@
 # Lost, stolen or replaced device
 
-A NEXUS ID has at most one `ACTIVE` device credential (unique index since migration 017). When the customer reports the phone lost, stolen or replaced, the bank stops the old credential and, after re-identifying the customer, enrols the new device. Since 2.0 a new device is never enrolled silently over an existing one: the bank either revokes the old credential first or authorizes the replacement explicitly. Design: [device replacement](../../architecture/device-replacement.md). Attestation: [device attestation](../../security/attestation.md); bank API details: [bank backend guide](../../integration/bank-backend-guide.md#device-replacement).
+A NEXUS ID has at most as many `ACTIVE` device credentials as its bank allows (`max_devices_per_identity`, default 1; migration 027). If the customer has another active device, the lost one can be removed from it (`POST /v1/mobile/devices/{credentialId}/revoke`) or by the bank (`POST /v1/credentials/{id}/revoke`). When the customer reports the phone lost, stolen or replaced, the bank stops the old credential and, after re-identifying the customer, enrols the new device. Since 2.0 a new device is never enrolled silently over an existing one: the bank requests the replacement explicitly, and the request is held until the customer approves it on the old device or the hold passes. Design: [device replacement](../../architecture/device-replacement.md). Attestation: [device attestation](../../security/attestation.md); bank API details: [bank backend guide](../../integration/bank-backend-guide.md#device-replacement).
 
 ## Symptoms
 
 - The customer reports a lost, stolen or replaced phone.
 - Authorizations the customer did not start appear as `PENDING_USER`, or fraud monitoring flags the identity.
 - A customer reports a security notice "set up on a new device" (`PUSH_REPLACEMENT_TITLE`) that they did not expect.
-- `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` returns 409 `ACTIVE_CREDENTIAL_EXISTS` for a customer with a new phone.
+- `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` returns 409 `ACTIVE_CREDENTIAL_EXISTS` or `REPLACEMENT_REQUIRED` for a customer with a new phone.
+- The bank receives `credential.replacement_cancelled`: a customer refused a replacement requested in their name.
 
 ## Impact
 
@@ -57,6 +58,7 @@ Choose by urgency:
 | Action | Who | Effect |
 |---|---|---|
 | Revoke the credential: `POST /v1/credentials/{credentialId}/revoke` | Bank backend, one call | Immediate and final for that credential. In one transaction: state `REVOKED` with `revoked_at`, its `PENDING_USER` authorizations `CANCELLED`, its push registration removed, audit event `credential_revoked` with `cancelledAuthorizations`. |
+| Revoke one device from the console: `POST /admin/api/identities/{nexusId}/devices/{credentialId}/revoke` with `{"reason":"..."}` ([bank console](../bank-console.md)) | One admin with role `operator` of the bank | As revoking the credential from the bank backend; the reason names the staff member. Other devices of the customer stay active. |
 | Suspend the identity: `POST /admin/api/identities/{nexusId}/suspend` with `{"reason":"..."}` | One admin with role `operator` or higher and access to the bank | Immediate. All `PENDING_USER` authorizations of the identity are cancelled; mobile requests receive 403; no authorization, confirmation, enrolment or recovery is possible. The credential is kept. Audit event `identity_suspended`. |
 | Revoke the identity: `POST /admin/api/identities/{nexusId}/revoke` | Two admins (four-eyes) | Takes effect only when a second admin approves. Final: the identity and all its credentials are revoked; the customer needs a new NEXUS ID. |
 
@@ -88,8 +90,7 @@ Always after the bank has re-identified the customer through its own controls. T
 
 | Path | When | Bank call |
 |---|---|---|
-| Replacement token | The old credential is still `ACTIVE` | `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` and `replacement: {method, reference}` |
-| Plain BOOTSTRAP token | The old credential was revoked in step 1 | `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP`; `replacement` may still be passed to record how the customer was re-identified |
+| Replacement request | The identity has or had a device (its credential is `ACTIVE`, or was revoked in step 1) | `POST /v1/mobile/sessions` with `purpose: BOOTSTRAP` and `replacement: {method, reference}`; 202 while held, 201 with the token afterwards |
 | Recovery | The customer has the recovery phrase and the bank requires it | `POST /v1/recovery/sessions`; see [recovery lockout](recovery-lockout.md) |
 
 ```sh
@@ -99,6 +100,8 @@ curl -sS -X POST "$AUTH_CORE/v1/mobile/sessions" \
 ```
 
 `method` is one of `BRANCH_VISIT`, `VIDEO_IDENTIFICATION`, `IN_APP_STRONG_AUTHENTICATION`, `OTHER`; `reference` is the bank's case reference, 1 to 128 characters. Issuing the token writes `credential_replacement_authorized`. The token is single use and valid for 300 s.
+
+Since the A2-01 fix a replacement is held: the first call answers 202 `REPLACEMENT_PENDING` with `replacementId` and `notBefore`. The customer approves it in the bank's app on the old device (if they still have it), or the hold passes (`DEVICE_REPLACEMENT_HOLD_SECONDS`, at least one hour in production, default 24 hours); then the same call returns the token. A cancellation by the customer ends the request: investigate it as a possible takeover attempt. For a stolen phone where the customer needs a device at once, recovery with the phrase is the immediate path. [Hold](../../architecture/device-replacement.md#hold).
 
 When the new device enrols with a replacement token while an old credential is still non-revoked, Auth Core in one transaction:
 
@@ -120,4 +123,4 @@ When the old credential was revoked first, the enrolment replaces nothing: there
 
 - Review authorizations verified between the reported loss and the revocation with the customer. Their evidence shows which credential signed (`GET /v1/authorizations/{authorizationId}/evidence`).
 - An unexpected `credential.replaced` webhook or replacement notice: check the `credential_replacement_authorized` event (`actor`, `method`, `reference`, `ip_address`) against the bank's case records; an unknown case is a security incident ([incident response](../incident-response.md#unauthorized-device-replacement)).
-- The recovery key configured on the old device stays on the identity after replacement. The new device replaces it when it sets up recovery (`POST /v1/mobile/recovery/setup`).
+- The recovery key configured on the old device stays on the identity after a replacement. The new device replaces it when it sets up recovery (`POST /v1/mobile/recovery/setup`). After a recovery the phrase cannot be used again (409 `RECOVERY_PHRASE_USED`) until the recovered device sets up a new one; make sure the bank's app asks for it.

@@ -28,9 +28,9 @@ final class NetworkClient {
     /// Auth Core time minus device time, learned from a rejected timestamp.
     private var clockOffset: Int64 = 0
 
-    init(config: NEXUSSignConfig, session: URLSession = .shared) {
+    init(config: NEXUSSignConfig, session: URLSession? = nil) {
         self.config = config
-        self.session = session
+        self.session = session ?? CertificatePinning.session(pins: config.certificatePins)
     }
 
     /// Set once the device is enrolled; every device request is signed with it.
@@ -44,6 +44,8 @@ final class NetworkClient {
             "publicKeyPem": keys.signing,
             "authPublicKeyPem": keys.authentication,
             "offlinePublicKeyPem": keys.offline,
+            // A fresh Auth Core key for each offline confirmation (finding D-01).
+            "offlineKeyAgreement": "PER_AUTHORIZATION",
             "platform": "IOS",
             "securityLevel": securityLevel,
             "deviceAttestation": attestation,
@@ -58,6 +60,13 @@ final class NetworkClient {
     func signAuthorization(authorizationID: String, signature: Data) async throws -> VerifyResponse {
         let body: [String: Any] = ["signature": signature.base64EncodedString(), "signatureFormat": "der"]
         return try await send("POST", "/v1/mobile/authorizations/\(authorizationID)/signature", body: body)
+    }
+
+    /// Offline confirmation v2: the deferred device signature. Any 2xx means
+    /// Auth Core has it; other answers are `serverError(statusCode:)`.
+    func uploadDeferredSignature(authorizationID: String, signatureBase64: String) async throws {
+        let body: [String: Any] = ["signature": signatureBase64, "signatureFormat": "der"]
+        _ = try await perform("POST", "/v1/mobile/authorizations/\(authorizationID)/deferred-signature", body: body, token: .device)
     }
 
     struct PushRegistrationResponse: Decodable {
@@ -111,6 +120,7 @@ final class NetworkClient {
             "newPublicKeyPem": keys.signing,
             "authPublicKeyPem": keys.authentication,
             "offlinePublicKeyPem": keys.offline,
+            "offlineKeyAgreement": "PER_AUTHORIZATION",
             "platform": "IOS",
             "securityLevel": "SECURE_ENCLAVE",
             "deviceAttestation": attestation,
@@ -119,6 +129,78 @@ final class NetworkClient {
     }
 
     // MARK: - Transport
+
+    // MARK: Verification calls (ADR 0017)
+
+    func openVerificationSession(authorizationID: String, channel: VerificationChannel) async throws -> [String: Any] {
+        try await sendJSON("POST", "/v1/mobile/authorizations/\(authorizationID)/verification-sessions", body: ["channel": channel.rawValue])
+    }
+
+    func joinCall(sessionID: String) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/verification-sessions/\(sessionID)/call")
+    }
+
+    func sendCallSignal(sessionID: String, body: [String: Any]) async throws {
+        _ = try await perform("POST", "/v1/mobile/verification-sessions/\(sessionID)/signals", body: body, token: .device)
+    }
+
+    func receiveCallSignals(sessionID: String, after: Int64, waitMilliseconds: Int) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/verification-sessions/\(sessionID)/signals?after=\(after)&waitMs=\(waitMilliseconds)")
+    }
+
+    func cancelCall(sessionID: String) async throws {
+        _ = try await perform("POST", "/v1/mobile/verification-sessions/\(sessionID)/cancel", body: [:], token: .device)
+    }
+
+    // Calls the customer starts ("talk to the bank"): same signalling, own routes.
+    func joinCustomerCall(callID: String) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/customer-calls/\(callID)")
+    }
+
+    func sendCustomerCallSignal(callID: String, body: [String: Any]) async throws {
+        _ = try await perform("POST", "/v1/mobile/customer-calls/\(callID)/signals", body: body, token: .device)
+    }
+
+    func receiveCustomerCallSignals(callID: String, after: Int64, waitMilliseconds: Int) async throws -> [String: Any] {
+        try await sendJSON("GET", "/v1/mobile/customer-calls/\(callID)/signals?after=\(after)&waitMs=\(waitMilliseconds)")
+    }
+
+    func endCustomerCall(callID: String) async throws {
+        _ = try await perform("POST", "/v1/mobile/customer-calls/\(callID)/end", body: [:], token: .device)
+    }
+
+    func declineAuthorization(authorizationID: String, reason: NexusDeclineReason) async throws {
+        _ = try await perform("POST", "/v1/mobile/authorizations/\(authorizationID)/decline", body: ["reason": reason.rawValue], token: .device)
+    }
+
+    // MARK: Device replacement hold (A2-01)
+
+    func deviceReplacements() async throws -> [NexusDeviceReplacement] {
+        let list: DeviceReplacementList = try await send("GET", "/v1/mobile/device-replacements")
+        return list.replacements
+    }
+
+    func decideDeviceReplacement(replacementID: String, approve: Bool) async throws -> NexusDeviceReplacement {
+        try await send("POST", "/v1/mobile/device-replacements/\(replacementID)/\(approve ? "approve" : "cancel")", body: [:])
+    }
+
+    /// Longest long-poll wait that fits in the request timeout.
+    var callPollWaitMilliseconds: Int { max(0, min(15_000, Int(config.requestTimeout * 1000) - 2_000)) }
+
+    // MARK: Customer section, mandates, conversations (device-signed)
+
+    /// A device-signed call with a typed answer, for the account features.
+    func deviceCall<T: Decodable>(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> T {
+        try await send(method, path, body: body, token: .device)
+    }
+
+    private func sendJSON(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
+        let data = try await perform(method, path, body: body, token: .device)
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw NEXUSSignError.invalidServerResponse(detail: "unexpected response format")
+        }
+        return object
+    }
 
     private enum TokenSource {
         /// Signed by the enrolled device's authentication key.
@@ -130,13 +212,13 @@ final class NetworkClient {
     private func send<T: Decodable>(_ method: String, _ path: String, body: [String: Any]? = nil, token: TokenSource = .device) async throws -> T {
         let data = try await perform(method, path, body: body, token: token)
         guard !data.isEmpty else {
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Unexpected empty response")
+            throw NEXUSSignError.invalidServerResponse(detail: "unexpected empty response")
         }
         do {
             return try JSONDecoder.nexus().decode(T.self, from: data)
         } catch {
             // A body that does not decode is an Auth Core contract problem, not a connectivity one.
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Unexpected response format")
+            throw NEXUSSignError.invalidServerResponse(detail: "unexpected response format")
         }
     }
 
@@ -149,7 +231,14 @@ final class NetworkClient {
         var attempt = 0
         while true {
             attempt += 1
-            let url = config.baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            // appendingPathComponent would percent-encode a "?", so the query
+            // (call signals: ?after=&waitMs=) is set separately.
+            let pathParts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+            var url = config.baseURL.appendingPathComponent(String(pathParts[0]).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+            if pathParts.count == 2, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                components.percentEncodedQuery = String(pathParts[1])
+                url = components.url ?? url
+            }
             var request = URLRequest(url: url)
             request.httpMethod = method
             request.timeoutInterval = config.requestTimeout

@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.CertificatePinner
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -25,6 +26,12 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
     private val json = Json { ignoreUnknownKeys = true }
     private val client = OkHttpClient.Builder()
         .callTimeout(config.requestTimeoutMillis, TimeUnit.MILLISECONDS)
+        .apply {
+            if (config.certificatePins.isNotEmpty()) {
+                val host = config.baseUrl.toHttpUrl().host
+                certificatePinner(CertificatePinner.Builder().add(host, *config.certificatePins.toTypedArray()).build())
+            }
+        }
         .build()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val base64 = Base64.getEncoder()
@@ -53,7 +60,6 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
 
     private class Reply(val code: Int, val body: String)
 
-    /** Public keys of one enrolment, as PEM. */
     /** PEM public keys of a new key set, and the Keystore attestation chains
      * (base64 DER, leaf first) of the signing and authentication keys. */
     class EnrolmentKeys(
@@ -85,6 +91,16 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
             put("signatureFormat", "der")
         }
         return decode(send("/v1/mobile/authorizations/$authorizationId/signature", body, TokenSource.Device))
+    }
+
+    /** Offline confirmation v2: the deferred device signature. Returns the
+     * HTTP status; every non-2xx answer is a [NEXUSSignError.ServerError]. */
+    suspend fun uploadDeferredSignature(authorizationId: String, signatureBase64: String): Int {
+        val body = buildJsonObject {
+            put("signature", signatureBase64)
+            put("signatureFormat", "der")
+        }
+        return send("/v1/mobile/authorizations/$authorizationId/deferred-signature", body, TokenSource.Device).code
     }
 
     @kotlinx.serialization.Serializable
@@ -148,6 +164,70 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
         }
         return decode(send("/v1/recovery/sessions/${session.sessionId}/complete", body, TokenSource.Fixed(session.accessToken)))
     }
+
+    // --- Verification calls (ADR 0017) ---
+
+    suspend fun openVerificationSession(authorizationId: String, channel: VerificationChannel): JsonObject {
+        val body = buildJsonObject { put("channel", channel.name) }
+        return parseObject(send("/v1/mobile/authorizations/$authorizationId/verification-sessions", body, TokenSource.Device))
+    }
+
+    suspend fun joinCall(sessionId: String): JsonObject =
+        parseObject(send("/v1/mobile/verification-sessions/$sessionId/call", null, TokenSource.Device))
+
+    suspend fun sendCallSignal(sessionId: String, body: JsonObject) {
+        send("/v1/mobile/verification-sessions/$sessionId/signals", body, TokenSource.Device)
+    }
+
+    suspend fun receiveCallSignals(sessionId: String, after: Long, waitMillis: Long): JsonObject =
+        parseObject(send("/v1/mobile/verification-sessions/$sessionId/signals?after=$after&waitMs=$waitMillis", null, TokenSource.Device))
+
+    suspend fun cancelCall(sessionId: String) {
+        send("/v1/mobile/verification-sessions/$sessionId/cancel", JsonObject(emptyMap()), TokenSource.Device) // 204
+    }
+
+    // Calls the customer starts ("talk to the bank"): same signalling, own routes.
+    suspend fun joinCustomerCall(callId: String): JsonObject =
+        parseObject(send("/v1/mobile/customer-calls/$callId", null, TokenSource.Device))
+
+    suspend fun sendCustomerCallSignal(callId: String, body: JsonObject) {
+        send("/v1/mobile/customer-calls/$callId/signals", body, TokenSource.Device)
+    }
+
+    suspend fun receiveCustomerCallSignals(callId: String, after: Long, waitMillis: Long): JsonObject =
+        parseObject(send("/v1/mobile/customer-calls/$callId/signals?after=$after&waitMs=$waitMillis", null, TokenSource.Device))
+
+    suspend fun endCustomerCall(callId: String) {
+        send("/v1/mobile/customer-calls/$callId/end", JsonObject(emptyMap()), TokenSource.Device)
+    }
+
+    suspend fun declineAuthorization(authorizationId: String, reason: NexusDeclineReason) {
+        send("/v1/mobile/authorizations/$authorizationId/decline", buildJsonObject { put("reason", reason.name) }, TokenSource.Device)
+    }
+
+    // Device replacement hold (A2-01)
+
+    suspend fun deviceReplacements(): List<NexusDeviceReplacement> =
+        decode<DeviceReplacementList>(send("/v1/mobile/device-replacements", null, TokenSource.Device)).replacements
+
+    suspend fun decideDeviceReplacement(replacementId: String, approve: Boolean): NexusDeviceReplacement =
+        decode(send("/v1/mobile/device-replacements/$replacementId/${if (approve) "approve" else "cancel"}", JsonObject(emptyMap()), TokenSource.Device))
+
+    // Customer section, payment mandates, conversations (device-signed)
+
+    /** A device-signed call returning the raw JSON body, for the account features. */
+    internal suspend fun deviceCall(method: String, path: String, body: JsonObject? = null): String =
+        send(path, body ?: if (method == "GET") null else JsonObject(emptyMap()), TokenSource.Device, method).body
+
+    /** Longest long-poll wait that still fits in the request timeout. */
+    val callPollWaitMillis: Long get() = (config.requestTimeoutMillis - 2_000).coerceIn(0, 15_000)
+
+    private fun parseObject(reply: Reply): JsonObject =
+        try {
+            json.parseToJsonElement(reply.body) as JsonObject
+        } catch (e: Exception) {
+            throw NEXUSSignError.ServerError(reply.code, "Unexpected response format")
+        }
 
     private inline fun <reified T> decode(reply: Reply): T =
         try {

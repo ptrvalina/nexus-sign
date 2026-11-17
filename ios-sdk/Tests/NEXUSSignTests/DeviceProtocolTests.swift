@@ -64,6 +64,46 @@ final class DeviceProtocolTests: XCTestCase {
         }
     }
 
+    /// Offline v3 (finding D-01): the key in the QR code, the secret and the
+    /// key derived from it are different for every authorization.
+    func testOfflineV3PerAuthorizationKeysMatchVectors() throws {
+        let section = try XCTUnwrap(try loadVectors()["offline_v3"] as? [String: Any])
+        let device = try P256.KeyAgreement.PrivateKey(rawRepresentation: hex(try XCTUnwrap(section["device_private_scalar_hex"] as? String)))
+        let credentialID = try XCTUnwrap(section["credential_id"] as? String)
+        var keys = Set<Data>()
+        for confirmation in try XCTUnwrap(section["confirmations"] as? [[String: Any]]) {
+            let name = confirmation["name"] as? String ?? "?"
+            let qr = try XCTUnwrap(confirmation["qr_payload"] as? String)
+            XCTAssertEqual(try DeviceProtocol.qrPayloadVersion(qr), 3, name)
+            let payload = try DeviceProtocol.qrPayloadBytes(qr)
+            XCTAssertEqual(payload, Data(base64Encoded: try XCTUnwrap(confirmation["canonical_base64"] as? String)), name)
+            let serverPEM = try XCTUnwrap(try DeviceProtocol.qrServerPublicKeyPEM(qr), name)
+            let expectedServer = try P256.KeyAgreement.PublicKey(pemRepresentation: try XCTUnwrap(confirmation["server_public_key_pem"] as? String))
+            XCTAssertEqual(try P256.KeyAgreement.PublicKey(pemRepresentation: serverPEM).rawRepresentation, expectedServer.rawRepresentation, name)
+            let shared = try device.sharedSecretFromKeyAgreement(with: expectedServer).withUnsafeBytes { Data($0) }
+            XCTAssertEqual(shared, hex(try XCTUnwrap(confirmation["shared_secret_hex"] as? String)), name)
+            let key = DeviceProtocol.deriveOfflineKeyPerAuthorization(sharedSecret: shared, credentialID: credentialID,
+                                                                       authorizationID: try XCTUnwrap(confirmation["authorization_id"] as? String))
+            let keyBytes = key.withUnsafeBytes { Data($0) }
+            XCTAssertEqual(keyBytes, hex(try XCTUnwrap(confirmation["offline_key_hex"] as? String)), name)
+            let tag = DeviceProtocol.offlineTag(key: key, canonicalPayload: payload)
+            XCTAssertEqual(tag, Data(base64Encoded: try XCTUnwrap(confirmation["tag_base64"] as? String)), name)
+            XCTAssertEqual(DeviceProtocol.offlineCode(tag: tag), confirmation["code"] as? String, name)
+            keys.insert(keyBytes)
+        }
+        XCTAssertEqual(keys.count, 2, "a secret taken for one authorization does not serve another")
+    }
+
+    func testV3QRCodesWithoutAValidKeyAreRejected() throws {
+        let section = try XCTUnwrap(try loadVectors()["offline_v3"] as? [String: Any])
+        let qr = try XCTUnwrap((section["confirmations"] as? [[String: Any]])?.first?["qr_payload"] as? String)
+        let body = qr.split(separator: ".")[1]
+        XCTAssertThrowsError(try DeviceProtocol.qrPayloadBytes("NXS3.\(body)"), "no key part")
+        XCTAssertThrowsError(try DeviceProtocol.qrServerPublicKeyPEM("NXS3.\(body).AAAA"), "not a P-256 key")
+        XCTAssertThrowsError(try DeviceProtocol.qrPayloadBytes("NXS2.\(body).AAAA"), "v2 has one part")
+        XCTAssertNil(try DeviceProtocol.qrServerPublicKeyPEM("NXS2.\(body)"))
+    }
+
     func testUnknownQRFormatsAreRejected() {
         XCTAssertThrowsError(try DeviceProtocol.qrPayloadBytes("https://example.com"))
         XCTAssertThrowsError(try DeviceProtocol.qrPayloadBytes("NXS1.***"))

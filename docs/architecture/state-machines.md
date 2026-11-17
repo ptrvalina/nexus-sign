@@ -10,15 +10,18 @@ Column `authorization_requests.state`, trigger `authorization_lifecycle`.
 
 | From | Permitted to |
 |---|---|
-| `PENDING_USER` | `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED` |
-| `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED` | none (final) |
+| `PENDING_USER` | `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED`, `OFFLINE_PROVISIONAL` |
+| `OFFLINE_PROVISIONAL` (migration 022) | `VERIFIED`, `OFFLINE_UNSIGNED` |
+| `VERIFIED`, `EXPIRED`, `CANCELLED`, `REJECTED`, `OFFLINE_UNSIGNED` | none (final) |
 
 Further rules in the same trigger:
 
 | Rule | Columns |
 |---|---|
-| Never change | `authorization_id`, `client_id`, `nexus_id`, `credential_id`, `transaction_reference`, `operation_type`, `amount_minor`, `currency`, `beneficiary`, `canonical_payload_hash`, `nonce`, `issued_at`, `created_at` |
-| Change only in the update that moves the state from `PENDING_USER` to `VERIFIED` | `signature`, `signature_format`, `confirmation_method`, `verified_at` |
+| Never change | `authorization_id`, `client_id`, `nexus_id`, `credential_id`, `transaction_reference`, `operation_type`, `amount_minor`, `currency`, `beneficiary`, `policy_reference`, `policy_version` (since 022), `canonical_payload_hash`, `nonce`, `issued_at`, `created_at` |
+| Change only in the update that moves the state from `PENDING_USER` or `OFFLINE_PROVISIONAL` to `VERIFIED` | `signature`, `signature_format`, `confirmation_method`, `verified_at` |
+| Set once, from `PENDING_USER` to `VERIFIED` or `OFFLINE_PROVISIONAL` | `offline_code_tag`, `offline_code_accepted_at`, `offline_signature_deadline` (all three required for `OFFLINE_PROVISIONAL`) |
+| Set once, from `OFFLINE_PROVISIONAL` to `OFFLINE_UNSIGNED` (required then) | `offline_unsigned_reason` |
 | Must be set when the state is `VERIFIED` | `signature`, `verified_at` |
 | Change only while the state is `PENDING_USER` | `expires_at` |
 
@@ -29,6 +32,9 @@ Auth Core inserts every authorization in `PENDING_USER` (`authorizationService.t
 | Transition | Performed by |
 |---|---|
 | `PENDING_USER` → `VERIFIED` | `authorizationConfirmation.ts` (`transitionTerminal`): a valid device signature or offline code, under a row lock, after re-checking the plan, expiry, credential state and key, and the canonical bytes; seals the `AUTHORIZATION` evidence record in the same transaction |
+| `PENDING_USER` → `OFFLINE_PROVISIONAL` | `authorizationConfirmation.ts` (`acceptOfflineCode`): a correct offline code with `OFFLINE_CONFIRMATION_MODE=deferred_signature` and no stored device signature |
+| `OFFLINE_PROVISIONAL` → `VERIFIED` | `authorizationConfirmation.ts` (`submitDeferredSignature`): the device's signature from the bound credential, before the deadline, under the row lock; seals the evidence |
+| `OFFLINE_PROVISIONAL` → `OFFLINE_UNSIGNED` | `expireUnsignedOfflineConfirmations` (expiry worker): deadline passed, or credential or identity no longer `ACTIVE` |
 | `PENDING_USER` → `EXPIRED` | `authorizationConfirmation.ts`, when a confirmation arrives after `expires_at` |
 | `PENDING_USER` → `REJECTED` | `authorizationConfirmation.ts` (signature or code attempt limit reached); `adaptiveVerificationService.ts` (verification plan failed) |
 | `PENDING_USER` → `CANCELLED` | `credentialService.ts` (credential revoked or replaced); `recoveryService.ts` (recovery completed); `nexusIdentityService.ts` (identity suspended or revoked) |
@@ -66,7 +72,7 @@ Suspension is a state of the NEXUS identity ([below](#identity)), not of a crede
 | Never change | `credential_id`, `nexus_id`, `key_algorithm`, `public_key_pem`, `auth_public_key_pem`, `offline_public_key_pem`, `offline_server_public_key_pem`, `offline_secret_encrypted`, `platform`, `key_version` |
 | Set once (from `NULL`), then never change | `enrolment_evidence_id` |
 
-A unique index (`idx_credentials_one_active`) allows at most one `ACTIVE` credential per NEXUS ID. Migration 017 stops, naming up to 20 identities, if existing data has more; the extra credentials are revoked before the migration is applied again.
+The number of `ACTIVE` credentials per NEXUS ID is limited by the bank client's `max_devices_per_identity` (1 to 10, default 1). The trigger `credentials_device_limit` (migration 027) counts them with the identity row locked, so concurrent enrolments cannot exceed the limit; it replaced the unique index `idx_credentials_one_active` of migration 017.
 
 `security_level`, `attestation_status`, `last_used_at` and the timestamps are not covered by the trigger.
 
@@ -107,7 +113,7 @@ The bank API has no endpoint that changes an identity's status.
 ## Limits
 
 - Recovery sessions (`recovery_session_lifecycle`, migration 017): the issued fields (identity, bank, nonce, salt, token hash, protocol, creation time) never change, the expiry can only be shortened, `attempt_count` and `failed_attempt_count` only grow, and `used_at` is set once.
-- The lifecycle triggers fire on `UPDATE` only. Separate `BEFORE DELETE` triggers (`refuse_delete()`, migration 017) refuse deleting rows of `authorization_requests`, `credentials`, `nexus_identities`, `recovery_sessions` and `admin_approvals` for every role (SQLSTATE `42501`, `<table> rows are not deleted (DELETE refused)`), and `scripts/db/roles.sql` grants `nexus_app` `DELETE` only on `push_registrations`. The application role can still `INSERT` rows: an inserted row can start in any state the column's `CHECK` constraint allows. A credential inserted or re-inserted outside the application has no valid sealed enrolment and is refused by the [runtime integrity check](../protocol/evidence-format.md#runtime-integrity-check); an authorization inserted outside the application has no evidence record (`evidence` is `null` in `GET /v1/authorizations/{id}`) and does not appear in the identity's chain.
+- The lifecycle triggers fire on `UPDATE` only. Separate `BEFORE DELETE` triggers (`refuse_delete()`, migration 017) refuse deleting rows of `authorization_requests`, `credentials`, `nexus_identities`, `recovery_sessions` and `admin_approvals` for every role (SQLSTATE `42501`, `<table> rows are not deleted (DELETE refused)`), and `scripts/db/roles.sql` grants `nexus_app` `DELETE` only on `push_registrations`. Inserts: since migration 024 the `BEFORE INSERT` trigger `authorization_insert_state` refuses an authorization that does not start `PENDING_USER` with bank transaction `PENDING` and no signature, confirmation, offline or commit fields, and a `CHECK` limits `bank_transaction_state` to the five states above. Credentials are not covered at insert time: the application role can still insert a credential row in any state its `CHECK` allows. A credential inserted or re-inserted outside the application has no valid sealed enrolment and is refused by the [runtime integrity check](../protocol/evidence-format.md#runtime-integrity-check); an authorization inserted outside the application has no evidence record (`evidence` is `null` in `GET /v1/authorizations/{id}`) and does not appear in the identity's chain.
 - The table owner or a superuser can disable or replace the triggers. `scripts/db/roles.sql` makes `nexus_owner` (`NOLOGIN`) the owner of every table and trigger function, so the role Auth Core connects as (`nexus_app`) cannot. A superuser, or the cloud provider's administrative role, still can; their DDL is to be logged (pgaudit or the provider's audit log) and the role restricted. The sealed evidence chain and the head the bank keeps make a change that bypassed the triggers detectable afterwards.
 - `evidence_records` and `audit_logs` have their own append-only triggers (migrations 009 and 016); `nexus_app` has `INSERT` and `SELECT` only on them.
 

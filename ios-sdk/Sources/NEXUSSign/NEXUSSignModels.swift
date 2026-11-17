@@ -58,6 +58,10 @@ public struct NexusMobileRegistration: Decodable, Equatable {
     /// Always `DEVICE_SIGNATURE`: the device signs its own requests.
     public let requestAuthentication: String?
     public let offlineServerPublicKeyPem: String?
+    /// `PER_AUTHORIZATION` when every offline confirmation uses a fresh Auth
+    /// Core key from the QR code (finding D-01); `STATIC` for a key agreed
+    /// once at enrolment; absent when offline confirmation is off.
+    public let offlineKeyAgreement: String?
 }
 
 public struct NexusRecoveryParameters: Decodable, Equatable {
@@ -98,6 +102,10 @@ public struct NexusRecoveryResult: Decodable, Equatable {
     /// `DEVICE_SIGNATURE` when the device signs its own requests.
     public let requestAuthentication: String?
     public let offlineServerPublicKeyPem: String?
+    /// `PER_AUTHORIZATION` when every offline confirmation uses a fresh Auth
+    /// Core key from the QR code (finding D-01); `STATIC` for a key agreed
+    /// once at enrolment; absent when offline confirmation is off.
+    public let offlineKeyAgreement: String?
 }
 
 /// A transaction read from an offline QR code, verified and ready to show.
@@ -105,7 +113,43 @@ public struct NexusOfflineChallenge {
     /// The transaction exactly as it is confirmed; render the screen from this.
     public let transaction: NexusSignedTransaction
     let canonicalPayload: Data
+    /// Offline confirmation v2 (QR `NXS2.`): `confirmOffline` also signs the
+    /// transaction and keeps the signature for upload.
+    public let requiresDeviceSignature: Bool
+    /// Offline v3 (QR `NXS3.`): Auth Core's key for this authorization.
+    let serverPublicKeyPEM: String?
+
+    init(transaction: NexusSignedTransaction, canonicalPayload: Data, requiresDeviceSignature: Bool = false, serverPublicKeyPEM: String? = nil) {
+        self.transaction = transaction
+        self.canonicalPayload = canonicalPayload
+        self.requiresDeviceSignature = requiresDeviceSignature
+        self.serverPublicKeyPEM = serverPublicKeyPEM
+    }
 }
+
+/// A device replacement the bank requested for this customer's NEXUS ID
+/// (audit finding A2-01). Show it on the enrolled device: the customer
+/// approves it (the new device can be enrolled at once) or cancels it
+/// ("it wasn't me"). Without a decision it becomes usable at `notBefore`.
+public struct NexusDeviceReplacement: Decodable, Equatable {
+    public let replacementId: String
+    public let nexusId: String
+    /// BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION or OTHER.
+    public let method: String
+    public let reference: String
+    /// PENDING or APPROVED while open; CANCELLED, USED or EXPIRED afterwards.
+    public let state: String
+    public let requestedAt: String
+    public let notBefore: String
+    public let expiresAt: String
+    public let usable: Bool
+}
+
+struct DeviceReplacementList: Decodable { let replacements: [NexusDeviceReplacement] }
+
+/// Why the customer declined a payment. `notMe` ("it wasn't me") is reported
+/// to the bank as a fraud signal.
+public enum NexusDeclineReason: String { case notMe = "NOT_ME", wrongDetails = "WRONG_DETAILS", other = "OTHER" }
 
 struct VerifyResponse: Decodable { let status: NEXUSVerificationOutcome; let reason: String? }
 struct ErrorResponse: Decodable { let error: String?; let serverTime: Int64? }

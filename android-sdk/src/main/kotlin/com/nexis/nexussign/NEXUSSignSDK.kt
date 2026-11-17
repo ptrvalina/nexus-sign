@@ -41,6 +41,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     private val attestationProvider = AttestationProvider(appContext, config.playIntegrityCloudProjectNumber)
     private val networkClient = NetworkClient(config)
     private val pushKeys by lazy { PushKeyStore(appContext, config.bankId) }
+    private val offlineSignatures by lazy { OfflineSignatureQueue(SharedPreferencesSignatureStorage(appContext, config.bankId)) }
 
     init {
         useDeviceAuthentication(state.registeredCredentialId())
@@ -51,6 +52,17 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      * [bootstrap] or [recoverIdentity]) and the key is still present.
      */
     fun isRegistered(): Boolean = state.registeredCredentialId() != null && keyManager.hasExistingKey()
+
+    /**
+     * Fingerprint of this device's signing key: hex SHA-256 of its DER
+     * SubjectPublicKeyInfo, computed here from the key in the Keystore, not
+     * taken from any Auth Core response. After enrolment, replacement or
+     * recovery the app sends it with the credential ID to the bank's own
+     * backend, which approves exactly this key for the customer
+     * (docs/protocol/bank-credential-trust-v1.md). Null when not registered.
+     */
+    fun signingKeyFingerprint(): String? =
+        if (!isRegistered()) null else keyManager.activeSigningPublicKeyInfo()?.let(DeviceProtocol::signingKeyFingerprint)
 
     /** True when this device can confirm transactions from a QR code without network. */
     fun isOfflineConfirmationAvailable(): Boolean = isRegistered() && keyManager.hasOfflineKey()
@@ -106,6 +118,35 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     fun signedTransaction(authorization: NexusAuthorization): NexusSignedTransaction = authorization.signedTransaction()
 
     /**
+     * Opens an audio or video verification session for [authorization], when
+     * the bank's verification plan asks for one (ADR 0017). The signed bytes
+     * are verified first, so the terms shown during the call
+     * ([NexusSignedTransaction.confirmationText]) are the ones the operator
+     * sees and the device will sign. Auth Core binds the session to this
+     * authorization and this device's credential. At most three sessions per
+     * channel and authorization.
+     *
+     * Run the call with [callSignalling] and a media engine
+     * (nexus-sign-android-calls). The call never confirms the payment: after
+     * a VERIFIED decision, call [approve] as usual.
+     */
+    suspend fun openVerificationCall(authorization: NexusAuthorization, channel: VerificationChannel): VerificationSession {
+        val signed = authorization.signedTransaction()
+        requireNotExpired(signed)
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        if (signed.credentialId != state.registeredCredentialId()) {
+            throw NEXUSSignError.AuthorizationPayloadInvalid("wrong_device", "the authorization is for another device")
+        }
+        return CallWire.decodeSession(networkClient.openVerificationSession(authorization.authorizationId, channel), authorization.authorizationId)
+    }
+
+    /** Device-signed signalling of one verification session. */
+    fun callSignalling(session: VerificationSession): CallSignalling {
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        return DeviceCallSignalling(session.sessionId, networkClient)
+    }
+
+    /**
      * Shows the biometric prompt with the signed transaction text, signs the
      * canonical bytes and submits the signature. Call from the main thread's
      * lifecycle scope of [activity].
@@ -128,7 +169,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             forgetRegistration()
             throw e
         }
-        val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), signed.confirmationText())
+        val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), signed.confirmationText(config.promptLabels))
             .cryptoObject?.signature ?: signature
         val signatureDer = try {
             authorized.update(canonicalBytes)
@@ -144,7 +185,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw e
         }
         return NEXUSVerificationOutcome.entries.firstOrNull { it.name == response.status }
-            ?: throw NEXUSSignError.ServerError(200, "Unexpected verification status")
+            ?: throw NEXUSSignError.InvalidServerResponse("unexpected verification status")
     }
 
     /**
@@ -160,7 +201,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         val salt = validated(parameters)
         val nexusId = parameters.nexusId
         if (nexusId == null || parameters.credentialId != credentialId) {
-            throw NEXUSSignError.ServerError(0, "Recovery parameters are for another device")
+            throw NEXUSSignError.InvalidServerResponse("recovery parameters are for another device")
         }
         requireBiometrics(activity)
         val phrase = RecoveryPhrase.generate(appContext)
@@ -205,14 +246,14 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         val words = RecoveryPhrase.normalized(recoveryPhrase)
         if (!RecoveryPhrase.isWellFormed(appContext, words)) throw NEXUSSignError.InvalidRecoveryPhrase
         // The session ID comes from the host app and becomes part of the path.
-        if (!UUID_PATTERN.matches(session.sessionId)) throw NEXUSSignError.ServerError(0, "Invalid recovery session")
+        if (!UUID_PATTERN.matches(session.sessionId)) throw NEXUSSignError.InvalidRecoverySession("session ID, nonce, recovery key or wrapped key missing or malformed")
         val nonce = runCatching { Base64.getDecoder().decode(session.nonce) }.getOrElse {
-            throw NEXUSSignError.ServerError(0, "Invalid recovery session")
+            throw NEXUSSignError.InvalidRecoverySession("session ID, nonce, recovery key or wrapped key missing or malformed")
         }
         val salt = validated(session.parameters)
         val recoveryPublicKeyPem = session.recoveryPublicKeyPem
         val wrapped = session.wrappedRecoveryKey?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
-        if (recoveryPublicKeyPem == null || wrapped == null) throw NEXUSSignError.ServerError(0, "Invalid recovery session")
+        if (recoveryPublicKeyPem == null || wrapped == null) throw NEXUSSignError.InvalidRecoverySession("session ID, nonce, recovery key or wrapped key missing or malformed")
 
         // A wrong phrase fails here, on the device, without using an attempt.
         val seed = RecoveryProtocol.seed(words, salt, session.parameters.iterations)
@@ -258,6 +299,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      * [NexusOfflineChallenge.transaction].
      */
     fun readOfflineChallenge(qrPayload: String): NexusOfflineChallenge {
+        val version = DeviceProtocol.qrPayloadVersion(qrPayload)
         val bytes = DeviceProtocol.qrPayloadBytes(qrPayload)
         val transaction = try {
             SignedPayload.parse(bytes)
@@ -268,19 +310,47 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw NEXUSSignError.AuthorizationPayloadInvalid("wrong_device", "the QR code is for another device")
         }
         requireNotExpired(transaction)
-        return NexusOfflineChallenge(transaction, bytes)
+        return NexusOfflineChallenge(transaction, bytes, requiresDeviceSignature = version == 2)
     }
 
     /**
      * Asks for biometric confirmation showing the transaction and returns the
      * 8-digit code the customer types on the bank's screen. Works without
      * network. The code is valid only for this exact transaction.
+     *
+     * Offline confirmation v2 ([NexusOfflineChallenge.requiresDeviceSignature]):
+     * first the signing key signs the transaction (its own prompt: Android
+     * binds one key to one prompt) and the signature is stored; only then is
+     * the code computed (second prompt). Auth Core confirms the payment when
+     * the signature arrives: call [submitPendingOfflineSignatures] whenever
+     * the app is online.
      */
     suspend fun confirmOffline(challenge: NexusOfflineChallenge, activity: FragmentActivity): String {
         if (state.registeredCredentialId() == null) throw NEXUSSignError.NotRegistered
         if (!keyManager.hasOfflineKey()) throw NEXUSSignError.OfflineConfirmationUnavailable
         requireNotExpired(challenge.transaction)
         requireBiometrics(activity)
+
+        if (challenge.requiresDeviceSignature) {
+            val authorizationId = challenge.transaction.authorizationId
+            if (!UUID_PATTERN.matches(authorizationId)) throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_qr", "authorization ID is not a UUID")
+            val signature = try {
+                keyManager.signatureForAuthorization()
+            } catch (e: NEXUSSignError.CredentialInvalidated) {
+                forgetRegistration()
+                throw e
+            }
+            val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), challenge.transaction.confirmationText(config.promptLabels))
+                .cryptoObject?.signature ?: signature
+            val signatureDer = try {
+                authorized.update(challenge.canonicalPayload)
+                authorized.sign()
+            } catch (e: Exception) {
+                throw NEXUSSignError.KeyOperationFailed(e)
+            }
+            // Stored before the code exists: no code without its signature.
+            offlineSignatures.add(authorizationId, Base64.getEncoder().encodeToString(signatureDer))
+        }
 
         val mac = try {
             keyManager.offlineMac()
@@ -289,7 +359,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw e
         }
         // The key can be used only through this prompt, which shows the transaction.
-        val unlocked = authenticate(activity, BiometricPrompt.CryptoObject(mac), challenge.transaction.confirmationText())
+        val unlocked = authenticate(activity, BiometricPrompt.CryptoObject(mac), challenge.transaction.confirmationText(config.promptLabels))
             .cryptoObject?.mac ?: mac
         val tag = try {
             unlocked.doFinal(DeviceProtocol.offlineTagInput(challenge.canonicalPayload))
@@ -297,6 +367,27 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw NEXUSSignError.KeyOperationFailed(e)
         }
         return DeviceProtocol.offlineCode(tag)
+    }
+
+    /**
+     * Offline confirmation v2: uploads the signatures made by [confirmOffline]
+     * that Auth Core does not have yet. Call it when the app starts and
+     * whenever it regains a connection. Signatures Auth Core accepted, or can
+     * never accept (the payment was finalized otherwise, or the signature is
+     * not valid for it), are removed; the others are kept for the next call.
+     */
+    suspend fun submitPendingOfflineSignatures(): OfflineSignatureDelivery {
+        if (state.registeredCredentialId() == null) return OfflineSignatureDelivery(0, 0, offlineSignatures.pending().size)
+        return offlineSignatures.deliver { item ->
+            if (!UUID_PATTERN.matches(item.authorizationId)) return@deliver UploadOutcome.Refused(0)
+            try {
+                UploadOutcome.ofStatus(networkClient.uploadDeferredSignature(item.authorizationId, item.signature))
+            } catch (e: NEXUSSignError.ServerError) {
+                UploadOutcome.ofStatus(e.statusCode)
+            } catch (e: NEXUSSignError.NetworkUnavailable) {
+                UploadOutcome.Retry
+            }
+        }
     }
 
     // --- Secure push (bank push mode NEXUS) ---
@@ -329,7 +420,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             generateKeyPair()
         }
         val response = networkClient.registerPush(fcmToken, keyManager.publicKeyPem(ephemeral.public), keyId = null)
-        val serverPem = response.serverPublicKeyPem ?: throw NEXUSSignError.ServerError(200, "Auth Core returned no push key agreement")
+        val serverPem = response.serverPublicKeyPem ?: throw NEXUSSignError.InvalidServerResponse("no push key agreement")
         val shared = try {
             val serverKey = KeyFactory.getInstance("EC").generatePublic(
                 X509EncodedKeySpec(Base64.getDecoder().decode(serverPem.lineSequence().filterNot { it.startsWith("-----") }.joinToString("").trim())),
@@ -349,7 +440,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         }
         if (PushProtocol.keyId(SecretKeySpec(key, "HmacSHA256")) != response.keyId) {
             key.fill(0)
-            throw NEXUSSignError.ServerError(200, "Push key agreement did not match")
+            throw NEXUSSignError.InvalidServerResponse("push key agreement did not match")
         }
         pushKeys.install(key, credentialId) // wipes `key`
     }
@@ -396,6 +487,194 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         networkClient.sendPushReceipt(message.messageId, message.credentialId, PushProtocol.receipt(macKey, message.messageId, message.credentialId))
     }
 
+    /**
+     * The customer refuses the payment instead of confirming it. The bank
+     * receives `authorization.declined` with the reason; the authorization can
+     * no longer be confirmed.
+     */
+    suspend fun decline(authorization: NexusAuthorization, reason: NexusDeclineReason) {
+        if (!UUID_PATTERN.matches(authorization.authorizationId)) throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_id", "authorization ID is not a UUID")
+        networkClient.declineAuthorization(authorization.authorizationId, reason)
+    }
+
+    /** Open device replacements the bank requested for this NEXUS ID; show them on this (enrolled) device. */
+    suspend fun pendingDeviceReplacements(): List<NexusDeviceReplacement> = networkClient.deviceReplacements()
+
+    /** The customer confirms the replacement: the new device can be enrolled now instead of after the hold. */
+    suspend fun approveDeviceReplacement(replacementId: String): NexusDeviceReplacement =
+        networkClient.decideDeviceReplacement(requireReplacementId(replacementId), approve = true)
+
+    /** The customer refuses the replacement ("it wasn't me"); it can never be used. */
+    suspend fun cancelDeviceReplacement(replacementId: String): NexusDeviceReplacement =
+        networkClient.decideDeviceReplacement(requireReplacementId(replacementId), approve = false)
+
+    // --- Customer section, payment mandates, conversations with the bank ---
+
+    private val accountJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private inline fun <reified T> parse(body: String): T = try {
+        accountJson.decodeFromString<T>(body)
+    } catch (e: Exception) {
+        throw NEXUSSignError.InvalidServerResponse("unexpected response format")
+    }
+    private fun requireId(id: String, what: String): String {
+        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.InvalidArgument("malformed $what")
+        return id.lowercase()
+    }
+
+    /** The customer's devices ("My devices"), this one marked thisDevice. */
+    suspend fun devices(): List<NexusDevice> = parse<DeviceList>(networkClient.deviceCall("GET", "/v1/mobile/devices")).devices
+
+    /** Removes one of the customer's devices (another one, or this one); returns how many active devices remain. */
+    suspend fun removeDevice(credentialId: String): Int =
+        parse<DeviceRevoked>(networkClient.deviceCall("POST", "/v1/mobile/devices/${requireId(credentialId, "credential ID")}/revoke")).remainingActiveDevices
+
+    /** Payments confirmed, declined or open, newest first. */
+    suspend fun history(filter: NexusHistoryFilter = NexusHistoryFilter.ALL, limit: Int = 50): List<NexusHistoryEntry> =
+        parse<HistoryList>(networkClient.deviceCall("GET", "/v1/mobile/history?filter=${filter.wire}&limit=${limit.coerceIn(1, 200)}")).authorizations
+
+    /** The sealed evidence of one of the customer's payments, as JSON (verify it with verify-evidence). */
+    suspend fun evidence(authorizationId: String): String =
+        networkClient.deviceCall("GET", "/v1/mobile/authorizations/${requireId(authorizationId, "authorization ID")}/evidence")
+
+    suspend fun securityEvents(limit: Int = 50): List<NexusSecurityEvent> =
+        parse<SecurityEventList>(networkClient.deviceCall("GET", "/v1/mobile/security-events?limit=${limit.coerceIn(1, 200)}")).events
+
+    suspend fun notifications(limit: Int = 50): List<NexusNotification> =
+        parse<NotificationList>(networkClient.deviceCall("GET", "/v1/mobile/notifications?limit=${limit.coerceIn(1, 200)}")).notifications
+
+    suspend fun settings(): NexusCustomerSettings = parse(networkClient.deviceCall("GET", "/v1/mobile/settings"))
+
+    /** Limits (minor units, null for none), the video-check threshold and channels; relaxing waits for the bank's hold. */
+    suspend fun updateSettings(currency: String?, perPaymentLimitMinor: String?, dailyLimitMinor: String?, videoCheckAboveMinor: String?, channels: NexusChannels): NexusCustomerSettings =
+        parse(networkClient.deviceCall("PUT", "/v1/mobile/settings", buildJsonObject {
+            put("currency", currency); put("perPaymentLimitMinor", perPaymentLimitMinor)
+            put("dailyLimitMinor", dailyLimitMinor); put("videoCheckAboveMinor", videoCheckAboveMinor)
+            put("channels", buildJsonObject { put("push", channels.push); put("audio", channels.audio); put("video", channels.video) })
+        }))
+
+    /** The customer suspends their NEXUS ID; only the bank reactivates it after identifying the customer. */
+    suspend fun suspendIdentity(reason: NexusSuspendReason) {
+        networkClient.deviceCall("POST", "/v1/mobile/identity/suspend", buildJsonObject { put("reason", reason.name) })
+    }
+
+    suspend fun mandates(): List<NexusMandate> = parse<MandateList>(networkClient.deviceCall("GET", "/v1/mobile/mandates")).mandates
+
+    suspend fun mandate(id: String): NexusMandate = parse(networkClient.deviceCall("GET", "/v1/mobile/mandates/${requireId(id, "mandate ID")}"))
+
+    /**
+     * Parses and checks the signed terms: domain NEXUS-SIGN/MANDATE (never
+     * payment bytes), this mandate and this device, the display rules on every
+     * shown value, SHA-256 equal to termsHash.
+     */
+    fun mandateTerms(mandate: NexusMandate): NexusMandateTerms {
+        val credentialId = state.registeredCredentialId() ?: throw NEXUSSignError.NotRegistered
+        return try {
+            MandateTermsParser.parse(mandate.termsBase64, mandate.termsHash, mandate.mandateId, credentialId)
+        } catch (e: SignedPayload.Rejected) {
+            throw NEXUSSignError.AuthorizationPayloadInvalid(e.reason, e.message ?: e.reason)
+        }
+    }
+
+    /** Signs the mandate after biometric authentication, with the prompt built from the signed terms. */
+    suspend fun signMandate(mandate: NexusMandate, activity: FragmentActivity): NexusMandate {
+        val terms = mandateTerms(mandate)
+        val bytes = Base64.getDecoder().decode(mandate.termsBase64)
+        requireBiometrics(activity)
+        val signature = try {
+            keyManager.signatureForAuthorization()
+        } catch (e: NEXUSSignError.CredentialInvalidated) {
+            forgetRegistration()
+            throw e
+        }
+        val authorized = authenticate(activity, BiometricPrompt.CryptoObject(signature), terms.confirmationText()).cryptoObject?.signature ?: signature
+        val der = try {
+            authorized.update(bytes)
+            authorized.sign()
+        } catch (e: Exception) {
+            throw NEXUSSignError.KeyOperationFailed(e)
+        }
+        return parse(networkClient.deviceCall("POST", "/v1/mobile/mandates/${mandate.mandateId}/signature", buildJsonObject {
+            put("signature", Base64.getEncoder().encodeToString(der)); put("signatureFormat", "der")
+        }))
+    }
+
+    enum class MandateAction(val path: String) { DECLINE("decline"), SUSPEND("suspend"), RESUME("resume"), REVOKE("revoke") }
+
+    suspend fun mandate(id: String, action: MandateAction): NexusMandate =
+        parse(networkClient.deviceCall("POST", "/v1/mobile/mandates/${requireId(id, "mandate ID")}/${action.path}"))
+
+    suspend fun conversations(): List<NexusConversation> = parse<ConversationList>(networkClient.deviceCall("GET", "/v1/mobile/conversations")).conversations
+
+    private fun attachmentJson(a: NexusConversationAttachment) = buildJsonObject {
+        put("reference", a.reference); put("sha256", a.sha256); put("mediaType", a.mediaType); put("fileName", a.fileName); put("sizeBytes", a.sizeBytes)
+    }
+
+    /** Opens a conversation, optionally about one of the customer's payments; clientMessageId makes a retry safe. */
+    suspend fun openConversation(topic: String, message: String, authorizationId: String? = null, attachment: NexusConversationAttachment? = null,
+                                 clientMessageId: String = java.util.UUID.randomUUID().toString()): Pair<NexusConversation, NexusConversationMessage> {
+        val opened = parse<ConversationOpened>(networkClient.deviceCall("POST", "/v1/mobile/conversations", buildJsonObject {
+            put("topic", topic); put("body", message); put("clientMessageId", clientMessageId)
+            authorizationId?.let { put("authorizationId", requireId(it, "authorization ID")) }
+            attachment?.let { put("attachment", attachmentJson(it)) }
+        }))
+        return opened.conversation to opened.message
+    }
+
+    /** Messages after [after] (0 for the whole history); the bank's messages are marked delivered. */
+    suspend fun conversationMessages(conversationId: String, after: Int = 0): Pair<NexusConversation, List<NexusConversationMessage>> {
+        val thread = parse<ConversationThread>(networkClient.deviceCall("GET", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/messages?after=${after.coerceAtLeast(0)}"))
+        return thread.conversation to thread.messages
+    }
+
+    suspend fun sendMessage(conversationId: String, text: String, attachment: NexusConversationAttachment? = null,
+                            clientMessageId: String = java.util.UUID.randomUUID().toString()): NexusConversationMessage =
+        parse<MessageSent>(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/messages", buildJsonObject {
+            put("body", text); put("clientMessageId", clientMessageId); attachment?.let { put("attachment", attachmentJson(it)) }
+        })).message
+
+    suspend fun markRead(conversationId: String, upToSequence: Int) {
+        networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/read", buildJsonObject { put("upToSequence", upToSequence) })
+    }
+
+    /** "Talk to a person": the conversation waits for an operator of the bank. */
+    suspend fun requestAgent(conversationId: String): NexusConversation =
+        parse(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/handover"))
+
+    // Calls the customer starts ("talk to the bank")
+
+    /**
+     * Asks the bank for a call; it waits for an operator of the bank. Use
+     * [customerCallSignalling] with the call engine as for a verification
+     * call. Refused with 409 `CALL_CHANNEL_NOT_ENABLED` when the bank does
+     * not take calls on that channel, `CALL_ALREADY_OPEN` when one is open.
+     */
+    suspend fun requestBankCall(channel: VerificationChannel, topic: String, conversationId: String? = null): NexusCustomerCall {
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        return parse<CustomerCallJoin>(networkClient.deviceCall("POST", "/v1/mobile/customer-calls", buildJsonObject {
+            put("channel", channel.name); put("topic", topic)
+            conversationId?.let { put("conversationId", requireId(it, "conversation ID")) }
+        })).call
+    }
+
+    suspend fun bankCalls(): List<NexusCustomerCall> = parse<CustomerCallList>(networkClient.deviceCall("GET", "/v1/mobile/customer-calls")).calls
+
+    suspend fun bankCall(callId: String): NexusCustomerCall =
+        parse<CustomerCallJoin>(networkClient.deviceCall("GET", "/v1/mobile/customer-calls/${requireId(callId, "call ID")}")).call
+
+    /** Device-signed signalling of a call this device asked for. */
+    fun customerCallSignalling(call: NexusCustomerCall): CallSignalling {
+        if (!isRegistered()) throw NEXUSSignError.NotRegistered
+        return CustomerCallSignalling(requireId(call.callId, "call ID"), networkClient)
+    }
+
+    suspend fun closeConversation(conversationId: String): NexusConversation =
+        parse(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/close"))
+
+    private fun requireReplacementId(id: String): String {
+        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.InvalidArgument("malformed replacement ID")
+        return id
+    }
+
     private fun open(envelope: NexusPushEnvelope): NexusPushMessage {
         if (!PushMessages.isWellFormed(envelope)) throw NEXUSSignError.PushMessageInvalid("malformed_envelope")
         val (decryptKey, _) = pushKeys.keysFor(envelope.cid) ?: throw NEXUSSignError.PushMessageInvalid("no_push_key")
@@ -414,7 +693,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         confirmed: (T) -> Registration,
     ): T = replacementLock.withLock {
         // Without a screen lock the authentication key would need no user at
-        // all: enrolment requires a secure lock screen (NXS-027).
+        // all: enrolment requires a secure lock screen.
         val keyguard = appContext.getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
         if (!keyguard.isDeviceSecure) throw NEXUSSignError.NoAuthenticationMethodEnrolled
         // One attempt at a time per process: two attempts would share the
@@ -482,7 +761,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             parameters.iterations !in RecoveryProtocol.ITERATION_RANGE ||
             salt == null || salt.size < RecoveryProtocol.MIN_SALT_BYTES
         ) {
-            throw NEXUSSignError.ServerError(0, "Recovery parameters are outside the supported range")
+            throw NEXUSSignError.InvalidServerResponse("recovery parameters are outside the supported range")
         }
         return salt
     }
@@ -504,7 +783,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         val zero = byteArrayOf(0)
         val binding = challenge + zero + keys.signing.toByteArray(Charsets.UTF_8) +
             zero + keys.authentication.toByteArray(Charsets.UTF_8) +
-            zero + (keys.offline ?: "").toByteArray(Charsets.UTF_8)
+            zero + keys.offline.toByteArray(Charsets.UTF_8)
         val token = try {
             attestationProvider.requestToken(binding)
         } catch (e: CancellationException) {

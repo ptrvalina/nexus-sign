@@ -116,6 +116,79 @@
 <main id="app-main">
   <div class="stats" id="stats"></div>
 
+  <section id="conversations-section">
+    <div class="section-header">
+      <h2>Conversations with customers</h2>
+      <button class="ghost" id="conversations-refresh-btn">Refresh</button>
+    </div>
+    <div class="body">
+      <div id="conversations-table"></div>
+      <div id="conversation-active" style="display:none; margin-top:12px;">
+        <div class="muted" id="conversation-title"></div>
+        <div id="conversation-messages" style="max-height:320px; overflow:auto; border:1px solid #ddd; border-radius:6px; padding:8px; margin:8px 0;"></div>
+        <form id="conversation-form" style="display:flex; gap:8px;">
+          <input id="conversation-input" maxlength="4000" placeholder="Answer the customer" style="flex:1" autocomplete="off">
+          <button type="submit">Send</button>
+          <button type="button" class="ghost" id="conversation-release-btn">Back to queue</button>
+          <button type="button" class="ghost" id="conversation-close-btn">Close</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section id="customer-calls-section">
+    <div class="section-header">
+      <h2>Calls from customers</h2>
+      <button class="ghost" id="customer-calls-refresh-btn">Refresh</button>
+    </div>
+    <div class="body">
+      <div id="customer-calls-table"></div>
+      <div id="ccall-active" style="display:none; margin-top:12px;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;">
+          <video id="ccall-remote" autoplay playsinline style="width:360px; max-width:100%; background:#000; border-radius:6px;"></video>
+          <video id="ccall-local" autoplay playsinline muted style="width:160px; background:#000; border-radius:6px;"></video>
+          <audio id="ccall-remote-audio" autoplay></audio>
+          <div style="flex:1; min-width:240px;">
+            <div id="ccall-title" style="font-weight:600"></div>
+            <div style="margin-top:10px;"><span class="badge PENDING" id="ccall-indicators">Camera and microphone off</span> <span class="muted" id="ccall-state"></span></div>
+            <div style="margin-top:10px;">Call code <b class="mono" id="ccall-code" style="font-size:18px">—</b> <span class="muted">Read it to the customer: the app must show the same code. If it differs, end the call.</span></div>
+            <div class="identity-actions"><button class="ghost" id="ccall-hangup-btn">Hang up</button></div>
+            <div class="muted" style="margin-top:8px; font-size:12px;">Nothing of the call is recorded; the call's record (who, when, how it ended) and your username are kept.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="calls-section">
+    <div class="section-header">
+      <h2>Verification calls</h2>
+      <button class="ghost" id="calls-refresh-btn">Refresh</button>
+    </div>
+    <div class="body">
+      <div id="calls-table"></div>
+      <div id="call-active" style="display:none; margin-top:12px;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;">
+          <video id="call-remote" autoplay playsinline style="width:360px; max-width:100%; background:#000; border-radius:6px;"></video>
+          <video id="call-local" autoplay playsinline muted style="width:160px; background:#000; border-radius:6px;"></video>
+          <audio id="call-remote-audio" autoplay></audio>
+          <div style="flex:1; min-width:240px;">
+            <div class="muted" style="margin-bottom:6px;">Confirm with the customer:</div>
+            <div id="call-terms"></div>
+            <div style="margin-top:10px;"><span class="badge PENDING" id="call-indicators">Camera and microphone off</span> <span class="muted" id="call-state"></span></div>
+            <div style="margin-top:10px;">Call code <b class="mono" id="call-code" style="font-size:18px">—</b> <span class="muted">Read it to the customer: the app must show the same code. If it differs, end the call.</span></div>
+            <div class="identity-actions">
+              <button class="primary" id="call-verified-btn">Verified</button>
+              <button class="danger" id="call-failed-btn">Failed</button>
+              <button class="ghost" id="call-hangup-btn">Hang up</button>
+            </div>
+            <div class="muted" style="margin-top:8px; font-size:12px;">Nothing of the call is recorded. Your decision and your username are written to the evidence of this transaction.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section>
     <div class="section-header"><h2>Identity lookup</h2></div>
     <div class="body">
@@ -124,6 +197,29 @@
         <button class="primary" id="identity-search-btn">Look up</button>
       </div>
       <div id="identity-result" class="identity-result"></div>
+    </div>
+  </section>
+
+  <section id="customer-section" style="display:none">
+    <div class="section-header"><h2 id="customer-title">Customer</h2></div>
+    <div class="body">
+      <h3>Payments</h3>
+      <div class="filters" style="margin-bottom:6px">
+        <select id="authorizations-filter">
+          <option value="all">All</option><option value="confirmed">Confirmed</option><option value="declined">Declined, expired, cancelled</option><option value="open">Open</option>
+        </select>
+      </div>
+      <div id="authorizations-table"></div>
+      <h3>Mandates</h3>
+      <div id="mandates-table"></div>
+      <div id="mandate-detail"></div>
+      <h3>Devices</h3>
+      <div class="muted" id="devices-limit"></div>
+      <div id="devices-table"></div>
+      <h4>Device additions and replacements</h4>
+      <div id="device-requests-table"></div>
+      <h4>Security events</h4>
+      <div id="device-events-table"></div>
     </div>
   </section>
 
@@ -170,5 +266,10 @@
 </main>
 
 <script src="/admin/admin.js"></script>
+<script src="/admin/call-code.js"></script>
+<script src="/admin/calls.js"></script>
+<script src="/admin/conversations.js"></script>
+<script src="/admin/customer.js"></script>
+<script src="/admin/customer-calls.js"></script>
 </body>
 </html>

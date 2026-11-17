@@ -44,6 +44,8 @@ tags:
   - { name: Authorizations }
   - { name: Adaptive verification }
   - { name: Bank transaction }
+  - { name: Mandates }
+  - { name: Conversations }
   - { name: Evidence }
   - { name: Secure push }
   - { name: Mobile SDK }
@@ -89,18 +91,21 @@ paths:
               required: [bankCustomerRef]
               properties:
                 bankCustomerRef: { type: string, minLength: 1, maxLength: 128, description: The bank's own customer reference }
+      description: >
+        Safe to retry. When a non-revoked identity already exists for this
+        bank client and bankCustomerRef, it is returned with 200 and
+        replayed=true instead of creating a second one.
       responses:
         '201':
           description: Created
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  nexusId: { $ref: '#/components/schemas/NexusId' }
-                  status: { $ref: '#/components/schemas/IdentityStatus' }
-                  createdAt: { type: string, format: date-time }
-        '409': { $ref: '#/components/responses/Conflict' }
+              schema: { $ref: '#/components/schemas/CreatedIdentity' }
+        '200':
+          description: The identity already existed for this customer reference (replayed=true)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreatedIdentity' }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/nexus-identities/{nexusId}:
@@ -122,6 +127,523 @@ paths:
                   createdAt: { type: string, format: date-time }
                   lastUsedAt: { type: string, format: date-time, nullable: true }
                   evidenceHead: { allOf: [{ $ref: '#/components/schemas/ChainPosition' }], nullable: true, description: Latest record of the identity's evidence chain; store it to detect later truncation }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/nexus-identities/{nexusId}/suspend:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    post:
+      tags: [Identities]
+      summary: Suspend an identity (lost phone reported to the bank, suspected fraud); open authorizations are cancelled
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, minLength: 1, maxLength: 128 } } } } }
+      responses:
+        '200': { description: Suspended, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [SUSPENDED] } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/nexus-identities/{nexusId}/reactivate:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    post:
+      tags: [Identities]
+      summary: Reactivate a suspended identity after the bank re-identified the customer (method and case reference are audited)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reidentification]
+              additionalProperties: false
+              properties:
+                reidentification:
+                  type: object
+                  required: [method, reference]
+                  properties:
+                    method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
+                    reference: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200': { description: Active, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [ACTIVE] } } } } } }
+        '404': { description: Not found, or not SUSPENDED, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /v1/customer-calls/{callId}:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Conversations]
+      summary: State of a call a customer of this bank started (for reconciliation; events arrive as webhooks customer_call.requested, .answered, .ended)
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCall' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/conversations/{conversationId}:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Conversations]
+      summary: A conversation of this bank client with its messages (for the bank's bot)
+      parameters: [{ in: query, name: after, schema: { type: integer, minimum: 0, default: 0 }, description: Only messages with a higher sequence number }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConversationThread' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/conversations/{conversationId}/bot-messages:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Conversations]
+      summary: The bank's bot answers; handover=true passes the conversation to a person
+      description: >
+        Only while the conversation is WITH_BOT (409 CONVERSATION_NOT_WITH_BOT after a handover). Customer messages reach the bank as the conversation.message webhook.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 4000 }, clientMessageId: { type: string, maxLength: 64, nullable: true }, attachment: { $ref: '#/components/schemas/ConversationAttachment' }, handover: { type: boolean }, handoverReason: { type: string, maxLength: 200 } } } } }
+      responses:
+        '201':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '200':
+          description: Sent earlier with the same clientMessageId (replayed=true)
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/conversations/{conversationId}/close:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Conversations]
+      summary: The bank closes a conversation
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/conversations/{conversationId}/integrity:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Conversations]
+      summary: Recomputes the conversation's hash chain
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [intact, problems], properties: { intact: { type: boolean }, problems: { type: array, items: { type: string } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/customer-calls:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's calls with the bank, newest first
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [calls], properties: { calls: { type: array, items: { $ref: '#/components/schemas/CustomerCall' } } } } } }
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer asks to talk to the bank by audio or video; the call waits for an operator of the bank
+      description: 'Only on a channel the bank enabled (409 `CALL_CHANNEL_NOT_ENABLED`); one open call per NEXUS ID (409 `CALL_ALREADY_OPEN`). The bank receives `customer_call.requested`. Unanswered after `CUSTOMER_CALL_WAIT_SECONDS` the call ends `MISSED`.'
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [channel, topic], properties: { channel: { type: string, enum: [AUDIO, VIDEO] }, topic: { type: string, minLength: 1, maxLength: 200 }, conversationId: { type: string, format: uuid, nullable: true } } } } }
+      responses:
+        '201':
+          description: The call is waiting for an operator
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCallJoin' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/customer-calls/{callId}:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: State of a call this device asked for, and the ICE servers while it is open
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCallJoin' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/customer-calls/{callId}/signals:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Send a WebRTC signalling message to the operator (the offer may be sent while the call waits)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalRequest' } } }
+      responses:
+        '201': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '200': { description: 'A message with this messageId was already accepted; nothing is relayed again', content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 'The call is not open (`CALL_NOT_OPEN`), or the message breaks the signalling order', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Signalling messages from the operator, and a `bye` from `server` when the call ends (long poll)
+      parameters:
+        - { in: query, name: after, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: waitMs, schema: { type: integer, minimum: 0, maximum: 20000, default: 0 } }
+      responses:
+        '200':
+          description: Messages with seq greater than `after`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next: { type: integer }
+                  signals: { type: array, items: { $ref: '#/components/schemas/CallSignal' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/customer-calls/{callId}/end:
+    parameters: [{ in: path, name: callId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer hangs up (CONNECTED → ENDED) or stops waiting (WAITING → CANCELLED)
+      responses:
+        '200':
+          description: The call as it ended
+          content: { application/json: { schema: { $ref: '#/components/schemas/CustomerCall' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's conversations with the bank
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [conversations], properties: { conversations: { type: array, items: { $ref: '#/components/schemas/Conversation' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer opens a conversation, optionally about one of their payments
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [topic, body], properties: { topic: { type: string, minLength: 1, maxLength: 200 }, body: { type: string, minLength: 1, maxLength: 4000 }, authorizationId: { type: string, format: uuid, nullable: true }, clientMessageId: { type: string, maxLength: 64, nullable: true }, attachment: { $ref: '#/components/schemas/ConversationAttachment' } } } } }
+      responses:
+        '201':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [conversation, message], properties: { conversation: { $ref: '#/components/schemas/Conversation' }, message: { $ref: '#/components/schemas/ConversationMessage' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/messages:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Messages after a sequence number; the bank's messages are marked delivered
+      parameters: [{ in: query, name: after, schema: { type: integer, minimum: 0, default: 0 }, description: Only messages with a higher sequence number }]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConversationThread' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer writes
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 4000 }, clientMessageId: { type: string, maxLength: 64, nullable: true }, attachment: { $ref: '#/components/schemas/ConversationAttachment' } } } } }
+      responses:
+        '201':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '200':
+          description: Sent earlier with the same clientMessageId (replayed=true)
+          content: { application/json: { schema: { $ref: '#/components/schemas/MessageSent' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/read:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer read the bank's messages up to a sequence number
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [upToSequence], properties: { upToSequence: { type: integer, minimum: 1 } } } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [marked], properties: { marked: { type: integer } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/handover:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: 'Talk to a person: the conversation waits for an operator of the bank'
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/conversations/{conversationId}/close:
+    parameters: [{ in: path, name: conversationId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer closes a conversation
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mandates:
+    post:
+      tags: [Mandates]
+      summary: Propose a recurring payment mandate to one of the customer's devices
+      description: >
+        Creates the mandate PENDING_SIGNATURE with canonical terms (domain NEXUS-SIGN/MANDATE) that the
+        addressed device shows and signs. The bank tells the customer through its own channels (push).
+        Signed terms are immutable: changed terms are a new mandate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [nexusId, credentialId, mandateReference, payee, currency, perPaymentLimitMinor, frequency, validFrom, validUntil, termsVersion]
+              properties:
+                nexusId: { $ref: '#/components/schemas/NexusId' }
+                credentialId: { type: string, format: uuid, description: The device that signs }
+                mandateReference: { type: string, minLength: 1, maxLength: 128, description: "The bank's reference, unique per bank client; display text rules apply" }
+                payee: { type: object, additionalProperties: { type: string }, description: Same rules as an authorization beneficiary }
+                currency: { type: string, pattern: '^[A-Z]{3}$' }
+                perPaymentLimitMinor: { type: string, pattern: '^[1-9][0-9]{0,29}$' }
+                totalLimitMinor: { type: string, nullable: true, pattern: '^[1-9][0-9]{0,29}$', description: Sum of all allowed debits; null for none }
+                frequency: { type: string, enum: [WEEKLY, MONTHLY, QUARTERLY, YEARLY], description: At most one allowed debit per UTC calendar period }
+                validFrom: { type: string, format: date-time }
+                validUntil: { type: string, format: date-time }
+                termsVersion: { type: string, minLength: 1, maxLength: 64 }
+                offerExpiresInSeconds: { type: integer, minimum: 60, maximum: 604800, default: 86400 }
+      responses:
+        '201':
+          description: Proposed
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mandates/{mandateId}:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mandates]
+      summary: A mandate of this bank client
+      responses:
+        '200':
+          description: Mandate
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mandates/{mandateId}/debits:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mandates]
+      summary: Ask before a debit whether it is inside the signed terms
+      description: >
+        Allowed only when the mandate is ACTIVE, within its validity, in its currency, not above the per-payment
+        limit or, with the debits allowed so far, the total limit, and no debit was allowed in the same UTC
+        period. Every decision is recorded; the database checks an allowed debit again. Idempotent per
+        debitReference (the same reference with another amount or currency is refused with DEBIT_REFERENCE_REUSED).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [debitReference, amountMinor, currency]
+              properties:
+                debitReference: { type: string, minLength: 1, maxLength: 128 }
+                amountMinor: { type: string, pattern: '^[1-9][0-9]{0,29}$' }
+                currency: { type: string, pattern: '^[A-Z]{3}$' }
+      responses:
+        '201':
+          description: Allowed
+          content: { application/json: { schema: { $ref: '#/components/schemas/MandateDebit' } } }
+        '200':
+          description: Allowed earlier for the same debitReference (replayed=true)
+          content: { application/json: { schema: { $ref: '#/components/schemas/MandateDebit' } } }
+        '409':
+          description: Refused (code MANDATE_DEBIT_REFUSED, with the decision and reason), or another conflict
+          content: { application/json: { schema: { allOf: [{ $ref: '#/components/schemas/Error' }, { $ref: '#/components/schemas/MandateDebit' }] } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mandates/{mandateId}/withdraw:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mandates]
+      summary: Withdraw a mandate (the bank cannot change one)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 64 } } } } }
+      responses:
+        '200':
+          description: Withdrawn; the event is sealed into the evidence chain
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/nexus-identities/{nexusId}/mandates:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Mandates]
+      summary: The identity's mandates with this bank client, newest first
+      responses:
+        '200':
+          description: Mandates
+          content: { application/json: { schema: { type: object, required: [mandates], properties: { mandates: { type: array, items: { $ref: '#/components/schemas/Mandate' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/mandates:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's mandates
+      responses:
+        '200':
+          description: Mandates
+          content: { application/json: { schema: { type: object, required: [mandates], properties: { mandates: { type: array, items: { $ref: '#/components/schemas/Mandate' } } } } } }
+
+  /v1/mobile/mandates/{mandateId}:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: A mandate's terms; termsBase64 are the bytes the device shows and signs
+      responses:
+        '200':
+          description: Mandate
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/mandates/{mandateId}/signature:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The addressed device signs the mandate terms (ECDSA P-256 over termsBase64)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [signature, signatureFormat]
+              properties:
+                signature: { type: string, description: Base64 }
+                signatureFormat: { type: string, enum: [der, raw] }
+      responses:
+        '200':
+          description: Signed; the mandate is ACTIVE and the signature is sealed into the evidence chain
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422':
+          description: The signature does not verify over the terms
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /v1/mobile/mandates/{mandateId}/decline:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Decline an offered mandate (PENDING_SIGNATURE → DECLINED)
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/mandates/{mandateId}/suspend:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Suspend a signed mandate (ACTIVE → SUSPENDED); debits are refused
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/mandates/{mandateId}/resume:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Resume a suspended mandate under its signed terms (SUSPENDED → ACTIVE)
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/mandates/{mandateId}/revoke:
+    parameters: [{ in: path, name: mandateId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Revoke a mandate (ACTIVE or SUSPENDED → REVOKED); final
+      description: Any active device of the NEXUS ID. The event is sealed into the evidence chain and sent to the bank as a webhook.
+      responses:
+        '200':
+          description: Done
+          content: { application/json: { schema: { $ref: '#/components/schemas/Mandate' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/nexus-identities/{nexusId}/devices:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Identities]
+      summary: The identity's devices, active and revoked
+      responses:
+        '200':
+          description: Devices
+          content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: '#/components/schemas/DeviceSummary' } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/nexus-identities/{nexusId}/settings:
+    parameters: [{ $ref: '#/components/parameters/NexusId' }]
+    get:
+      tags: [Identities]
+      summary: The customer's settings and limits in force, and a relaxing change on hold
+      responses:
+        '200': { description: Settings, content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettingsState' } } } }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /v1/nexus-identities/{nexusId}/evidence:
@@ -279,7 +801,7 @@ paths:
                 type: object
                 properties:
                   authorizationId: { type: string, format: uuid }
-                  qrPayload: { type: string, description: 'NXS1. + base64url(canonical authorization bytes)' }
+                  qrPayload: { type: string, description: 'NXS1. or NXS2. + base64url(canonical authorization bytes); for a device enrolled with offlineKeyAgreement PER_AUTHORIZATION, NXS3. + base64url(canonical bytes) + . + base64url(DER SPKI of the Auth Core key for this authorization) (offline v3)' }
                   codeDigits: { type: integer, example: 8 }
                   expiresAt: { type: string, format: date-time }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -290,7 +812,13 @@ paths:
     post:
       tags: [Offline confirmation]
       summary: Submit the code the customer read from the phone
-      description: A wrong code counts towards the same five-attempt limit as a wrong signature. The evidence record is sealed with confirmationMethod OFFLINE_CODE.
+      description: >-
+        A wrong code counts towards the same five-attempt limit as a wrong signature. With
+        OFFLINE_CONFIRMATION_MODE=deferred_signature (v2, default, required in production) a correct code returns
+        PROVISIONAL and the authorization becomes VERIFIED (confirmationMethod OFFLINE_SIGNED) only when the device has
+        uploaded its signature over the same bytes; webhooks authorization.offline_provisional, authorization.verified,
+        authorization.offline_unsigned. With immediate (v1) a correct code returns VERIFIED and the evidence is sealed
+        with confirmationMethod OFFLINE_CODE.
       requestBody:
         required: true
         content:
@@ -386,20 +914,23 @@ paths:
       - { in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }
     post:
       tags: [Adaptive verification]
-      summary: Record the provider's result (bank verification gateway, mTLS)
-      description: A failed AUDIO check escalates to VIDEO when enabled; a failed final factor fails the plan and rejects the authorization. The assertion is stored as a SHA-256 hash in the evidence.
+      summary: Record a provider's signed result (relayed by the bank verification gateway, mTLS)
+      description: |
+        `resultToken` is a verification result v1 token (compact JWS, ES256) signed by a provider key registered for this bank with
+        `cli/verificationSetup.js` (docs/protocol/verification-result-v1.md). Auth Core verifies the signature, the binding to this bank,
+        session, authorization, transaction terms (`canonical_payload_hash`), device credential and session nonce, freshness (lifetime at
+        most 600 s) and single use (`jti`). A refused token returns 403 and leaves the session open. A failed AUDIO check escalates to VIDEO
+        when enabled; a failed final factor fails the plan and rejects the authorization. The SHA-256 of the token is kept in the evidence.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [sessionNonce, result, providerReference, assertion]
+              additionalProperties: false
+              required: [resultToken]
               properties:
-                sessionNonce: { type: string, minLength: 20, maxLength: 128 }
-                result: { type: string, enum: [VERIFIED, FAILED] }
-                providerReference: { type: string, minLength: 1, maxLength: 128 }
-                assertion: { type: string, minLength: 1, maxLength: 4096, description: Provider assertion as received (e.g. a signed JWS) }
+                resultToken: { type: string, minLength: 1, maxLength: 8192 }
       responses:
         '200':
           description: Updated plan
@@ -408,6 +939,40 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/authorizations/{authorizationId}/cancel:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Authorizations]
+      summary: Withdraw an authorization the customer has not confirmed
+      description: >-
+        Only while it is PENDING_USER. The authorization becomes CANCELLED, open verification plans and calls end, and
+        the bank receives authorization.cancelled. A signature arriving afterwards fails. Audit finding A1-03.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [ORDER_CHANGED, FRAUD_SUSPECTED, CUSTOMER_REQUEST, OTHER] }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizationId, state, reason]
+                properties:
+                  authorizationId: { type: string, format: uuid }
+                  state: { type: string, enum: [CANCELLED] }
+                  reason: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: AUTHORIZATION_NOT_PENDING (already confirmed, expired or ended)
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   /v1/authorizations/{authorizationId}/bank-commit-request:
     parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
@@ -488,9 +1053,28 @@ paths:
                   description: |
                     Required for a BOOTSTRAP token when the customer already has an enrolled device:
                     how the bank re-identified the customer, and its case reference. Without it the
-                    request is refused with 409 and `code` ACTIVE_CREDENTIAL_EXISTS. The enrolment that
-                    uses the token revokes the previous device, notifies it (secure push) and sends the
-                    `credential.replaced` webhook.
+                    request is refused with 409 and `code` ACTIVE_CREDENTIAL_EXISTS.
+                    The first call opens a replacement request and answers 202 `REPLACEMENT_PENDING`
+                    with the `credential.replacement_requested` webhook; the bank shows the request
+                    on the customer's enrolled device, which approves or cancels it
+                    (`/v1/mobile/device-replacements/{replacementId}/approve|cancel`). The same call
+                    returns the token (201) once the request was approved on the enrolled device or
+                    its hold (`DEVICE_REPLACEMENT_HOLD_SECONDS`, default 24 h, at least 1 h in
+                    production) has passed. The enrolment that uses the token revokes the previous
+                    device, uses the request once and sends the `credential.replaced` webhook.
+                  required: [method, reference]
+                  properties:
+                    method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
+                    reference: { type: string, minLength: 1, maxLength: 128 }
+                addition:
+                  type: object
+                  description: |
+                    Enrols a further device next to the customer's active ones (a tablet next to a
+                    phone), up to the bank client's `max_devices_per_identity` (default 1; then
+                    refused with 409 `DEVICE_LIMIT_REACHED`). Exclusive with `replacement`. Works
+                    like a replacement: 202 `ADDITION_PENDING` and the `credential.addition_requested`
+                    webhook until an enrolled device approves or the hold passes, then 201 with the
+                    token. The enrolment revokes nothing and sends the `credential.added` webhook.
                   required: [method, reference]
                   properties:
                     method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
@@ -499,6 +1083,20 @@ paths:
         '201':
           description: Token issued
           content: { application/json: { schema: { $ref: '#/components/schemas/MobileToken' } } }
+        '202':
+          description: Device replacement requested; waiting for the customer's approval on the enrolled device or for the hold
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, replacementId, state, notBefore, expiresAt]
+                properties:
+                  status: { type: string, enum: [REPLACEMENT_PENDING, ADDITION_PENDING] }
+                  kind: { type: string, enum: [ADDITION], description: Present for an addition }
+                  replacementId: { type: string, format: uuid }
+                  state: { type: string, enum: [PENDING] }
+                  notBefore: { type: string, format: date-time }
+                  expiresAt: { type: string, format: date-time }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /v1/mobile/bootstrap:
@@ -541,6 +1139,7 @@ paths:
                   attestationStatus: { type: string, enum: [UNKNOWN, VERIFIED, FAILED, EXPIRED] }
                   requestAuthentication: { type: string, enum: [DEVICE_SIGNATURE] }
                   offlineServerPublicKeyPem: { type: string, nullable: true }
+                  offlineKeyAgreement: { type: string, nullable: true, enum: [STATIC, PER_AUTHORIZATION] }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -634,6 +1233,246 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/VerificationSession' } } }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /v1/mobile/verification-sessions/{sessionId}/call:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: ICE servers and state of an in-app audio/video call of this device (ADR 0017)
+      description: Only the enrolled device of the session's authorization. TURN credentials are derived per session and expire with it.
+      responses:
+        '200':
+          description: Call
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId: { type: string, format: uuid }
+                  channel: { type: string, enum: [AUDIO, VIDEO] }
+                  expiresAt: { type: string, format: date-time }
+                  operatorJoined: { type: boolean }
+                  iceServers: { type: array, items: { $ref: '#/components/schemas/IceServer' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /v1/mobile/verification-sessions/{sessionId}/signals:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Send a WebRTC signalling message to the operator
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalRequest' } } }
+      responses:
+        '201': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '200': { description: 'A message with this messageId was already accepted; nothing is relayed again', content: { application/json: { schema: { $ref: '#/components/schemas/CallSignalAccepted' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 'Session closed, or the message breaks the signalling order (an offer while one is unanswered, a candidate before the offer, anything after bye)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '410': { $ref: '#/components/responses/Gone' }
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Signalling messages from the operator (long poll)
+      parameters:
+        - { in: query, name: after, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: waitMs, schema: { type: integer, minimum: 0, maximum: 20000, default: 0 } }
+      responses:
+        '200':
+          description: Messages with seq greater than `after`
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next: { type: integer }
+                  signals: { type: array, items: { $ref: '#/components/schemas/CallSignal' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/verification-sessions/{sessionId}/cancel:
+    parameters: [{ in: path, name: sessionId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer ends or declines the call (session CANCELLED, plan back to PENDING)
+      responses:
+        '204': { description: Cancelled }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/devices:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's devices ("My devices"), active and revoked, newest first
+      responses:
+        '200':
+          description: Devices
+          content: { application/json: { schema: { type: object, required: [devices], properties: { devices: { type: array, items: { $ref: '#/components/schemas/DeviceSummary' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/devices/{credentialId}/revoke:
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer removes one of their devices (another one, or the signing device itself)
+      description: >
+        Signed by an ACTIVE device of the same NEXUS ID. Open payments addressed to the removed
+        device are cancelled with a sealed outcome; the bank receives `credential.revoked` with
+        reason REVOKED_BY_CUSTOMER. Removing the last device leaves the identity without a device:
+        the bank then enrols one through recovery or a replacement.
+      parameters:
+        - { in: path, name: credentialId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentialId, state, remainingActiveDevices]
+                properties:
+                  credentialId: { type: string, format: uuid }
+                  state: { type: string, enum: [REVOKED] }
+                  remainingActiveDevices: { type: integer, minimum: 0 }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/history:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The identity's authorizations with how each ended, newest first
+      parameters:
+        - { in: query, name: filter, schema: { type: string, enum: [all, confirmed, declined, open] } }
+        - { in: query, name: before, description: createdAt of the last entry of the previous page, schema: { type: string, format: date-time } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Page of the history
+          content: { application/json: { schema: { type: object, required: [authorizations], properties: { authorizations: { type: array, items: { $ref: '#/components/schemas/HistoryEntry' } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/authorizations/{authorizationId}/evidence:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The sealed evidence of one of the customer's authorizations (confirmation or outcome) with the enrolment record of its credential
+      responses:
+        '200':
+          description: Evidence record (schema 3) and the enrolment record it names
+          content: { application/json: { schema: { type: object, required: [record], properties: { record: { type: object }, credentialEnrolment: { type: object, nullable: true } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/mobile/security-events:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The identity's security log (enrolments, revocations, replacements, recoveries, suspensions, settings, declines), newest first
+      parameters:
+        - { in: query, name: before, schema: { type: string, format: date-time } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Events
+          content: { application/json: { schema: { type: object, required: [events], properties: { events: { type: array, items: { type: object, required: [eventType, at, actor, details], properties: { eventType: { type: string }, at: { type: string, format: date-time }, actor: { type: string, enum: [BANK, DEVICE, OPERATOR, SYSTEM] }, details: { type: object } } } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/notifications:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Past push messages (event feed); open one with GET /v1/mobile/push-messages/{messageId}
+      parameters:
+        - { in: query, name: before, schema: { type: string, format: date-time } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: Notifications
+          content: { application/json: { schema: { type: object, required: [notifications], properties: { notifications: { type: array, items: { type: object, required: [messageId, category, status, createdAt], properties: { messageId: { type: string, format: uuid }, category: { type: string }, authorizationId: { type: string, format: uuid, nullable: true }, status: { type: string }, createdAt: { type: string, format: date-time }, deliveredAt: { type: string, format: date-time, nullable: true } } } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/settings:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer's settings in force and a relaxing change still on hold
+      responses:
+        '200': { description: Settings, content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettingsState' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Sets limits, the video-check threshold and channels
+      description: >
+        Tightening applies at once. A change that raises or removes a limit or threshold, or changes the
+        currency, applies after CUSTOMER_SETTINGS_RELAX_HOLD_SECONDS. The bank receives customer.settings_changed.
+        Above perPaymentLimitMinor or the daily limit, POST /v1/authorizations answers 409 CUSTOMER_LIMIT_EXCEEDED;
+        above videoCheckAboveMinor the verification plan requires VIDEO.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettingsInput' } } }
+      responses:
+        '200': { description: The saved version, content: { application/json: { schema: { $ref: '#/components/schemas/CustomerSettings' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/identity/suspend:
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer suspends their NEXUS ID; open authorizations are cancelled; the bank reactivates it after re-identification
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, enum: [LOST_DEVICE, SUSPECTED_FRAUD, OTHER] } } } } }
+      responses:
+        '200': { description: Suspended, content: { application/json: { schema: { type: object, properties: { nexusId: { $ref: '#/components/schemas/NexusId' }, status: { type: string, enum: [SUSPENDED] } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/device-replacements:
+    get:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Open device replacement requests for this device's NEXUS ID
+      responses:
+        '200':
+          description: Open requests, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [replacements]
+                properties:
+                  replacements: { type: array, items: { $ref: '#/components/schemas/DeviceReplacement' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /v1/mobile/device-replacements/{replacementId}/approve:
+    parameters: [{ in: path, name: replacementId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer approves the replacement on the enrolled device; the hold ends now
+      responses:
+        '200': { description: Approved, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceReplacement' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/mobile/device-replacements/{replacementId}/cancel:
+    parameters: [{ in: path, name: replacementId, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer cancels the replacement on the enrolled device
+      responses:
+        '200': { description: Cancelled, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceReplacement' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /v1/mobile/push-registration:
     post:
       tags: [Mobile SDK]
@@ -725,6 +1564,84 @@ paths:
           content: { application/json: { schema: { $ref: '#/components/schemas/VerificationResult' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /v1/mobile/authorizations/{authorizationId}/decline:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: The customer declines a payment on the enrolled device ("it wasn't me")
+      description: >-
+        Only from the credential the authorization is bound to, and only while it is PENDING_USER. The authorization
+        becomes REJECTED, open verification plans and calls end, and the bank receives authorization.declined with the
+        reason; NOT_ME is a fraud signal. A signature arriving afterwards fails. Audit finding A1-03.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [NOT_ME, WRONG_DETAILS, OTHER] }
+      responses:
+        '200':
+          description: Declined
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizationId, state, reason]
+                properties:
+                  authorizationId: { type: string, format: uuid }
+                  state: { type: string, enum: [REJECTED] }
+                  reason: { type: string, enum: [NOT_ME, WRONG_DETAILS, OTHER] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: AUTHORIZATION_NOT_PENDING (already confirmed, expired or ended) or CREDENTIAL_MISMATCH
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /v1/mobile/authorizations/{authorizationId}/deferred-signature:
+    parameters: [{ $ref: '#/components/parameters/AuthorizationId' }]
+    post:
+      tags: [Mobile SDK]
+      security: [{ deviceSignature: [] }]
+      summary: Upload the signature made during an offline confirmation (offline confirmation v2)
+      description: >-
+        The device's ECDSA signature over the canonical bytes it confirmed offline (QR prefix NXS2.). Only from the
+        credential the authorization names. The signature never confirms an authorization by itself.
+        docs/protocol/offline-confirmation-v2-deferred-signature.md.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SignatureRequest' } } }
+      responses:
+        '200':
+          description: VERIFIED (the code had been accepted) or ALREADY_RECORDED (repeat delivery)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [VERIFIED, ALREADY_RECORDED] }
+                  evidence: { $ref: '#/components/schemas/ChainPosition' }
+        '202':
+          description: RECEIVED; the code has not been submitted yet and will finalize when it is
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [RECEIVED] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: NOT_AWAITING_SIGNATURE (final state, deadline passed, or v1 deployment); discard the signature
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: INVALID_DEFERRED_SIGNATURE; the signature does not verify over this authorization
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
   /v1/recovery/sessions:
     post:
       tags: [Recovery]
@@ -785,6 +1702,7 @@ paths:
                 securityLevel: { type: string, maxLength: 32 }
                 authPublicKeyPem: { type: string }
                 offlinePublicKeyPem: { type: string }
+                offlineKeyAgreement: { type: string, enum: [STATIC, PER_AUTHORIZATION] }
                 deviceAttestation: { type: object, additionalProperties: true }
       responses:
         '200':
@@ -799,6 +1717,7 @@ paths:
                   keyVersion: { type: integer }
                   requestAuthentication: { type: string, enum: [DEVICE_SIGNATURE] }
                   offlineServerPublicKeyPem: { type: string, nullable: true }
+                  offlineKeyAgreement: { type: string, nullable: true, enum: [STATIC, PER_AUTHORIZATION] }
         '401': { description: Wrong proof or missing token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -871,6 +1790,227 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   schemas:
+    ConversationAttachment:
+      type: object
+      nullable: true
+      description: A file the bank stores; the app checks the downloaded content against sha256
+      required: [reference, sha256, mediaType, fileName, sizeBytes]
+      properties:
+        reference: { type: string, pattern: '^[A-Za-z0-9._:/-]{1,256}$' }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        mediaType: { type: string }
+        fileName: { type: string, maxLength: 200 }
+        sizeBytes: { type: integer, minimum: 1, maximum: 52428800 }
+    CustomerCall:
+      type: object
+      required: [callId, nexusId, credentialId, channel, topic, state, createdAt, expiresAt]
+      properties:
+        callId: { type: string, format: uuid }
+        nexusId: { type: string, pattern: '^[0-9]{9}$' }
+        credentialId: { type: string, format: uuid, description: The device that asked for the call }
+        channel: { type: string, enum: [AUDIO, VIDEO] }
+        topic: { type: string }
+        conversationId: { type: string, format: uuid, nullable: true }
+        state: { type: string, enum: [WAITING, CONNECTED, ENDED, CANCELLED, MISSED] }
+        operator: { type: string, nullable: true, description: The operator of the bank who answered }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, description: 'WAITING: until when an operator may answer. CONNECTED: the longest the call lasts' }
+        answeredAt: { type: string, format: date-time, nullable: true }
+        endedAt: { type: string, format: date-time, nullable: true }
+        endedBy: { type: string, nullable: true, description: '`credential:<id>`, `admin:<username>` or `system`' }
+        endReason: { type: string, nullable: true, description: '`cancelled`, `hung_up`, `operator_ended`, `no_operator_answered`, `max_duration`, `credential_revoked`, `identity_not_active`' }
+    CustomerCallJoin:
+      type: object
+      required: [call, iceServers]
+      properties:
+        call: { $ref: '#/components/schemas/CustomerCall' }
+        iceServers: { type: array, items: { $ref: '#/components/schemas/IceServer' } }
+    Conversation:
+      type: object
+      required: [conversationId, nexusId, topic, state, lastSequence, createdAt, updatedAt]
+      properties:
+        conversationId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        topic: { type: string }
+        authorizationId: { type: string, format: uuid, nullable: true, description: The payment the conversation is about }
+        state: { type: string, enum: [WITH_BOT, WAITING_FOR_AGENT, WITH_AGENT, CLOSED] }
+        assignedOperator: { type: string, nullable: true }
+        handoverReason: { type: string, nullable: true }
+        lastSequence: { type: integer }
+        lastMessageHash: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time, nullable: true }
+    ConversationMessage:
+      type: object
+      required: [messageId, conversationId, sequence, senderType, sender, body, messageHash, createdAt]
+      properties:
+        messageId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        sequence: { type: integer, minimum: 1 }
+        senderType: { type: string, enum: [CUSTOMER, BOT, AGENT, SYSTEM] }
+        sender: { type: string, description: 'credential:<id>, bank:<client>, the operator for the bank; "agent" for the customer' }
+        body: { type: string }
+        attachment: { $ref: '#/components/schemas/ConversationAttachment' }
+        clientMessageId: { type: string, nullable: true }
+        previousHash: { type: string, nullable: true }
+        messageHash: { type: string, description: SHA-256 over the canonical message and previousHash }
+        createdAt: { type: string, format: date-time }
+        deliveredAt: { type: string, format: date-time, nullable: true }
+        readAt: { type: string, format: date-time, nullable: true }
+    ConversationThread:
+      type: object
+      required: [conversation, messages]
+      properties:
+        conversation: { $ref: '#/components/schemas/Conversation' }
+        messages: { type: array, items: { $ref: '#/components/schemas/ConversationMessage' } }
+    MessageSent:
+      type: object
+      required: [message, replayed]
+      properties:
+        message: { $ref: '#/components/schemas/ConversationMessage' }
+        conversation: { $ref: '#/components/schemas/Conversation' }
+        replayed: { type: boolean }
+    Mandate:
+      type: object
+      required: [mandateId, nexusId, credentialId, mandateReference, payee, currency, perPaymentLimitMinor, totalLimitMinor, frequency, validFrom, validUntil, termsVersion, termsHash, termsBase64, offerExpiresAt, state, usedTotalMinor, createdAt]
+      properties:
+        mandateId: { type: string, format: uuid }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        credentialId: { type: string, format: uuid }
+        mandateReference: { type: string }
+        payee: { type: object, additionalProperties: { type: string } }
+        currency: { type: string }
+        perPaymentLimitMinor: { type: string }
+        totalLimitMinor: { type: string, nullable: true }
+        frequency: { type: string, enum: [WEEKLY, MONTHLY, QUARTERLY, YEARLY] }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time }
+        termsVersion: { type: string }
+        termsHash: { type: string, description: SHA-256 (hex) of the canonical terms }
+        termsBase64: { type: string, description: The canonical terms the device shows and signs }
+        offerExpiresAt: { type: string, format: date-time }
+        state: { type: string, enum: [PENDING_SIGNATURE, ACTIVE, SUSPENDED, REVOKED, EXPIRED, DECLINED, WITHDRAWN] }
+        stateReason: { type: string, nullable: true }
+        signedAt: { type: string, format: date-time, nullable: true }
+        usedTotalMinor: { type: string, description: Sum of the debits allowed so far }
+        createdAt: { type: string, format: date-time }
+    MandateDebit:
+      type: object
+      required: [debitId, mandateId, debitReference, amountMinor, currency, periodStart, decision, replayed]
+      properties:
+        debitId: { type: string, format: uuid }
+        mandateId: { type: string, format: uuid }
+        debitReference: { type: string }
+        amountMinor: { type: string }
+        currency: { type: string }
+        periodStart: { type: string, format: date }
+        decision: { type: string, enum: [ALLOWED, REFUSED] }
+        reason: { type: string, nullable: true, enum: [MANDATE_NOT_ACTIVE, NOT_YET_VALID, VALIDITY_ENDED, CURRENCY_MISMATCH, ABOVE_PAYMENT_LIMIT, PERIOD_ALREADY_DEBITED, ABOVE_TOTAL_LIMIT, null] }
+        replayed: { type: boolean }
+    DeviceSummary:
+      type: object
+      required: [credentialId, platform, securityLevel, attestationStatus, state, enrolledAt, thisDevice]
+      properties:
+        credentialId: { type: string, format: uuid }
+        platform: { type: string }
+        securityLevel: { type: string }
+        attestationStatus: { type: string }
+        state: { type: string, enum: [ACTIVE, REVOKED] }
+        enrolledAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        thisDevice: { type: boolean }
+    HistoryEntry:
+      type: object
+      required: [authorizationId, transactionReference, operationType, amountMinor, currency, beneficiary, state, createdAt, credentialId, evidence]
+      properties:
+        authorizationId: { type: string, format: uuid }
+        transactionReference: { type: string }
+        operationType: { type: string }
+        amountMinor: { type: string }
+        currency: { type: string }
+        beneficiary: { type: object, additionalProperties: { type: string } }
+        state: { type: string }
+        reason: { type: string, nullable: true, description: Outcome reason for a declined, rejected, expired or cancelled authorization }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        credentialId: { type: string, format: uuid }
+        evidence: { type: boolean, description: 'True when a sealed record exists (GET /v1/mobile/authorizations/{id}/evidence)' }
+    CustomerSettingsInput:
+      type: object
+      required: [currency, perPaymentLimitMinor, dailyLimitMinor, videoCheckAboveMinor, channels]
+      additionalProperties: false
+      properties:
+        currency: { type: string, pattern: '^[A-Z]{3}$', nullable: true }
+        perPaymentLimitMinor: { type: string, pattern: '^(0|[1-9][0-9]{0,29})$', nullable: true }
+        dailyLimitMinor: { type: string, pattern: '^(0|[1-9][0-9]{0,29})$', nullable: true }
+        videoCheckAboveMinor: { type: string, pattern: '^(0|[1-9][0-9]{0,29})$', nullable: true }
+        channels:
+          type: object
+          required: [push, audio, video]
+          properties: { push: { type: boolean, enum: [true] }, audio: { type: boolean }, video: { type: boolean } }
+    CustomerSettings:
+      allOf:
+        - { $ref: '#/components/schemas/CustomerSettingsInput' }
+        - type: object
+          required: [version, effectiveAt]
+          properties: { version: { type: integer }, effectiveAt: { type: string, format: date-time } }
+    CustomerSettingsState:
+      type: object
+      required: [current]
+      properties:
+        current: { $ref: '#/components/schemas/CustomerSettings' }
+        pending: { allOf: [{ $ref: '#/components/schemas/CustomerSettings' }], nullable: true }
+    CreatedIdentity:
+      type: object
+      required: [nexusId, status, createdAt, replayed]
+      properties:
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        status: { $ref: '#/components/schemas/IdentityStatus' }
+        createdAt: { type: string, format: date-time }
+        replayed: { type: boolean, description: True when the identity already existed for this customer reference }
+    DeviceReplacement:
+      type: object
+      required: [replacementId, kind, nexusId, method, reference, state, requestedAt, notBefore, expiresAt, usable]
+      properties:
+        replacementId: { type: string, format: uuid }
+        kind: { type: string, enum: [REPLACEMENT, ADDITION], description: REPLACEMENT revokes the active devices at enrolment; ADDITION keeps them }
+        nexusId: { $ref: '#/components/schemas/NexusId' }
+        method: { type: string, enum: [BRANCH_VISIT, VIDEO_IDENTIFICATION, IN_APP_STRONG_AUTHENTICATION, OTHER] }
+        reference: { type: string }
+        state: { type: string, enum: [PENDING, APPROVED, CANCELLED, USED, EXPIRED] }
+        requestedAt: { type: string, format: date-time }
+        notBefore: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        usable: { type: boolean, description: A BOOTSTRAP token may be issued for it now }
+    IceServer:
+      type: object
+      required: [urls]
+      properties:
+        urls: { type: array, items: { type: string } }
+        username: { type: string }
+        credential: { type: string }
+    CallSignalRequest:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [offer, answer, candidate, bye] }
+        payload: { description: '`{ sdp }` for offer and answer (at most 16 384 characters), an RTCIceCandidateInit for candidate (at most 2 048), `{ reason }` for bye' }
+        messageId: { type: string, format: uuid, description: 'Chosen by the sender; a retry with the same messageId is accepted once (200) and not relayed again' }
+    CallSignalAccepted:
+      type: object
+      properties:
+        seq: { type: integer }
+        duplicate: { type: boolean }
+    CallSignal:
+      type: object
+      properties:
+        seq: { type: integer }
+        from: { type: string, enum: [device, operator, server], description: '`server`: the session or authorization was closed (bye with the reason)' }
+        type: { type: string, enum: [offer, answer, candidate, bye] }
+        payload: {}
+        at: { type: string, format: date-time }
     Error:
       type: object
       required: [error]
@@ -932,6 +2072,7 @@ components:
       properties:
         authPublicKeyPem: { type: string, description: 'P-256 SPKI PEM; hardware key without user presence that signs device requests' }
         offlinePublicKeyPem: { type: string, description: 'P-256 SPKI PEM; biometric-protected key-agreement key for offline confirmation' }
+        offlineKeyAgreement: { type: string, enum: [STATIC, PER_AUTHORIZATION], description: 'STATIC (default): one key agreed at enrolment. PER_AUTHORIZATION: an Auth Core key per offline confirmation, sent in an NXS3. QR code (offline v3, the iOS SDK)' }
     AuthorizationRequest:
       type: object
       required: [nexusId, credentialId, transactionReference, operationType, amountMinor, currency, beneficiary, policyReference, policyVersion]
@@ -945,8 +2086,8 @@ components:
         beneficiary:
           type: object
           maxProperties: 16
-          description: Keys match ^[a-z][a-z0-9_]{0,63}$; string values up to 512 characters.
-          additionalProperties: { type: string, maxLength: 512 }
+          description: Keys match ^[a-z][a-z0-9_]{0,63}$; at most 16 fields; string values of 1 to 140 UTF-16 code units, without leading or trailing space separators.
+          additionalProperties: { type: string, minLength: 1, maxLength: 140 }
           example: { name: Jan Kowalski, iban: PL61109010140000071219812874 }
         policyReference: { type: string, maxLength: 128 }
         policyVersion: { type: string, maxLength: 64 }
@@ -1048,10 +2189,22 @@ components:
         cid: { type: string, format: uuid, description: Credential ID }
         iv: { type: string, description: base64url, 12 bytes }
         ct: { type: string, description: base64url ciphertext followed by the 16-byte tag }
-    AuthorizationState: { type: string, enum: [PENDING_USER, VERIFIED, EXPIRED, REJECTED, CANCELLED] }
+    AuthorizationState:
+      type: string
+      description: >-
+        OFFLINE_PROVISIONAL (offline confirmation v2): the code was accepted, the device signature has not arrived;
+        not confirmed. OFFLINE_UNSIGNED (final): a code was accepted and no valid device signature arrived before
+        the deadline, or the credential stopped being ACTIVE; treat as a security event.
+      enum: [PENDING_USER, VERIFIED, EXPIRED, REJECTED, CANCELLED, OFFLINE_PROVISIONAL, OFFLINE_UNSIGNED]
     Authorization:
       type: object
       properties:
+        confirmed:
+          type: boolean
+          description: True only when state is VERIFIED and the sealed evidence verifies now (HSM seal, binding to this authorization and its terms, device signature with the enrolment-sealed key). OFFLINE_PROVISIONAL is never confirmed. Derived by Auth Core, not a cryptographic fact by itself; verify the exported evidence for that.
+        evidenceProblem:
+          type: string
+          description: Present when state is VERIFIED but the evidence does not verify (confirmed is false).
         authorizationId: { type: string, format: uuid }
         nexusId: { $ref: '#/components/schemas/NexusId' }
         credentialId: { type: string, format: uuid }
@@ -1069,7 +2222,11 @@ components:
         state: { $ref: '#/components/schemas/AuthorizationState' }
         signature: { type: string, nullable: true }
         signatureAlgorithm: { type: string, enum: [ES256] }
-        signatureFormat: { type: string, enum: [der, raw], nullable: true }
+        signatureFormat: { type: string, enum: [der, raw, hmac], nullable: true, description: hmac for an offline code (not a third-party verifiable signature) }
+        confirmationMethod: { type: string, enum: [DEVICE_SIGNATURE, OFFLINE_CODE, OFFLINE_SIGNED], nullable: true }
+        offlineCodeAcceptedAt: { type: string, format: date-time, nullable: true, description: When an offline code was accepted }
+        offlineSignatureDeadline: { type: string, format: date-time, nullable: true, description: "Offline v2/v3: until when the device signature may arrive" }
+        offlineUnsignedReason: { type: string, nullable: true, description: "OFFLINE_UNSIGNED: deadline, credential_not_active or identity_not_active" }
         verifiedAt: { type: string, format: date-time, nullable: true }
         evidence: { allOf: [{ $ref: '#/components/schemas/ChainPosition' }], nullable: true, description: "VERIFIED only: the sealed record's chain position. Store it as the identity's chain head; compare canonicalPayloadHash with the value returned at creation before committing." }
     MobileAuthorization:
@@ -1088,7 +2245,11 @@ components:
       type: object
       required: [status]
       properties:
-        status: { type: string, enum: [VERIFIED, FAILED, EXPIRED] }
+        status:
+          type: string
+          description: PROVISIONAL only for an offline code with OFFLINE_CONFIRMATION_MODE=deferred_signature; it is not a confirmation.
+          enum: [VERIFIED, PROVISIONAL, FAILED, EXPIRED]
+        signatureDeadline: { type: string, format: date-time, description: 'PROVISIONAL: until when the device signature may arrive' }
         reason: { type: string, example: signature_verification_failed }
         attempts: { type: integer, description: Invalid attempts so far (limit 5) }
         evidence: { $ref: '#/components/schemas/ChainPosition' }

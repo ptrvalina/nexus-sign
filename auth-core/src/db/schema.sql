@@ -1,6 +1,9 @@
 -- NEXUS-SIGN Auth Core: database schema
 -- PostgreSQL 14+. Creates the current schema on an empty database and is safe
 -- to apply again. Existing databases are upgraded with migrations/.
+-- Install and upgrade with `npm run migrate` (src/cli/migrate.ts), which keeps
+-- the migration ledger. This file contains every migration up to:
+-- schema-version: 036
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -417,12 +420,14 @@ CREATE INDEX IF NOT EXISTS idx_push_messages_awaiting_receipt
 CREATE INDEX IF NOT EXISTS idx_push_messages_identity ON push_messages(nexus_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_push_messages_authorization ON push_messages(authorization_id) WHERE authorization_id IS NOT NULL;
 
--- Lifecycle state machines enforced by the database (migrations 017, 018).
--- Authorization lifecycle:
---   PENDING_USER -> VERIFIED | EXPIRED | CANCELLED | REJECTED (all final)
--- The transaction it binds never changes; the signature fields change only on
--- the transition to VERIFIED. Bank transaction lifecycle of a VERIFIED
--- authorization: PENDING -> COMMIT_REQUESTED -> COMMITTED | FAILED | CANCELLED.
+-- Authorization lifecycle (migrations 017, 018, 022):
+--   PENDING_USER -> VERIFIED | EXPIRED | CANCELLED | REJECTED | OFFLINE_PROVISIONAL
+--   OFFLINE_PROVISIONAL -> VERIFIED | OFFLINE_UNSIGNED
+-- VERIFIED, EXPIRED, CANCELLED, REJECTED and OFFLINE_UNSIGNED are final. The
+-- transaction it binds never changes; the signature fields change only on the
+-- transition to VERIFIED and the offline code fields only when a code is
+-- accepted. Bank transaction lifecycle of a VERIFIED authorization:
+-- PENDING -> COMMIT_REQUESTED -> COMMITTED | FAILED | CANCELLED.
 CREATE OR REPLACE FUNCTION authorization_lifecycle() RETURNS trigger AS $$
 DECLARE
   allowed BOOLEAN;
@@ -436,6 +441,8 @@ BEGIN
      OR NEW.amount_minor IS DISTINCT FROM OLD.amount_minor
      OR NEW.currency IS DISTINCT FROM OLD.currency
      OR NEW.beneficiary IS DISTINCT FROM OLD.beneficiary
+     OR NEW.policy_reference IS DISTINCT FROM OLD.policy_reference
+     OR NEW.policy_version IS DISTINCT FROM OLD.policy_version
      OR NEW.canonical_payload_hash IS DISTINCT FROM OLD.canonical_payload_hash
      OR NEW.nonce IS DISTINCT FROM OLD.nonce
      OR NEW.issued_at IS DISTINCT FROM OLD.issued_at
@@ -444,7 +451,8 @@ BEGIN
   END IF;
 
   IF NEW.state IS DISTINCT FROM OLD.state THEN
-    allowed := OLD.state = 'PENDING_USER' AND NEW.state IN ('VERIFIED','EXPIRED','CANCELLED','REJECTED');
+    allowed := (OLD.state = 'PENDING_USER' AND NEW.state IN ('VERIFIED','EXPIRED','CANCELLED','REJECTED','OFFLINE_PROVISIONAL'))
+            OR (OLD.state = 'OFFLINE_PROVISIONAL' AND NEW.state IN ('VERIFIED','OFFLINE_UNSIGNED'));
     IF NOT allowed THEN
       RAISE EXCEPTION 'authorization % : % -> % is not a permitted transition', OLD.authorization_id, OLD.state, NEW.state USING ERRCODE = 'integrity_constraint_violation';
     END IF;
@@ -454,12 +462,36 @@ BEGIN
       OR NEW.signature_format IS DISTINCT FROM OLD.signature_format
       OR NEW.confirmation_method IS DISTINCT FROM OLD.confirmation_method
       OR NEW.verified_at IS DISTINCT FROM OLD.verified_at)
-     AND NOT (NEW.state = 'VERIFIED' AND OLD.state = 'PENDING_USER') THEN
+     AND NOT (NEW.state = 'VERIFIED' AND OLD.state IN ('PENDING_USER','OFFLINE_PROVISIONAL')) THEN
     RAISE EXCEPTION 'authorization % : signature fields are set once, on verification', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
   IF NEW.state = 'VERIFIED' AND (NEW.signature IS NULL OR NEW.verified_at IS NULL) THEN
     RAISE EXCEPTION 'authorization % : VERIFIED needs a signature and verified_at', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
+
+  -- The accepted offline code: written once, when the code is accepted.
+  IF (NEW.offline_code_tag IS DISTINCT FROM OLD.offline_code_tag
+      OR NEW.offline_code_accepted_at IS DISTINCT FROM OLD.offline_code_accepted_at
+      OR NEW.offline_signature_deadline IS DISTINCT FROM OLD.offline_signature_deadline)
+     AND NOT (OLD.state = 'PENDING_USER' AND NEW.state IN ('VERIFIED','OFFLINE_PROVISIONAL')
+              AND OLD.offline_code_tag IS NULL AND OLD.offline_code_accepted_at IS NULL AND OLD.offline_signature_deadline IS NULL) THEN
+    RAISE EXCEPTION 'authorization % : the offline code fields are set once, when the code is accepted', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.state = 'OFFLINE_PROVISIONAL'
+     AND (NEW.offline_code_tag IS NULL OR NEW.offline_code_accepted_at IS NULL OR NEW.offline_signature_deadline IS NULL) THEN
+    RAISE EXCEPTION 'authorization % : OFFLINE_PROVISIONAL needs the accepted code and its signature deadline', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.confirmation_method = 'OFFLINE_SIGNED' AND NEW.offline_code_tag IS NULL THEN
+    RAISE EXCEPTION 'authorization % : OFFLINE_SIGNED needs the accepted code', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.offline_unsigned_reason IS DISTINCT FROM OLD.offline_unsigned_reason
+     AND NOT (OLD.state = 'OFFLINE_PROVISIONAL' AND NEW.state = 'OFFLINE_UNSIGNED') THEN
+    RAISE EXCEPTION 'authorization % : the unsigned reason is set once, on OFFLINE_UNSIGNED', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.state = 'OFFLINE_UNSIGNED' AND NEW.offline_unsigned_reason IS NULL THEN
+    RAISE EXCEPTION 'authorization % : OFFLINE_UNSIGNED needs a reason', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+
   IF NEW.expires_at IS DISTINCT FROM OLD.expires_at AND OLD.state <> 'PENDING_USER' THEN
     RAISE EXCEPTION 'authorization % : expiry of a final authorization is immutable', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
   END IF;
@@ -483,6 +515,23 @@ DROP TRIGGER IF EXISTS authorization_lifecycle ON authorization_requests;
 CREATE TRIGGER authorization_lifecycle BEFORE UPDATE ON authorization_requests
   FOR EACH ROW EXECUTE FUNCTION authorization_lifecycle();
 
+-- Re-encryption of a stored secret under a new master key (
+-- cli/rotateSecretKeys.js): the ciphertext of the offline key may change, its
+-- presence may not. The tool sets nexus.secret_rewrap for its own transaction
+-- and checks that the new ciphertext decrypts to the same key.
+-- Allowed only to a session that is not the application role, or that also
+-- holds nexus_secret_rotator (migration 033, findings B-09, C-08).
+CREATE OR REPLACE FUNCTION secret_rewrap_allowed() RETURNS boolean
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  IF coalesce(current_setting('nexus.secret_rewrap', true), '') <> 'on' THEN RETURN false; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_app') THEN RETURN true; END IF;
+  IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN RETURN true; END IF;
+  IF NOT pg_has_role(current_user, 'nexus_app', 'MEMBER') THEN RETURN true; END IF;
+  RETURN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_secret_rotator')
+     AND pg_has_role(current_user, 'nexus_secret_rotator', 'MEMBER');
+END $$;
+
 -- Credential lifecycle: ACTIVE -> REVOKED (final). The keys of a credential never change, and its sealed enrolment
 -- record is attached once.
 CREATE OR REPLACE FUNCTION credential_lifecycle() RETURNS trigger AS $$
@@ -494,7 +543,8 @@ BEGIN
      OR NEW.auth_public_key_pem IS DISTINCT FROM OLD.auth_public_key_pem
      OR NEW.offline_public_key_pem IS DISTINCT FROM OLD.offline_public_key_pem
      OR NEW.offline_server_public_key_pem IS DISTINCT FROM OLD.offline_server_public_key_pem
-     OR NEW.offline_secret_encrypted IS DISTINCT FROM OLD.offline_secret_encrypted
+     OR (NEW.offline_secret_encrypted IS DISTINCT FROM OLD.offline_secret_encrypted
+         AND NOT (secret_rewrap_allowed() AND OLD.offline_secret_encrypted IS NOT NULL AND NEW.offline_secret_encrypted IS NOT NULL))
      OR NEW.platform IS DISTINCT FROM OLD.platform
      OR NEW.key_version IS DISTINCT FROM OLD.key_version THEN
     RAISE EXCEPTION 'credential % : keys and identity binding are immutable', OLD.credential_id USING ERRCODE = 'integrity_constraint_violation';
@@ -585,4 +635,800 @@ DROP TRIGGER IF EXISTS authorizations_no_delete ON authorization_requests;
 CREATE TRIGGER authorizations_no_delete BEFORE DELETE ON authorization_requests FOR EACH ROW EXECUTE FUNCTION refuse_delete();
 
 -- One ACTIVE credential per identity.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_credentials_one_active ON credentials(nexus_id) WHERE state = 'ACTIVE';
+-- (The one-ACTIVE index of migration 017 is replaced by credentials_device_limit, migration 027.)
+
+-- Authenticated verification results and verifiable channels (migration 019).
+CREATE TABLE IF NOT EXISTS verification_providers (
+    client_id                  TEXT NOT NULL REFERENCES bank_clients(client_id),
+    provider_id                VARCHAR(64) NOT NULL CHECK (provider_id ~ '^[A-Za-z0-9._-]{1,64}$'),
+    key_id                     VARCHAR(64) NOT NULL CHECK (key_id ~ '^[A-Za-z0-9._-]{1,64}$'),
+    channels                   VARCHAR(16)[] NOT NULL
+                               CHECK (cardinality(channels) > 0 AND channels <@ ARRAY['AUDIO','VIDEO']::VARCHAR(16)[]),
+    public_key_pem             TEXT NOT NULL,
+    status                     VARCHAR(16) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','RETIRED')),
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at                 TIMESTAMPTZ,
+    PRIMARY KEY (client_id, provider_id, key_id)
+);
+
+ALTER TABLE bank_clients ADD COLUMN IF NOT EXISTS operator_verification_channels VARCHAR(16)[] NOT NULL DEFAULT '{}';
+ALTER TABLE bank_clients DROP CONSTRAINT IF EXISTS bank_clients_operator_verification_channels_check;
+ALTER TABLE bank_clients ADD CONSTRAINT bank_clients_operator_verification_channels_check
+    CHECK (operator_verification_channels <@ ARRAY['AUDIO','VIDEO']::VARCHAR(16)[]);
+
+ALTER TABLE verification_sessions ADD COLUMN IF NOT EXISTS result_method VARCHAR(16);
+ALTER TABLE verification_sessions DROP CONSTRAINT IF EXISTS verification_sessions_result_method_check;
+ALTER TABLE verification_sessions ADD CONSTRAINT verification_sessions_result_method_check
+    CHECK (result_method IS NULL OR result_method IN ('PROVIDER','OPERATOR'));
+-- PROVIDER: "<providerId>/<keyId>"; OPERATOR: the admin username.
+ALTER TABLE verification_sessions ADD COLUMN IF NOT EXISTS result_issuer VARCHAR(160);
+-- The provider result's jti: one result per provider token.
+ALTER TABLE verification_sessions ADD COLUMN IF NOT EXISTS result_jti VARCHAR(128);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_result_jti
+    ON verification_sessions(client_id, result_issuer, result_jti) WHERE result_jti IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS device_request_nonces (
+    credential_id              UUID NOT NULL,
+    nonce                      VARCHAR(64) NOT NULL,
+    expires_at                 TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (credential_id, nonce)
+);
+CREATE INDEX IF NOT EXISTS idx_device_request_nonces_expires_at ON device_request_nonces(expires_at);
+
+-- Offline confirmation v2, deferred device signature (migration 022, ).
+ALTER TABLE authorization_requests ALTER COLUMN state TYPE VARCHAR(24);
+ALTER TABLE authorization_requests DROP CONSTRAINT IF EXISTS authorization_requests_state_check;
+ALTER TABLE authorization_requests ADD CONSTRAINT authorization_requests_state_check
+  CHECK (state IN ('PENDING_USER','VERIFIED','EXPIRED','CANCELLED','REJECTED','OFFLINE_PROVISIONAL','OFFLINE_UNSIGNED'));
+ALTER TABLE authorization_requests DROP CONSTRAINT IF EXISTS authorization_requests_confirmation_method_check;
+ALTER TABLE authorization_requests ADD CONSTRAINT authorization_requests_confirmation_method_check
+  CHECK (confirmation_method IS NULL OR confirmation_method IN ('DEVICE_SIGNATURE','OFFLINE_CODE','OFFLINE_SIGNED'));
+-- base64 HMAC tag of the accepted code, when it was accepted, and (v2) until
+-- when the device signature may arrive.
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_code_tag TEXT;
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_code_accepted_at TIMESTAMPTZ;
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_signature_deadline TIMESTAMPTZ;
+-- OFFLINE_UNSIGNED: deadline | credential_not_active | identity_not_active.
+ALTER TABLE authorization_requests ADD COLUMN IF NOT EXISTS offline_unsigned_reason VARCHAR(32);
+CREATE INDEX IF NOT EXISTS idx_auth_offline_provisional
+    ON authorization_requests(offline_signature_deadline) WHERE state = 'OFFLINE_PROVISIONAL';
+CREATE INDEX IF NOT EXISTS idx_auth_offline_accepted
+    ON authorization_requests(credential_id, offline_code_accepted_at) WHERE offline_code_accepted_at IS NOT NULL;
+
+-- The device's ECDSA signature over the canonical bytes, uploaded after an
+-- offline confirmation; at most one per authorization, never changed.
+CREATE TABLE IF NOT EXISTS offline_deferred_signatures (
+    authorization_id           UUID PRIMARY KEY REFERENCES authorization_requests(authorization_id),
+    credential_id              UUID NOT NULL REFERENCES credentials(credential_id),
+    signature                  TEXT NOT NULL,
+    signature_format           VARCHAR(8) NOT NULL CHECK (signature_format IN ('der','raw')),
+    received_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE OR REPLACE FUNCTION offline_deferred_signatures_append_only() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'offline_deferred_signatures is append-only (% rejected)', TG_OP USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_offline_deferred_signatures_append_only ON offline_deferred_signatures;
+CREATE TRIGGER trg_offline_deferred_signatures_append_only BEFORE UPDATE OR DELETE ON offline_deferred_signatures
+  FOR EACH ROW EXECUTE FUNCTION offline_deferred_signatures_append_only();
+
+-- Device replacement requests with a hold (audit finding A2-01): the bank asks,
+-- the enrolled device approves or cancels, enrolment uses the request once.
+CREATE TABLE IF NOT EXISTS device_replacements (
+    replacement_id             UUID PRIMARY KEY,
+    nexus_id                   VARCHAR(9) NOT NULL REFERENCES nexus_identities(nexus_id),
+    client_id                  TEXT NOT NULL REFERENCES bank_clients(client_id),
+    method                     TEXT NOT NULL CHECK (method IN ('BRANCH_VISIT', 'VIDEO_IDENTIFICATION', 'IN_APP_STRONG_AUTHENTICATION', 'OTHER')),
+    reference                  TEXT NOT NULL CHECK (length(reference) BETWEEN 1 AND 128),
+    state                      TEXT NOT NULL CHECK (state IN ('PENDING', 'APPROVED', 'CANCELLED', 'USED', 'EXPIRED')),
+    requested_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    not_before                 TIMESTAMPTZ NOT NULL,
+    expires_at                 TIMESTAMPTZ NOT NULL CHECK (expires_at > not_before),
+    decided_by_credential_id   UUID REFERENCES credentials(credential_id),
+    decided_at                 TIMESTAMPTZ,
+    used_by_credential_id      UUID
+);
+-- One open request per identity.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_device_replacements_open
+    ON device_replacements(nexus_id) WHERE state IN ('PENDING', 'APPROVED');
+
+-- Final states are final; a request is decided once.
+CREATE OR REPLACE FUNCTION device_replacements_lifecycle() RETURNS trigger AS $$
+BEGIN
+  IF NEW.replacement_id <> OLD.replacement_id OR NEW.nexus_id <> OLD.nexus_id OR NEW.client_id <> OLD.client_id
+     OR NEW.method <> OLD.method OR NEW.reference <> OLD.reference OR NEW.requested_at <> OLD.requested_at
+     OR NEW.not_before <> OLD.not_before OR NEW.expires_at <> OLD.expires_at THEN
+    RAISE EXCEPTION 'device replacement % : only its state changes', OLD.replacement_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NOT (OLD.state = NEW.state
+          OR (OLD.state = 'PENDING' AND NEW.state IN ('APPROVED', 'CANCELLED', 'USED', 'EXPIRED'))
+          OR (OLD.state = 'APPROVED' AND NEW.state IN ('USED', 'EXPIRED'))) THEN
+    RAISE EXCEPTION 'device replacement % : % -> % is not permitted', OLD.replacement_id, OLD.state, NEW.state USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
+DROP TRIGGER IF EXISTS device_replacements_lifecycle ON device_replacements;
+CREATE TRIGGER device_replacements_lifecycle BEFORE UPDATE ON device_replacements FOR EACH ROW EXECUTE FUNCTION device_replacements_lifecycle();
+DROP TRIGGER IF EXISTS device_replacements_no_delete ON device_replacements;
+CREATE OR REPLACE FUNCTION device_replacements_no_delete() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'device_replacements rows are kept' USING ERRCODE = 'integrity_constraint_violation';
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER device_replacements_no_delete BEFORE DELETE ON device_replacements FOR EACH ROW EXECUTE FUNCTION device_replacements_no_delete();
+
+-- Authorizations are created PENDING_USER / PENDING (migration 024, audit finding C-05).
+DO $$
+DECLARE bad TEXT;
+BEGIN
+  SELECT string_agg(authorization_id::text || ' (' || bank_transaction_state || ')', ', ') INTO bad
+    FROM authorization_requests
+   WHERE bank_transaction_state NOT IN ('PENDING','COMMIT_REQUESTED','COMMITTED','FAILED','CANCELLED');
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'authorizations with an unknown bank_transaction_state: %', bad;
+  END IF;
+END $$;
+
+ALTER TABLE authorization_requests DROP CONSTRAINT IF EXISTS authorization_requests_bank_state_check;
+ALTER TABLE authorization_requests ADD CONSTRAINT authorization_requests_bank_state_check
+  CHECK (bank_transaction_state IN ('PENDING','COMMIT_REQUESTED','COMMITTED','FAILED','CANCELLED'));
+
+CREATE OR REPLACE FUNCTION authorization_insert_state() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF NEW.state <> 'PENDING_USER' OR NEW.bank_transaction_state <> 'PENDING'
+     OR NEW.signature IS NOT NULL OR NEW.signature_format IS NOT NULL OR NEW.confirmation_method IS NOT NULL
+     OR NEW.verified_at IS NOT NULL OR NEW.consumed_at IS NOT NULL
+     OR NEW.bank_transaction_reference IS NOT NULL OR NEW.bank_commit_at IS NOT NULL
+     OR NEW.offline_code_tag IS NOT NULL OR NEW.offline_code_accepted_at IS NOT NULL
+     OR NEW.offline_signature_deadline IS NOT NULL OR NEW.offline_unsigned_reason IS NOT NULL THEN
+    RAISE EXCEPTION 'authorization %: an authorization is created PENDING_USER with bank transaction PENDING and nothing confirmed', NEW.authorization_id
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS authorization_insert_state ON authorization_requests;
+CREATE TRIGGER authorization_insert_state BEFORE INSERT ON authorization_requests
+  FOR EACH ROW EXECUTE FUNCTION authorization_insert_state();
+
+-- Evidence for every outcome (migration 025, audit finding B-04).
+
+ALTER TABLE evidence_records DROP CONSTRAINT IF EXISTS evidence_records_record_type_check;
+ALTER TABLE evidence_records ADD CONSTRAINT evidence_records_record_type_check
+  CHECK (record_type IN ('AUTHORIZATION','CREDENTIAL_ENROLLED','RECOVERY_CONFIGURED','AUTHORIZATION_OUTCOME','CREDENTIAL_REVOKED'));
+ALTER TABLE evidence_records DROP CONSTRAINT IF EXISTS evidence_records_outcome_fields_check;
+ALTER TABLE evidence_records ADD CONSTRAINT evidence_records_outcome_fields_check
+  CHECK (record_type <> 'AUTHORIZATION_OUTCOME' OR (authorization_id IS NOT NULL AND transaction_reference IS NOT NULL
+         AND canonical_payload_hash IS NOT NULL AND result IS NOT NULL));
+
+CREATE TABLE IF NOT EXISTS evidence_outcomes (
+    outcome_id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    subject                    VARCHAR(16) NOT NULL CHECK (subject IN ('AUTHORIZATION','CREDENTIAL')),
+    authorization_id           UUID REFERENCES authorization_requests(authorization_id),
+    credential_id              UUID NOT NULL REFERENCES credentials(credential_id),
+    nexus_id                   VARCHAR(9) NOT NULL REFERENCES nexus_identities(nexus_id),
+    outcome                    VARCHAR(24) NOT NULL
+                               CHECK (outcome IN ('REJECTED','EXPIRED','CANCELLED','OFFLINE_UNSIGNED','REVOKED')),
+    reason                     VARCHAR(64) NOT NULL,
+    occurred_at                TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    evidence_id                UUID UNIQUE REFERENCES evidence_records(evidence_id),
+    sealed_at                  TIMESTAMPTZ,
+    CHECK ((subject = 'AUTHORIZATION') = (authorization_id IS NOT NULL)),
+    CHECK ((evidence_id IS NULL) = (sealed_at IS NULL))
+);
+-- One outcome per authorization (its final state) and per credential revocation.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_evidence_outcomes_authorization ON evidence_outcomes(authorization_id) WHERE subject = 'AUTHORIZATION';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_evidence_outcomes_credential ON evidence_outcomes(credential_id) WHERE subject = 'CREDENTIAL';
+CREATE INDEX IF NOT EXISTS idx_evidence_outcomes_unsealed ON evidence_outcomes(occurred_at) WHERE evidence_id IS NULL;
+
+-- Rows are never deleted; only evidence_id and sealed_at change, once.
+CREATE OR REPLACE FUNCTION evidence_outcomes_guard() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'evidence_outcomes rows are kept (DELETE refused)' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF OLD.evidence_id IS NOT NULL
+     OR (NEW.outcome_id, NEW.subject, NEW.authorization_id, NEW.credential_id, NEW.nexus_id, NEW.outcome, NEW.reason, NEW.occurred_at)
+        IS DISTINCT FROM (OLD.outcome_id, OLD.subject, OLD.authorization_id, OLD.credential_id, OLD.nexus_id, OLD.outcome, OLD.reason, OLD.occurred_at) THEN
+    RAISE EXCEPTION 'evidence outcome %: only the sealing record is set, once', OLD.outcome_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS evidence_outcomes_guard ON evidence_outcomes;
+CREATE TRIGGER evidence_outcomes_guard BEFORE UPDATE OR DELETE ON evidence_outcomes
+  FOR EACH ROW EXECUTE FUNCTION evidence_outcomes_guard();
+DROP TRIGGER IF EXISTS evidence_outcomes_no_truncate ON evidence_outcomes;
+CREATE TRIGGER evidence_outcomes_no_truncate BEFORE TRUNCATE ON evidence_outcomes
+  FOR EACH STATEMENT EXECUTE FUNCTION nexus_evidence_append_only();
+
+-- The reason comes from the transaction that changed the state
+-- (set_config('nexus.outcome_reason', ..., true)), or a default per state.
+CREATE OR REPLACE FUNCTION record_authorization_outcome() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE given TEXT := nullif(current_setting('nexus.outcome_reason', true), '');
+BEGIN
+  IF NEW.state IN ('REJECTED','EXPIRED','CANCELLED','OFFLINE_UNSIGNED') AND NEW.state IS DISTINCT FROM OLD.state THEN
+    INSERT INTO evidence_outcomes (subject, authorization_id, credential_id, nexus_id, outcome, reason)
+    VALUES ('AUTHORIZATION', NEW.authorization_id, NEW.credential_id, NEW.nexus_id, NEW.state,
+            left(coalesce(given, CASE NEW.state WHEN 'OFFLINE_UNSIGNED' THEN coalesce(NEW.offline_unsigned_reason, 'offline_unsigned')
+                                                WHEN 'EXPIRED' THEN 'expired'
+                                                WHEN 'CANCELLED' THEN 'cancelled'
+                                                ELSE 'rejected' END), 64));
+  END IF;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS authorization_outcome_evidence ON authorization_requests;
+CREATE TRIGGER authorization_outcome_evidence AFTER UPDATE ON authorization_requests
+  FOR EACH ROW EXECUTE FUNCTION record_authorization_outcome();
+
+CREATE OR REPLACE FUNCTION record_credential_revocation() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF NEW.state = 'REVOKED' AND OLD.state IS DISTINCT FROM 'REVOKED' THEN
+    INSERT INTO evidence_outcomes (subject, credential_id, nexus_id, outcome, reason)
+    VALUES ('CREDENTIAL', NEW.credential_id, NEW.nexus_id, 'REVOKED',
+            left(coalesce(nullif(current_setting('nexus.outcome_reason', true), ''), 'revoked'), 64));
+  END IF;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS credential_revocation_evidence ON credentials;
+CREATE TRIGGER credential_revocation_evidence AFTER UPDATE ON credentials
+  FOR EACH ROW EXECUTE FUNCTION record_credential_revocation();
+
+-- Customer security settings (migration 026).
+CREATE TABLE IF NOT EXISTS customer_settings_versions (
+    nexus_id                   VARCHAR(9) NOT NULL REFERENCES nexus_identities(nexus_id),
+    version                    INTEGER NOT NULL CHECK (version > 0),
+    currency                   CHAR(3) CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$'),
+    per_payment_limit_minor    NUMERIC(30,0) CHECK (per_payment_limit_minor IS NULL OR per_payment_limit_minor >= 0),
+    daily_limit_minor          NUMERIC(30,0) CHECK (daily_limit_minor IS NULL OR daily_limit_minor >= 0),
+    video_check_above_minor    NUMERIC(30,0) CHECK (video_check_above_minor IS NULL OR video_check_above_minor >= 0),
+    channels                   JSONB NOT NULL DEFAULT '{"push": true, "audio": true, "video": true}'::jsonb,
+    changed_by_credential_id   UUID NOT NULL REFERENCES credentials(credential_id),
+    relaxes                    BOOLEAN NOT NULL,
+    effective_at               TIMESTAMPTZ NOT NULL,
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (nexus_id, version),
+    CHECK (currency IS NOT NULL OR (per_payment_limit_minor IS NULL AND daily_limit_minor IS NULL AND video_check_above_minor IS NULL)),
+    CHECK (effective_at >= created_at - interval '1 second')
+);
+CREATE OR REPLACE FUNCTION customer_settings_append_only() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  RAISE EXCEPTION 'customer_settings_versions is append-only (% refused)', TG_OP USING ERRCODE = 'insufficient_privilege';
+END $$;
+DROP TRIGGER IF EXISTS customer_settings_append_only ON customer_settings_versions;
+CREATE TRIGGER customer_settings_append_only BEFORE UPDATE OR DELETE ON customer_settings_versions
+  FOR EACH ROW EXECUTE FUNCTION customer_settings_append_only();
+
+-- Several active devices per NEXUS ID (migration 027).
+-- Several active devices per NEXUS ID (a phone and a tablet), up to a limit
+-- the bank sets per bank client. Default 1: an existing bank keeps one device
+-- per customer until it raises the limit.
+ALTER TABLE bank_clients ADD COLUMN IF NOT EXISTS max_devices_per_identity INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE bank_clients DROP CONSTRAINT IF EXISTS bank_clients_max_devices_check;
+ALTER TABLE bank_clients ADD CONSTRAINT bank_clients_max_devices_check CHECK (max_devices_per_identity BETWEEN 1 AND 10);
+
+-- A device request is a replacement (the new device takes over, every active
+-- one is revoked) or an addition (the new device joins, none is revoked).
+-- Both wait for the approval of an enrolled device or the end of the hold.
+ALTER TABLE device_replacements ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'REPLACEMENT';
+ALTER TABLE device_replacements DROP CONSTRAINT IF EXISTS device_replacements_kind_check;
+ALTER TABLE device_replacements ADD CONSTRAINT device_replacements_kind_check CHECK (kind IN ('REPLACEMENT', 'ADDITION'));
+
+CREATE OR REPLACE FUNCTION device_replacements_lifecycle() RETURNS trigger AS $$
+BEGIN
+  IF NEW.replacement_id <> OLD.replacement_id OR NEW.nexus_id <> OLD.nexus_id OR NEW.client_id <> OLD.client_id
+     OR NEW.method <> OLD.method OR NEW.reference <> OLD.reference OR NEW.requested_at <> OLD.requested_at
+     OR NEW.not_before <> OLD.not_before OR NEW.expires_at <> OLD.expires_at OR NEW.kind <> OLD.kind THEN
+    RAISE EXCEPTION 'device replacement % : only its state changes', OLD.replacement_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NOT (OLD.state = NEW.state
+          OR (OLD.state = 'PENDING' AND NEW.state IN ('APPROVED', 'CANCELLED', 'USED', 'EXPIRED'))
+          OR (OLD.state = 'APPROVED' AND NEW.state IN ('USED', 'EXPIRED'))) THEN
+    RAISE EXCEPTION 'device replacement % : % -> % is not permitted', OLD.replacement_id, OLD.state, NEW.state USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
+
+-- The one-ACTIVE index (migration 017) becomes a limit the database enforces
+-- with the identity row locked, so concurrent enrolments are counted.
+DROP INDEX IF EXISTS idx_credentials_one_active;
+CREATE INDEX IF NOT EXISTS idx_credentials_active ON credentials(nexus_id) WHERE state = 'ACTIVE';
+CREATE OR REPLACE FUNCTION credentials_device_limit() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE
+  allowed INTEGER;
+  active INTEGER;
+BEGIN
+  IF NEW.state <> 'ACTIVE' OR (TG_OP = 'UPDATE' AND OLD.state = 'ACTIVE') THEN
+    RETURN NEW;
+  END IF;
+  SELECT b.max_devices_per_identity INTO allowed
+    FROM nexus_identities n JOIN bank_clients b ON b.client_id = n.client_id
+   WHERE n.nexus_id = NEW.nexus_id FOR UPDATE OF n;
+  SELECT count(*) INTO active FROM credentials
+   WHERE nexus_id = NEW.nexus_id AND state = 'ACTIVE' AND credential_id <> NEW.credential_id;
+  IF active >= coalesce(allowed, 1) THEN
+    RAISE EXCEPTION 'NEXUS ID % already has % active device(s), the limit of its bank', NEW.nexus_id, active
+      USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS credentials_device_limit ON credentials;
+CREATE TRIGGER credentials_device_limit BEFORE INSERT OR UPDATE ON credentials
+  FOR EACH ROW EXECUTE FUNCTION credentials_device_limit();
+
+-- Recurring payment mandates (migration 028).
+-- Recurring payment mandates (presentation pages 17 to 19). The customer
+-- signs the mandate's terms on an enrolled device; Auth Core and the database
+-- check every debit against them. The bank cannot change signed terms: they
+-- are immutable, and changed terms are a new mandate the customer signs.
+CREATE TABLE IF NOT EXISTS mandates (
+    mandate_id                 UUID PRIMARY KEY,
+    client_id                  TEXT NOT NULL REFERENCES bank_clients(client_id),
+    nexus_id                   VARCHAR(9) NOT NULL REFERENCES nexus_identities(nexus_id),
+    credential_id              UUID NOT NULL REFERENCES credentials(credential_id),
+    mandate_reference          VARCHAR(128) NOT NULL,
+    payee                      JSONB NOT NULL,
+    currency                   CHAR(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    per_payment_limit_minor    NUMERIC(30,0) NOT NULL CHECK (per_payment_limit_minor > 0),
+    total_limit_minor          NUMERIC(30,0) CHECK (total_limit_minor IS NULL OR total_limit_minor > 0),
+    frequency                  VARCHAR(16) NOT NULL CHECK (frequency IN ('WEEKLY','MONTHLY','QUARTERLY','YEARLY')),
+    valid_from                 TIMESTAMPTZ NOT NULL,
+    valid_until                TIMESTAMPTZ NOT NULL,
+    terms_version              VARCHAR(64) NOT NULL,
+    -- The exact bytes the device shows and signs, and their SHA-256.
+    canonical_terms            BYTEA NOT NULL,
+    terms_hash                 CHAR(64) NOT NULL CHECK (terms_hash ~ '^[0-9a-f]{64}$'),
+    offer_expires_at           TIMESTAMPTZ NOT NULL,
+    state                      VARCHAR(24) NOT NULL DEFAULT 'PENDING_SIGNATURE'
+                               CHECK (state IN ('PENDING_SIGNATURE','ACTIVE','SUSPENDED','REVOKED','EXPIRED','DECLINED','WITHDRAWN')),
+    signature                  TEXT,
+    signature_format           VARCHAR(8) CHECK (signature_format IS NULL OR signature_format IN ('der','raw')),
+    signed_at                  TIMESTAMPTZ,
+    state_reason               VARCHAR(128),
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (valid_until > valid_from),
+    CHECK (total_limit_minor IS NULL OR total_limit_minor >= per_payment_limit_minor),
+    CHECK ((state IN ('PENDING_SIGNATURE','DECLINED') OR (state IN ('EXPIRED','WITHDRAWN') AND signature IS NULL)) = (signature IS NULL)),
+    UNIQUE (client_id, mandate_reference)
+);
+CREATE INDEX IF NOT EXISTS idx_mandates_nexus ON mandates(nexus_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mandates_expiry ON mandates(valid_until) WHERE state IN ('ACTIVE','SUSPENDED');
+CREATE INDEX IF NOT EXISTS idx_mandates_offer ON mandates(offer_expires_at) WHERE state = 'PENDING_SIGNATURE';
+
+CREATE OR REPLACE FUNCTION mandates_insert_state() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF NEW.state <> 'PENDING_SIGNATURE' OR NEW.signature IS NOT NULL OR NEW.signed_at IS NOT NULL THEN
+    RAISE EXCEPTION 'mandate %: a mandate is created PENDING_SIGNATURE without a signature', NEW.mandate_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS mandates_insert_state ON mandates;
+CREATE TRIGGER mandates_insert_state BEFORE INSERT ON mandates FOR EACH ROW EXECUTE FUNCTION mandates_insert_state();
+
+CREATE OR REPLACE FUNCTION mandates_lifecycle() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE allowed BOOLEAN;
+BEGIN
+  IF (NEW.mandate_id, NEW.client_id, NEW.nexus_id, NEW.credential_id, NEW.mandate_reference, NEW.payee, NEW.currency,
+      NEW.per_payment_limit_minor, NEW.total_limit_minor, NEW.frequency, NEW.valid_from, NEW.valid_until, NEW.terms_version,
+      NEW.canonical_terms, NEW.terms_hash, NEW.offer_expires_at, NEW.created_at)
+     IS DISTINCT FROM
+     (OLD.mandate_id, OLD.client_id, OLD.nexus_id, OLD.credential_id, OLD.mandate_reference, OLD.payee, OLD.currency,
+      OLD.per_payment_limit_minor, OLD.total_limit_minor, OLD.frequency, OLD.valid_from, OLD.valid_until, OLD.terms_version,
+      OLD.canonical_terms, OLD.terms_hash, OLD.offer_expires_at, OLD.created_at) THEN
+    RAISE EXCEPTION 'mandate %: the terms are immutable; changed terms are a new mandate', OLD.mandate_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF OLD.signature IS NOT NULL AND (NEW.signature, NEW.signature_format, NEW.signed_at) IS DISTINCT FROM (OLD.signature, OLD.signature_format, OLD.signed_at) THEN
+    RAISE EXCEPTION 'mandate %: the signature is set once', OLD.mandate_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state THEN
+    allowed := CASE OLD.state
+      WHEN 'PENDING_SIGNATURE' THEN NEW.state IN ('ACTIVE','DECLINED','WITHDRAWN','EXPIRED')
+      WHEN 'ACTIVE' THEN NEW.state IN ('SUSPENDED','REVOKED','EXPIRED','WITHDRAWN')
+      WHEN 'SUSPENDED' THEN NEW.state IN ('ACTIVE','REVOKED','EXPIRED','WITHDRAWN')
+      ELSE FALSE END;
+    IF NOT allowed THEN
+      RAISE EXCEPTION 'mandate %: % -> % is not a permitted transition', OLD.mandate_id, OLD.state, NEW.state USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF OLD.state = 'PENDING_SIGNATURE' AND NEW.state = 'ACTIVE' AND (NEW.signature IS NULL OR NEW.signed_at IS NULL OR NEW.signature_format IS NULL) THEN
+      RAISE EXCEPTION 'mandate %: ACTIVE needs the customer''s signature', OLD.mandate_id USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS mandates_lifecycle ON mandates;
+CREATE TRIGGER mandates_lifecycle BEFORE UPDATE ON mandates FOR EACH ROW EXECUTE FUNCTION mandates_lifecycle();
+
+-- Every debit the bank asked about, allowed or refused; append-only.
+CREATE TABLE IF NOT EXISTS mandate_debits (
+    debit_id                   UUID PRIMARY KEY,
+    mandate_id                 UUID NOT NULL REFERENCES mandates(mandate_id),
+    debit_reference            VARCHAR(128) NOT NULL,
+    amount_minor               NUMERIC(30,0) NOT NULL CHECK (amount_minor > 0),
+    currency                   CHAR(3) NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    period_start               DATE NOT NULL,
+    decision                   VARCHAR(8) NOT NULL CHECK (decision IN ('ALLOWED','REFUSED')),
+    reason                     VARCHAR(64),
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (mandate_id, debit_reference),
+    CHECK ((decision = 'REFUSED') = (reason IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_mandate_debits_period ON mandate_debits(mandate_id, period_start) WHERE decision = 'ALLOWED';
+
+-- The period a debit falls in (UTC calendar week, month, quarter or year).
+CREATE OR REPLACE FUNCTION mandate_period_start(frequency TEXT, at TIMESTAMPTZ) RETURNS DATE
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog AS $$
+  SELECT date_trunc(CASE frequency WHEN 'WEEKLY' THEN 'week' WHEN 'MONTHLY' THEN 'month' WHEN 'QUARTERLY' THEN 'quarter' ELSE 'year' END,
+                    at AT TIME ZONE 'UTC')::date
+$$;
+
+-- The database decides an ALLOWED debit itself, with the mandate row locked,
+-- so a defect or a direct write cannot let a debit outside the signed terms
+-- through: active, in validity, same currency, within the per-payment and the
+-- total limit, at most one allowed debit per period.
+CREATE OR REPLACE FUNCTION mandate_debits_check() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE m RECORD; used NUMERIC; in_period INTEGER;
+BEGIN
+  IF NEW.decision <> 'ALLOWED' THEN RETURN NEW; END IF;
+  SELECT * INTO m FROM mandates WHERE mandate_id = NEW.mandate_id FOR UPDATE;
+  IF m.state <> 'ACTIVE' OR m.signature IS NULL OR now() < m.valid_from OR now() >= m.valid_until
+     OR NEW.currency <> m.currency OR NEW.amount_minor > m.per_payment_limit_minor
+     OR NEW.period_start <> mandate_period_start(m.frequency, now()) THEN
+    RAISE EXCEPTION 'mandate %: debit outside the signed terms', NEW.mandate_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  SELECT count(*), coalesce(sum(amount_minor), 0) INTO in_period, used FROM mandate_debits
+   WHERE mandate_id = NEW.mandate_id AND decision = 'ALLOWED' AND period_start = NEW.period_start;
+  IF in_period > 0 THEN
+    RAISE EXCEPTION 'mandate %: a debit was already allowed in this period', NEW.mandate_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF m.total_limit_minor IS NOT NULL THEN
+    SELECT coalesce(sum(amount_minor), 0) INTO used FROM mandate_debits WHERE mandate_id = NEW.mandate_id AND decision = 'ALLOWED';
+    IF used + NEW.amount_minor > m.total_limit_minor THEN
+      RAISE EXCEPTION 'mandate %: debit above the total limit', NEW.mandate_id USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS mandate_debits_check ON mandate_debits;
+CREATE TRIGGER mandate_debits_check BEFORE INSERT ON mandate_debits FOR EACH ROW EXECUTE FUNCTION mandate_debits_check();
+
+CREATE OR REPLACE FUNCTION mandate_rows_kept() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+  RAISE EXCEPTION '% rows are kept (% refused)', TG_TABLE_NAME, TG_OP USING ERRCODE = 'integrity_constraint_violation';
+END $$;
+DROP TRIGGER IF EXISTS mandates_no_delete ON mandates;
+CREATE TRIGGER mandates_no_delete BEFORE DELETE ON mandates FOR EACH ROW EXECUTE FUNCTION mandate_rows_kept();
+DROP TRIGGER IF EXISTS mandate_debits_append_only ON mandate_debits;
+CREATE TRIGGER mandate_debits_append_only BEFORE UPDATE OR DELETE ON mandate_debits FOR EACH ROW EXECUTE FUNCTION mandate_rows_kept();
+
+-- Sealed mandate events in the identity's evidence chain.
+ALTER TABLE evidence_records ADD COLUMN IF NOT EXISTS mandate_id UUID REFERENCES mandates(mandate_id);
+ALTER TABLE evidence_records DROP CONSTRAINT IF EXISTS evidence_records_record_type_check;
+ALTER TABLE evidence_records ADD CONSTRAINT evidence_records_record_type_check
+  CHECK (record_type IN ('AUTHORIZATION','CREDENTIAL_ENROLLED','RECOVERY_CONFIGURED','AUTHORIZATION_OUTCOME','CREDENTIAL_REVOKED','MANDATE'));
+ALTER TABLE evidence_records DROP CONSTRAINT IF EXISTS evidence_records_mandate_fields_check;
+ALTER TABLE evidence_records ADD CONSTRAINT evidence_records_mandate_fields_check
+  CHECK ((record_type = 'MANDATE') = (mandate_id IS NOT NULL));
+
+-- Conversations with the bank (migration 029).
+-- Conversations between a customer and the bank inside the bank's app
+-- (presentation pages 11 and 12): customer messages, the bank's bot (run by
+-- the bank, posting through the bank API) and the bank's operators after a
+-- handover. Each conversation belongs to one NEXUS ID of one bank client.
+-- Messages are append-only and hash-chained per conversation; only their
+-- delivery and read marks are set, once each.
+CREATE TABLE IF NOT EXISTS conversations (
+    conversation_id            UUID PRIMARY KEY,
+    client_id                  TEXT NOT NULL REFERENCES bank_clients(client_id),
+    nexus_id                   VARCHAR(9) NOT NULL REFERENCES nexus_identities(nexus_id),
+    topic                      VARCHAR(200) NOT NULL,
+    -- A payment the conversation is about (the "transaction card").
+    authorization_id           UUID REFERENCES authorization_requests(authorization_id),
+    state                      VARCHAR(24) NOT NULL DEFAULT 'WITH_BOT'
+                               CHECK (state IN ('WITH_BOT','WAITING_FOR_AGENT','WITH_AGENT','CLOSED')),
+    assigned_operator          TEXT,
+    handover_reason            VARCHAR(200),
+    last_sequence              INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+    last_message_hash          CHAR(64),
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    closed_at                  TIMESTAMPTZ,
+    CHECK ((state = 'WITH_AGENT') = (assigned_operator IS NOT NULL)),
+    CHECK ((state = 'CLOSED') = (closed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_nexus ON conversations(nexus_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_queue ON conversations(client_id, updated_at) WHERE state = 'WAITING_FOR_AGENT';
+
+CREATE OR REPLACE FUNCTION conversations_lifecycle() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE allowed BOOLEAN;
+BEGIN
+  IF (NEW.conversation_id, NEW.client_id, NEW.nexus_id, NEW.topic, NEW.authorization_id, NEW.created_at)
+     IS DISTINCT FROM (OLD.conversation_id, OLD.client_id, OLD.nexus_id, OLD.topic, OLD.authorization_id, OLD.created_at) THEN
+    RAISE EXCEPTION 'conversation %: owner, topic and subject are immutable', OLD.conversation_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.last_sequence < OLD.last_sequence THEN
+    RAISE EXCEPTION 'conversation %: messages are never removed', OLD.conversation_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state THEN
+    allowed := CASE OLD.state
+      WHEN 'WITH_BOT' THEN NEW.state IN ('WAITING_FOR_AGENT','CLOSED')
+      WHEN 'WAITING_FOR_AGENT' THEN NEW.state IN ('WITH_AGENT','CLOSED')
+      WHEN 'WITH_AGENT' THEN NEW.state IN ('WAITING_FOR_AGENT','CLOSED')
+      ELSE FALSE END;
+    IF NOT allowed THEN
+      RAISE EXCEPTION 'conversation %: % -> % is not permitted', OLD.conversation_id, OLD.state, NEW.state USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS conversations_lifecycle ON conversations;
+CREATE TRIGGER conversations_lifecycle BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION conversations_lifecycle();
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    message_id                 UUID PRIMARY KEY,
+    conversation_id            UUID NOT NULL REFERENCES conversations(conversation_id),
+    sequence                   INTEGER NOT NULL CHECK (sequence > 0),
+    sender_type                VARCHAR(8) NOT NULL CHECK (sender_type IN ('CUSTOMER','BOT','AGENT','SYSTEM')),
+    -- credential:<id>, bank:<client>, admin:<username> or system.
+    sender_ref                 VARCHAR(200) NOT NULL,
+    body                       TEXT NOT NULL CHECK (char_length(body) BETWEEN 1 AND 4000),
+    -- An attachment the bank stores: its reference, SHA-256 and media type.
+    attachment                 JSONB,
+    client_message_id          VARCHAR(64),
+    previous_hash              CHAR(64),
+    message_hash               CHAR(64) NOT NULL CHECK (message_hash ~ '^[0-9a-f]{64}$'),
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    delivered_at               TIMESTAMPTZ,
+    read_at                    TIMESTAMPTZ,
+    UNIQUE (conversation_id, sequence),
+    UNIQUE (conversation_id, sender_ref, client_message_id)
+);
+
+CREATE OR REPLACE FUNCTION conversation_messages_append_only() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'conversation messages are kept' USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF (NEW.message_id, NEW.conversation_id, NEW.sequence, NEW.sender_type, NEW.sender_ref, NEW.body, NEW.attachment,
+      NEW.client_message_id, NEW.previous_hash, NEW.message_hash, NEW.created_at)
+     IS DISTINCT FROM
+     (OLD.message_id, OLD.conversation_id, OLD.sequence, OLD.sender_type, OLD.sender_ref, OLD.body, OLD.attachment,
+      OLD.client_message_id, OLD.previous_hash, OLD.message_hash, OLD.created_at)
+     OR (OLD.delivered_at IS NOT NULL AND NEW.delivered_at IS DISTINCT FROM OLD.delivered_at)
+     OR (OLD.read_at IS NOT NULL AND NEW.read_at IS DISTINCT FROM OLD.read_at) THEN
+    RAISE EXCEPTION 'conversation message %: only its delivery and read marks are set, once', OLD.message_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS conversation_messages_append_only ON conversation_messages;
+CREATE TRIGGER conversation_messages_append_only BEFORE UPDATE OR DELETE ON conversation_messages
+  FOR EACH ROW EXECUTE FUNCTION conversation_messages_append_only();
+
+-- Calls the customer starts (migration 030).
+-- Calls the customer starts from the bank's app (presentation page 12:
+-- "talk to the bank"), outside a payment check. The bank enables the
+-- channels it staffs; a call waits in the bank's operator queue, one
+-- operator answers it, and either side ends it. Auth Core relays the WebRTC
+-- signalling only; it never receives media and records nothing of it. The
+-- row is the call's record: who asked, which device, who answered, when,
+-- and how it ended.
+ALTER TABLE bank_clients ADD COLUMN IF NOT EXISTS customer_call_channels VARCHAR(16)[] NOT NULL DEFAULT '{}';
+ALTER TABLE bank_clients DROP CONSTRAINT IF EXISTS bank_clients_customer_call_channels_check;
+ALTER TABLE bank_clients ADD CONSTRAINT bank_clients_customer_call_channels_check
+    CHECK (customer_call_channels <@ ARRAY['AUDIO','VIDEO']::VARCHAR(16)[]);
+
+CREATE TABLE IF NOT EXISTS customer_calls (
+    call_id                    UUID PRIMARY KEY,
+    client_id                  TEXT NOT NULL REFERENCES bank_clients(client_id),
+    nexus_id                   VARCHAR(9) NOT NULL REFERENCES nexus_identities(nexus_id),
+    credential_id              UUID NOT NULL REFERENCES credentials(credential_id),
+    channel                    VARCHAR(8) NOT NULL CHECK (channel IN ('AUDIO','VIDEO')),
+    topic                      VARCHAR(200) NOT NULL,
+    conversation_id            UUID REFERENCES conversations(conversation_id),
+    state                      VARCHAR(16) NOT NULL DEFAULT 'WAITING'
+                               CHECK (state IN ('WAITING','CONNECTED','ENDED','CANCELLED','MISSED')),
+    operator                   TEXT,
+    -- WAITING: until when an operator may answer. CONNECTED: the longest the call may last.
+    expires_at                 TIMESTAMPTZ NOT NULL,
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    answered_at                TIMESTAMPTZ,
+    ended_at                   TIMESTAMPTZ,
+    ended_by                   TEXT,
+    end_reason                 VARCHAR(64),
+    CHECK ((state IN ('CONNECTED','ENDED')) = (answered_at IS NOT NULL)),
+    CHECK ((operator IS NULL) = (answered_at IS NULL)),
+    CHECK ((state IN ('WAITING','CONNECTED')) = (ended_at IS NULL))
+);
+-- One open call per NEXUS ID.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_calls_open ON customer_calls(nexus_id) WHERE state IN ('WAITING','CONNECTED');
+CREATE INDEX IF NOT EXISTS idx_customer_calls_queue ON customer_calls(client_id, created_at) WHERE state = 'WAITING';
+CREATE INDEX IF NOT EXISTS idx_customer_calls_nexus ON customer_calls(nexus_id, created_at DESC);
+
+-- WAITING -> CONNECTED | CANCELLED | MISSED; CONNECTED -> ENDED. Who asked,
+-- with which device and on which channel never changes; an answered call
+-- keeps its operator.
+CREATE OR REPLACE FUNCTION customer_calls_lifecycle() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF (NEW.call_id, NEW.client_id, NEW.nexus_id, NEW.credential_id, NEW.channel, NEW.topic, NEW.conversation_id, NEW.created_at)
+     IS DISTINCT FROM (OLD.call_id, OLD.client_id, OLD.nexus_id, OLD.credential_id, OLD.channel, OLD.topic, OLD.conversation_id, OLD.created_at) THEN
+    RAISE EXCEPTION 'customer call %: who called and how is immutable', OLD.call_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF OLD.operator IS NOT NULL AND NEW.operator IS DISTINCT FROM OLD.operator THEN
+    RAISE EXCEPTION 'customer call %: the operator who answered is kept', OLD.call_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
+       (OLD.state = 'WAITING' AND NEW.state IN ('CONNECTED','CANCELLED','MISSED'))
+    OR (OLD.state = 'CONNECTED' AND NEW.state = 'ENDED')) THEN
+    RAISE EXCEPTION 'customer call %: % -> % is not a permitted transition', OLD.call_id, OLD.state, NEW.state USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF OLD.state IN ('ENDED','CANCELLED','MISSED') AND ROW(NEW.*) IS DISTINCT FROM ROW(OLD.*) THEN
+    RAISE EXCEPTION 'customer call %: a finished call is kept as it ended', OLD.call_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS customer_calls_lifecycle ON customer_calls;
+CREATE TRIGGER customer_calls_lifecycle BEFORE UPDATE ON customer_calls FOR EACH ROW EXECUTE FUNCTION customer_calls_lifecycle();
+
+CREATE OR REPLACE FUNCTION customer_calls_kept() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  RAISE EXCEPTION 'customer calls are kept as records' USING ERRCODE = 'integrity_constraint_violation';
+END $$;
+DROP TRIGGER IF EXISTS customer_calls_no_delete ON customer_calls;
+CREATE TRIGGER customer_calls_no_delete BEFORE DELETE ON customer_calls FOR EACH ROW EXECUTE FUNCTION customer_calls_kept();
+
+-- Device request nonces are deleted only after they expire (migration 031, finding C-11).
+CREATE OR REPLACE FUNCTION device_request_nonces_expired_only() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF OLD.expires_at >= now() THEN
+    RAISE EXCEPTION 'device request nonce of credential % has not expired (DELETE refused)', OLD.credential_id
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS device_request_nonces_expired_only ON device_request_nonces;
+CREATE TRIGGER device_request_nonces_expired_only BEFORE DELETE ON device_request_nonces
+  FOR EACH ROW EXECUTE FUNCTION device_request_nonces_expired_only();
+
+-- Audit fields are written by the server, once (migration 032, finding C-07).
+CREATE OR REPLACE FUNCTION authorization_audit_fields() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF NEW.consumed_at IS DISTINCT FROM OLD.consumed_at
+     AND NOT (OLD.consumed_at IS NULL AND NEW.state = 'VERIFIED' AND OLD.state IN ('PENDING_USER', 'OFFLINE_PROVISIONAL')) THEN
+    RAISE EXCEPTION 'authorization % : consumed_at is set once, on verification', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF (NEW.bank_commit_at IS DISTINCT FROM OLD.bank_commit_at OR NEW.bank_commit_error IS DISTINCT FROM OLD.bank_commit_error)
+     AND NOT (OLD.bank_transaction_state = 'COMMIT_REQUESTED' AND NEW.bank_transaction_state IN ('COMMITTED', 'FAILED', 'CANCELLED')) THEN
+    RAISE EXCEPTION 'authorization % : the bank commit result is set once, with the final bank transaction state', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS authorization_audit_fields ON authorization_requests;
+CREATE TRIGGER authorization_audit_fields BEFORE UPDATE ON authorization_requests
+  FOR EACH ROW EXECUTE FUNCTION authorization_audit_fields();
+
+-- An audit row carries the database's time: a supplied "timestamp" is
+-- replaced, except for the table owner (who can disable triggers anyway).
+CREATE OR REPLACE FUNCTION audit_logs_server_time() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF NOT pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid = TG_RELID), 'USAGE') THEN
+    NEW."timestamp" := now();
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS audit_logs_server_time ON audit_logs;
+CREATE TRIGGER audit_logs_server_time BEFORE INSERT ON audit_logs
+  FOR EACH ROW EXECUTE FUNCTION audit_logs_server_time();
+
+-- Webhook secret rotation with an overlap (audit finding A2-08). When a
+-- bank's webhook secret is rotated, the previous one stays until
+-- webhook_secret_previous_until, and every delivery carries a signature with
+-- each secret, so the bank can switch its verifier at any time in between.
+ALTER TABLE bank_clients ADD COLUMN IF NOT EXISTS webhook_secret_previous_encrypted TEXT;
+ALTER TABLE bank_clients ADD COLUMN IF NOT EXISTS webhook_secret_previous_until TIMESTAMPTZ;
+ALTER TABLE bank_clients DROP CONSTRAINT IF EXISTS bank_clients_webhook_previous_check;
+ALTER TABLE bank_clients ADD CONSTRAINT bank_clients_webhook_previous_check
+  CHECK ((webhook_secret_previous_encrypted IS NULL) = (webhook_secret_previous_until IS NULL));
+
+-- Offline confirmation v3 (audit finding D-01). A credential enrolled with
+-- offline_key_agreement = 'PER_AUTHORIZATION' has no key agreed at enrolment:
+-- for each offline confirmation Auth Core generates a P-256 key, keeps its
+-- private half encrypted in offline_challenges and puts the public half in the
+-- QR code. The phone's Secure Enclave agrees a secret with it that serves that
+-- one authorization. The iOS SDK enrols this way; STATIC stays for Android,
+-- which keeps its key in the Keystore.
+ALTER TABLE credentials ADD COLUMN IF NOT EXISTS offline_key_agreement VARCHAR(20) NOT NULL DEFAULT 'STATIC';
+ALTER TABLE credentials DROP CONSTRAINT IF EXISTS credentials_offline_key_agreement_check;
+ALTER TABLE credentials ADD CONSTRAINT credentials_offline_key_agreement_check
+  CHECK (offline_key_agreement IN ('STATIC', 'PER_AUTHORIZATION')
+         AND (offline_key_agreement = 'STATIC' OR (offline_secret_encrypted IS NULL AND offline_server_public_key_pem IS NULL)));
+
+CREATE OR REPLACE FUNCTION credential_offline_key_agreement_fixed() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF NEW.offline_key_agreement IS DISTINCT FROM OLD.offline_key_agreement THEN
+    RAISE EXCEPTION 'credential % : the offline key agreement is fixed at enrolment', OLD.credential_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS credential_offline_key_agreement_fixed ON credentials;
+CREATE TRIGGER credential_offline_key_agreement_fixed BEFORE UPDATE ON credentials
+  FOR EACH ROW EXECUTE FUNCTION credential_offline_key_agreement_fixed();
+
+CREATE TABLE IF NOT EXISTS offline_challenges (
+    authorization_id              UUID PRIMARY KEY REFERENCES authorization_requests(authorization_id),
+    credential_id                 UUID NOT NULL REFERENCES credentials(credential_id),
+    server_public_key_pem         TEXT NOT NULL,
+    server_private_key_encrypted  TEXT NOT NULL,
+    created_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A challenge key is written once. Only its ciphertext may change, by the
+-- master key rotation (secret_rewrap_allowed, migration 033); rows are never deleted.
+CREATE OR REPLACE FUNCTION offline_challenges_fixed() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'offline_challenges rows are not deleted (DELETE refused)' USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.authorization_id IS DISTINCT FROM OLD.authorization_id OR NEW.credential_id IS DISTINCT FROM OLD.credential_id
+     OR NEW.server_public_key_pem IS DISTINCT FROM OLD.server_public_key_pem OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR (NEW.server_private_key_encrypted IS DISTINCT FROM OLD.server_private_key_encrypted AND NOT secret_rewrap_allowed()) THEN
+    RAISE EXCEPTION 'offline challenge % : the key is written once', OLD.authorization_id USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS offline_challenges_fixed ON offline_challenges;
+CREATE TRIGGER offline_challenges_fixed BEFORE UPDATE OR DELETE ON offline_challenges
+  FOR EACH ROW EXECUTE FUNCTION offline_challenges_fixed();
+
+-- Hardening (audit findings C-15, C-16).
+-- C-15: every function of the schema runs with a fixed search_path, so no
+-- object a session creates (for example in pg_temp) can shadow a table or
+-- function a trigger uses. Applied to every function in public that does not
+-- set one yet; functions created later set it themselves.
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT p.oid::regprocedure AS signature FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'public' AND p.prokind = 'f' AND p.prolang IN (SELECT oid FROM pg_language WHERE lanname IN ('plpgsql', 'sql'))
+             AND pg_has_role(p.proowner, 'USAGE')
+             AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+             AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}')) c WHERE c LIKE 'search_path=%') LOOP
+    EXECUTE format('ALTER FUNCTION %s SET search_path = pg_catalog, public, pg_temp', r.signature);
+  END LOOP;
+END $$;
+
+-- C-16: the tables that keep a history cannot be emptied with TRUNCATE,
+-- which row triggers do not see (evidence_records, audit_logs and
+-- evidence_outcomes already refuse it).
+CREATE OR REPLACE FUNCTION nexus_refuse_truncate() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  RAISE EXCEPTION '% keeps its history (TRUNCATE refused)', TG_TABLE_NAME USING ERRCODE = 'integrity_constraint_violation';
+END $$;
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['offline_deferred_signatures', 'offline_challenges', 'authorization_requests', 'credentials', 'nexus_identities',
+                           'authorization_attempts', 'admin_approvals', 'recovery_sessions', 'device_replacements', 'mandates', 'mandate_debits'] LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', t || '_no_truncate', t);
+      EXECUTE format('CREATE TRIGGER %I BEFORE TRUNCATE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION nexus_refuse_truncate()', t || '_no_truncate', t);
+    END IF;
+  END LOOP;
+END $$;

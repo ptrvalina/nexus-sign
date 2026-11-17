@@ -18,6 +18,9 @@ internal object DeviceProtocol {
     const val OFFLINE_KDF_SALT = "NEXUS-SIGN/OFFLINE/v1"
     const val OFFLINE_CODE_DOMAIN = "NEXUS-SIGN/OFFLINE-CODE/v1"
     const val QR_PREFIX = "NXS1."
+    /** Offline confirmation v2: the same bytes; the device also signs them
+     * and uploads the signature later (deferred device signature). */
+    const val QR_PREFIX_V2 = "NXS2."
     const val KEY_ATTESTATION_DOMAIN = "NEXUS-SIGN/KEY-ATTESTATION/v1"
     const val CODE_DIGITS = 8
 
@@ -59,16 +62,32 @@ internal object DeviceProtocol {
         return (binary % 100_000_000).toString().padStart(CODE_DIGITS, '0')
     }
 
-    /** The canonical authorization bytes carried by an offline QR code. */
+    /** The version of an offline QR code: 1 for `NXS1.`, 2 for `NXS2.`; anything else is refused. */
+    fun qrPayloadVersion(qrPayload: String): Int {
+        val text = qrPayload.trim()
+        return when {
+            text.startsWith(QR_PREFIX) -> 1
+            text.startsWith(QR_PREFIX_V2) -> 2
+            else -> throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_qr", "unknown QR format")
+        }
+    }
+
     fun qrPayloadBytes(qrPayload: String): ByteArray {
         val text = qrPayload.trim()
-        if (!text.startsWith(QR_PREFIX)) throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_qr", "unknown QR format")
+        val prefix = if (qrPayloadVersion(text) == 2) QR_PREFIX_V2 else QR_PREFIX
         return try {
-            Base64.getUrlDecoder().decode(text.removePrefix(QR_PREFIX))
+            Base64.getUrlDecoder().decode(text.removePrefix(prefix))
         } catch (e: IllegalArgumentException) {
             throw NEXUSSignError.AuthorizationPayloadInvalid("invalid_qr", "QR payload is not base64url")
         }
     }
+
+    /**
+     * Fingerprint of a signing key: lowercase hex SHA-256 of its DER
+     * SubjectPublicKeyInfo (vectors in `bank-trust-v1.json`). The bank
+     * approves the device key by this value (bank credential trust v1).
+     */
+    fun signingKeyFingerprint(subjectPublicKeyInfo: ByteArray): String = hex(sha256(subjectPublicKeyInfo))
 
     private fun hmac(key: ByteArray, data: ByteArray): ByteArray =
         Mac.getInstance("HmacSHA256").run {

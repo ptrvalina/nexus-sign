@@ -83,9 +83,11 @@ interface AdminRow {
  * token. Unknown user, disabled account, wrong password and wrong or reused
  * code are indistinguishable to the caller; the audit log records which.
  * An account with a TOTP secret always needs a code; without one, login is
- * refused while ADMIN_MFA_REQUIRED is on (the production setting).
+ * refused while ADMIN_MFA_REQUIRED is on (the production setting). With
+ * `requireSecondFactor`, an account without TOTP is refused even where
+ * ADMIN_MFA_REQUIRED is off (used while the account-wide failure limit is hit).
  */
-export async function login(username: string, password: string, totpCode?: string): Promise<{ sessionToken: string; session: AdminSession }> {
+export async function login(username: string, password: string, totpCode?: string, options: { requireSecondFactor?: boolean } = {}): Promise<{ sessionToken: string; session: AdminSession }> {
   const result = await pool.query<AdminRow>(
     `SELECT password_hash, role, status, client_id, totp_secret_encrypted, totp_last_step, session_version FROM admin_users WHERE username = $1`,
     [username],
@@ -111,7 +113,7 @@ export async function login(username: string, password: string, totpCode?: strin
       [username, step],
     );
     if (claimed.rowCount !== 1) return refuse('wrong_or_reused_totp');
-  } else if (env.ADMIN_MFA_REQUIRED) {
+  } else if (env.ADMIN_MFA_REQUIRED || options.requireSecondFactor) {
     return refuse('totp_not_enrolled');
   }
 

@@ -1,4 +1,4 @@
-// NXS-007 / NXS-038: the built server refuses to start in a configuration
+// / The built server refuses to start in a configuration
 // that would switch off a production control, and says why.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';

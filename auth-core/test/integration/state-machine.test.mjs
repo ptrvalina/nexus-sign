@@ -13,9 +13,14 @@ import { bankSession, deviceSignature, enrolWithToken, submitSignature } from '.
 
 // The specification (docs/architecture/state-machines.md).
 const AUTHORIZATION = {
-  PENDING_USER: ['VERIFIED', 'EXPIRED', 'CANCELLED', 'REJECTED'],
-  VERIFIED: [], EXPIRED: [], CANCELLED: [], REJECTED: [],
+  PENDING_USER: ['VERIFIED', 'EXPIRED', 'CANCELLED', 'REJECTED', 'OFFLINE_PROVISIONAL'],
+  // Offline confirmation v2 (migration 022).
+  OFFLINE_PROVISIONAL: ['VERIFIED', 'OFFLINE_UNSIGNED'],
+  VERIFIED: [], EXPIRED: [], CANCELLED: [], REJECTED: [], OFFLINE_UNSIGNED: [],
 };
+// States a bare state write can never reach: each needs its own fields
+// (signature; accepted code and deadline; unsigned reason).
+const NEEDS_FIELDS = ['VERIFIED', 'OFFLINE_PROVISIONAL', 'OFFLINE_UNSIGNED'];
 const CREDENTIAL = { ACTIVE: ['REVOKED'], REVOKED: [] };
 // Removed by migration 018: never used by Auth Core.
 const REMOVED_AUTHORIZATION_STATES = ['CREATED', 'DELIVERING', 'SIGNED', 'CONSUMED'];
@@ -23,7 +28,7 @@ const REMOVED_CREDENTIAL_STATES = ['PENDING', 'SUSPENDED'];
 const IDENTITY = { ACTIVE: ['SUSPENDED', 'REVOKED'], SUSPENDED: ['ACTIVE', 'REVOKED'], REVOKED: [] };
 const BANK = { PENDING: ['COMMIT_REQUESTED'], COMMIT_REQUESTED: ['COMMITTED', 'FAILED', 'CANCELLED'], COMMITTED: [], FAILED: [], CANCELLED: [] };
 
-const refused = /not a permitted transition|immutable|set once|needs a signature|set with the commit request/;
+const refused = /not a permitted transition|immutable|set once|needs a signature|set with the commit request|needs the accepted code|needs a reason/;
 
 describe('database state machines', { skip: skipWithoutServices }, () => {
   let server; let bank; let device;
@@ -75,8 +80,9 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
         if (randomInt(2) === 0) {
           const next = states[randomInt(states.length)];
           if (next === state) continue;
-          // A bare state write never verifies: VERIFIED also needs the signature fields.
-          const allowed = AUTHORIZATION[state].includes(next) && next !== 'VERIFIED';
+          // A bare state write never verifies, and never reaches the offline
+          // v2 states: each needs its own fields.
+          const allowed = AUTHORIZATION[state].includes(next) && !NEEDS_FIELDS.includes(next);
           const attempt = q('UPDATE authorization_requests SET state = $2 WHERE authorization_id = $1', [id, next]);
           if (allowed) { await attempt; state = next; } else await assert.rejects(attempt, refused, `${state} -> ${next}`);
         } else {
@@ -96,7 +102,7 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
     await assert.rejects(q("UPDATE credentials SET nexus_id = $2 WHERE credential_id = $1", [other.credentialId, device.nexusId]), refused);
     const copy = (state) => q(`INSERT INTO credentials (credential_id, nexus_id, key_algorithm, public_key_pem, platform, security_level, state)
       SELECT $1, nexus_id, key_algorithm, public_key_pem, platform, security_level, $3 FROM credentials WHERE credential_id = $2`, [randomUUID(), other.credentialId, state]);
-    await assert.rejects(copy('ACTIVE'), /idx_credentials_one_active/);
+    await assert.rejects(copy('ACTIVE'), /limit of its bank/); // default limit: one active device (migration 027)
     await q("UPDATE credentials SET state = 'REVOKED' WHERE credential_id = $1", [other.credentialId]);
     await assert.rejects(q("UPDATE credentials SET state = 'ACTIVE' WHERE credential_id = $1", [other.credentialId]), refused, 'REVOKED -> ACTIVE');
     for (const state of REMOVED_CREDENTIAL_STATES) {
@@ -144,7 +150,9 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
         UPDATE credentials SET state = 'REVOKED' WHERE credential_id = '${id}';
         ALTER TABLE credentials ENABLE TRIGGER credential_lifecycle;`);
       // An authorization in a removed state, then a row in a dropped table.
-      await db.pool.query(`ALTER TABLE authorization_requests DROP CONSTRAINT authorization_requests_state_check`);
+      // Before 018 there was no insert-state trigger (migration 024) either.
+      await db.pool.query(`ALTER TABLE authorization_requests DROP CONSTRAINT authorization_requests_state_check;
+        ALTER TABLE authorization_requests DISABLE TRIGGER authorization_insert_state`);
       const auth = randomUUID();
       await db.pool.query(`INSERT INTO authorization_requests (authorization_id, client_id, nexus_id, credential_id, transaction_reference, operation_type,
           amount_minor, currency, beneficiary, policy_reference, policy_version, canonical_payload_hash, nonce, issued_at, expires_at, state)
@@ -171,9 +179,7 @@ describe('database state machines', { skip: skipWithoutServices }, () => {
       const r = await bank.call('POST', path, { body: { publicKeyPem: key, platform: 'OTHER', securityLevel: 'SOFTWARE_TEST' } });
       assert.equal(r.status, 404, `${path}: ${r.text}`);
     }
-    const token = await bank.bootstrapToken(rotating.nexusId, { replacement: { method: 'BRANCH_VISIT', reference: 'rt-03' } });
-    assert.equal(token.status, 201, token.text);
-    await enrolWithToken(server, rotating.nexusId, token.json.accessToken);
+    await bank.replaceDevice(rotating, { method: 'BRANCH_VISIT', reference: 'rt-03' });
     const states = (await q('SELECT state FROM credentials WHERE nexus_id = $1 ORDER BY created_at', [rotating.nexusId])).rows.map((x) => x.state);
     assert.deepEqual(states, ['REVOKED', 'ACTIVE']);
   });

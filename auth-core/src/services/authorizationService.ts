@@ -19,6 +19,7 @@ import {
 import { mapAuthorization, type AuthorizationRecord, type AuthorizationRow } from './authorizationRecord';
 import { getPushMessageForClient, queueAuthorizationPush, type PushMessageRecord } from './pushService';
 import { ConflictError, ValidationError } from './errors';
+import { applyCustomerLimits } from './customerAccountService';
 
 const DEFAULT_TTL_SECONDS = 120;
 
@@ -66,7 +67,7 @@ export async function createAuthorization(input: CreateAuthorizationInput, clien
   if (credential.nexusId !== input.nexusId || credential.state !== 'ACTIVE') throw new ConflictError('Credential is not ACTIVE for the specified NEXUS ID');
   // With attestation required, a credential enrolled before the requirement
   // (attestation UNKNOWN) cannot approve transactions until the customer's
-  // device is enrolled again with verified evidence (NXS-025).
+  // device is enrolled again with verified evidence.
   if (env.REQUIRE_VALID_ATTESTATION && credential.attestationStatus !== 'VERIFIED') {
     throw new ConflictError('The device credential has no verified attestation; enrol the device again', 'CREDENTIAL_NOT_ATTESTED');
   }
@@ -96,6 +97,9 @@ export async function createAuthorization(input: CreateAuthorizationInput, clien
 
   try {
     return await withTransaction(async (tx) => {
+      // The customer's own limits and video-check threshold, with the identity
+      // row locked so concurrent payments are counted against the daily limit.
+      const customer = await applyCustomerLimits(tx, input.nexusId, input.amountMinor, input.currency);
       const inserted = await tx.query<AuthorizationRow>(
         `INSERT INTO authorization_requests (
           authorization_id, client_id, nexus_id, credential_id, transaction_reference,
@@ -112,6 +116,7 @@ export async function createAuthorization(input: CreateAuthorizationInput, clien
       // authorization without a plan could never be signed.
       const plan = await createVerificationPlan({
         ...(input.verificationPolicy ?? {}),
+        ...(customer.requireVideo ? { requireVideo: true } : {}),
         authorizationId,
         nexusId: input.nexusId,
         clientId,

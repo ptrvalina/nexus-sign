@@ -10,7 +10,7 @@ Backend service for cryptographic transaction authorization, credential lifecycl
 - Device-signed mobile requests (no access token after enrolment) and offline confirmation with a QR code and an 8-digit code.
 - Server-side verification of App Attest and Play Integrity evidence.
 - Signature verification and atomic authorization consumption.
-- Adaptive verification (Push -> Audio -> Video) bound to the signature.
+- Adaptive verification (Push -> Audio -> Video) bound to the signature. Audio and video results are operator decisions after an in-app call (signalling relayed here, media peer to peer) or signed provider tokens ([ADR 0017](../docs/adr/0017-in-app-audio-video-calls.md)).
 - HSM-sealed, hash-chained evidence that can be verified offline, including the customer's signature.
 - Bank commit tracking and webhook delivery through a transactional outbox.
 - Administrative controls (suspend, reactivate, revoke) and audit logging.
@@ -22,6 +22,8 @@ Production startup is fail-closed unless PKCS#11 HSM, device attestation, databa
 ## Development
 
 Node.js 22 or later (Node.js 20 has reached end of life, and its test runner does not expand the test file patterns). Auth Core reads only the process environment; `npm run dev` compiles (`tsc`) and starts `node --env-file=.env dist/server.js`. Copy `.env.example` to `.env` first.
+
+To run the whole service on one machine, `bash scripts/run-local.sh` starts PostgreSQL and Redis from `docker-compose.yml` with an empty database, applies the schema and `scripts/db/roles.sql`, writes `.env.local-run` with new keys, registers the bank client `local-bank` and the admin account `admin`, and starts Auth Core on port 8080 as `nexus_app`. It prints the client secret, the admin password and TOTP key, and the end-to-end command, and saves them in `~/nexus-local-credentials.txt`. The admin console is at `http://localhost:8080/admin/`. The software HSM keeps its evidence key only while the process runs, so every start begins with an empty database. Needs Node.js 22, Docker and openssl.
 
 ## Database setup
 

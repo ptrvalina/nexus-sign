@@ -15,10 +15,11 @@ Native Android SDK embedded into the bank's existing mobile application.
 1. The bank backend creates a NEXUS ID for the customer.
 2. When `bootstrap()` asks for a token, the host app gets one from its own backend, which calls Auth Core `POST /v1/mobile/sessions` with `{ nexusId, purpose: "BOOTSTRAP" }`.
 3. `NEXUSSignSDK.bootstrap()` requests a `BOOTSTRAP` token and creates the signing and request-authentication keys in the Keystore, plus the key material for offline confirmation. One Play Integrity token covers all of them. The signing and authentication keys are generated with a Keystore attestation challenge derived from the enrolment challenge, and their attestation chains are sent automatically (`keyAttestation`); the host app does nothing for this ([Android key attestation](../docs/security/attestation.md#android-key-attestation)). From then on the SDK signs every request with the authentication key; it holds no token.
-4. The bank backend creates a transaction authorization.
-5. The SDK fetches the exact authorization object and verifies it.
-6. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
-7. Auth Core verifies the signature and consumes the authorization atomically.
+4. The host app sends the credential ID and `signingKeyFingerprint()` (the SHA-256 of the signing key, computed on the device) to its own backend, which approves exactly that key for the customer before it executes anything confirmed with it; the same after replacement and recovery ([bank credential trust](../docs/protocol/bank-credential-trust-v1.md)).
+5. The bank backend creates a transaction authorization.
+6. The SDK fetches the exact authorization object and verifies it.
+7. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
+8. Auth Core verifies the signature and consumes the authorization atomically. The bank executes only after its own check of the evidence.
 
 ## Configuration
 
@@ -43,6 +44,7 @@ val sdk = NEXUSSignSDK(context, NEXUSSignConfig(
 | `recoverySetupPromptText` | `"Confirm your new recovery phrase"` | Description of the biometric prompt shown by `generateRecoveryPhrase()`. New in 2.0 |
 | `allowEmulatorHostHttp` | `false` | Development only: accept `http://10.0.2.2`, the emulator's alias for the developer's machine. New in 2.0; leave it off in release builds |
 | `requestTimeoutMillis` | `10_000` | Network request timeout |
+| `certificatePins` | empty | Public-key pins for the host of `baseUrl`, `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` (OkHttp `CertificatePinner`). Empty relies on the platform's certificate validation only. When set: at least two distinct pins (current key and a backup key kept offline), https only; a chain matching none of them fails the request. New (unreleased, planned for 2.0.0) |
 | `playIntegrityCloudProjectNumber` | `null` | The bank's Google Cloud project number for Play Integrity; without it no integrity token is sent |
 
 | Token purpose | Lifetime | Used by |
@@ -57,6 +59,10 @@ If a device-signed request is rejected because the phone's clock is off, the SDK
 
 `isRegistered()` is true only when Auth Core has confirmed the credential (after `bootstrap()` or `recoverIdentity`) and the key is still in the Keystore. A customer who already has an enrolled device can be enrolled again only with a `BOOTSTRAP` token that the bank backend requested with a replacement authorization after re-identifying the customer; otherwise `bootstrap()` fails with `ServerError(409, ...)` (`ACTIVE_CREDENTIAL_EXISTS`). If enrolment fails, the current keys stay in place.
 
+## Audio and video verification calls
+
+When the bank's verification plan asks for an AUDIO or VIDEO step, the customer talks to a bank operator in the app before signing ([ADR 0017](../docs/adr/0017-in-app-audio-video-calls.md)). This SDK opens the session (`openVerificationCall`), signs the signalling (`callSignalling`) and runs the call state machine (`VerificationCallController`); the media, permissions and call screen are in the optional module [android-sdk-calls](../android-sdk-calls/README.md). The call never confirms the payment: after the operator's VERIFIED, call `approve` as usual.
+
 ## Offline confirmation
 
 When the bank has enabled it, the customer can confirm a transaction shown as a QR code (branch, ATM, web banking) with no network on the phone:
@@ -64,8 +70,13 @@ When the bank has enabled it, the customer can confirm a transaction shown as a 
 ```kotlin
 val challenge = sdk.readOfflineChallenge(scannedText)        // verifies the bytes, no network
 show(challenge.transaction)                                   // same fields as online
-val code = sdk.confirmOffline(challenge, activity)            // biometric prompt, then 8 digits
+val code = sdk.confirmOffline(challenge, activity)            // biometric prompt(s), then 8 digits
+
+// Offline confirmation v2: whenever the app starts and when the connection returns
+lifecycleScope.launch { sdk.submitPendingOfflineSignatures() }
 ```
+
+With a `NXS2.` QR code (`challenge.requiresDeviceSignature`, the default from Auth Core 2.0.0 (unreleased)) the SDK first signs the transaction with the signing key — its own biometric prompt, because Android binds a key to one prompt — and stores the signature, then shows the second prompt for the code. Auth Core confirms the payment when the signature arrives; `submitPendingOfflineSignatures()` uploads what is pending and keeps what could not be delivered ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). Pending signatures are kept in `com.nexis.nexussign.<bankId>.offline`; exclude it from backup like the keys file.
 
 The offline key is an HMAC key in the Keystore that can only be used through the `BiometricPrompt` showing the transaction (`CryptoObject(Mac)`); it works from Android 9. Check `isOfflineConfirmationAvailable()` before offering it. See [docs/architecture/device-authentication-and-offline-confirmation.md](../docs/protocol/device-authentication-and-offline-confirmation.md).
 
@@ -111,7 +122,10 @@ The first registration for a credential agrees the push key with Auth Core; late
 | `PushMessageInvalid` | A message did not open as a NEXUS-SIGN secure push (`no_push_key`: call `registerPush` again; `decryption_failed`: altered or for another device). Show nothing from it. |
 | `DeviceLocked` | A request was made while the device was locked (e.g. from a push); retry once it is unlocked. |
 | `InvalidRecoveryPhrase` | Wrong or mistyped phrase. Detected on the device, without using a server attempt; also reported when Auth Core refuses the proof (401). |
-| `ServerError` | Auth Core rejected the request, e.g. 403 when the identity is suspended. |
+| `ServerError` | Auth Core rejected the request with this HTTP status, e.g. 403 when the identity is suspended. Used only for real HTTP answers (finding D-11). |
+| `InvalidServerResponse` | Auth Core answered in a way the protocol does not allow. Not retried; report it. New in 2.0. |
+| `InvalidRecoverySession` | The recovery session from the bank backend is malformed. Start a new one. New in 2.0. |
+| `InvalidArgument` | The app passed a malformed value (an ID that is not a UUID, a relay-only call without TURN). Nothing was sent. New in 2.0. |
 | `NetworkUnavailable` | Retry or fall back to another channel. |
 
 ## Showing and signing a transaction ("what you see is what you sign")
@@ -122,13 +136,16 @@ The first registration for a credential agrees the push key with Auth Core; late
 val authorization = sdk.fetchAuthorization(id)
 val tx = authorization.signedTransaction()
 amountView.text = "${tx.formattedAmount()} ${tx.currency}"   // e.g. "1250.00 PLN"
-beneficiaryView.text = tx.beneficiaryDisplay()                // e.g. "Jan Kowalski · PL61…"
+beneficiaryView.text = tx.beneficiaryDisplay()                // e.g. "PL61109010140000071219812874 · Jan Kowalski"
 referenceView.text = tx.transactionReference
 
 val outcome = sdk.approve(authorization, activity)
 ```
 
 `approve()` re-verifies the payload, takes the expiry from the signed bytes, shows `tx.confirmationText()` as the `BiometricPrompt` description (with explicit confirmation required) and signs those same bytes. It switches to the main thread for the prompt itself, so it can be called from any coroutine scope tied to the activity. If the payload does not verify, both calls throw `NEXUSSignError.AuthorizationPayloadInvalid` and nothing is signed — treat it as a security event, not as a retryable network error.
+
+
+From 2.0.0 (unreleased) the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
 
 ## Recovery
 
@@ -140,7 +157,7 @@ val words = sdk.generateRecoveryPhrase(activity)   // biometric prompt, then sho
 
 `generateRecoveryPhrase(activity: FragmentActivity)` creates 12 BIP-39 words and a P-256 recovery key on the device, wraps the recovery private key under a key derived from the phrase, and registers the recovery public key and the wrapped key with Auth Core. Since 2.0 it takes an activity: the customer confirms with a `BiometricPrompt` (description `recoverySetupPromptText`), because the registration is signed with the device's signing key and a new phrase replaces the previous one. It throws `NotRegistered` before enrolment, the biometric errors above, or `CredentialInvalidated`. Neither the phrase nor the recovery private key leaves the device. The SDK refuses parameters other than protocol 2, PBKDF2-HMAC-SHA256 and a 32-byte key, iterations outside 100 000–5 000 000 and a salt shorter than 16 bytes.
 
-`recoverIdentity(session, recoveryPhrase)` takes the `NexusRecoverySession` the bank backend received from `POST /v1/recovery/sessions`, passed on unchanged. Since 2.0 it carries `recoveryPublicKeyPem` and `wrappedRecoveryKey` next to `sessionId`, `nexusId`, `nonce`, `accessToken`, `parameters` and `expiresAt`; a session without them is refused with `ServerError(0, ...)`. The phrase is accepted as typed or pasted (case and whitespace are normalized). The SDK opens the wrapped key with the phrase, so a wrong phrase fails on the device (`InvalidRecoveryPhrase`) and uses no server attempt, then signs the recovery proof with the recovery key. It generates the replacement keys in a spare Keystore slot, with key attestation bound to the session nonce, and switches the active slot only after Auth Core confirms the recovery. A wrong phrase, a network failure or an interrupted call leaves the existing keys untouched. A recovery session allows five proofs; start a new session from the bank backend.
+`recoverIdentity(session, recoveryPhrase)` takes the `NexusRecoverySession` the bank backend received from `POST /v1/recovery/sessions`, passed on unchanged. Since 2.0 it carries `recoveryPublicKeyPem` and `wrappedRecoveryKey` next to `sessionId`, `nexusId`, `nonce`, `accessToken`, `parameters` and `expiresAt`; a session without them is refused with `InvalidRecoverySession`. The phrase is accepted as typed or pasted (case and whitespace are normalized). The SDK opens the wrapped key with the phrase, so a wrong phrase fails on the device (`InvalidRecoveryPhrase`) and uses no server attempt, then signs the recovery proof with the recovery key. It generates the replacement keys in a spare Keystore slot, with key attestation bound to the session nonce, and switches the active slot only after Auth Core confirms the recovery. A wrong phrase, a network failure or an interrupted call leaves the existing keys untouched. A recovery session allows five proofs; start a new session from the bank backend.
 
 Phrases set up with SDK 1.4 or earlier (recovery protocol 1) are refused by Auth Core 2.0; the customer sets up a new phrase with `generateRecoveryPhrase` while the device is still enrolled.
 
@@ -151,3 +168,20 @@ Phrases set up with SDK 1.4 or earlier (recovery protocol 1) are refused by Auth
 ```
 
 All unit tests are plain JVM tests. `SignedTransactionTest`, `DeviceProtocolTest`, `RecoveryProtocolTest` and `SecurePushTest` are driven by `signed-payload-v1.json`, `device-protocols-v1.json`, `recovery-v2.json` and `secure-push-v1.json`, read directly from `auth-core/test-vectors/` (Gradle test resources `srcDir("../auth-core/test-vectors")`), so the tests need a full repository checkout. `NEXUSSignConfigTest` covers the base URL rules, including `allowEmulatorHostHttp`. `RecoveryPhraseTest` checks the BIP-39 encoding against the reference vectors and the input normalization; `KeySlotsTest` covers the two-slot key replacement used by enrolment and recovery.
+
+## Customer section, payment mandates, conversations (unreleased)
+
+These methods are not in a released version yet. CI builds them and runs their unit tests on every change; they have not been run on physical devices.
+
+| Area | Methods | Server API |
+|---|---|---|
+| Devices | `devices()`, `removeDevice(credentialId)` | `/v1/mobile/devices`, `/v1/mobile/devices/{id}/revoke` |
+| History and evidence | `history(filter)`, `evidence(authorizationId)` | `/v1/mobile/history`, `/v1/mobile/authorizations/{id}/evidence` |
+| Security log and feed | `securityEvents()`, `notifications()` | `/v1/mobile/security-events`, `/v1/mobile/notifications` |
+| Settings | `settings()`, `updateSettings(…)` (relaxing waits for the bank's hold) | `/v1/mobile/settings` |
+| Identity | `suspendIdentity(reason)` | `/v1/mobile/identity/suspend` |
+| Mandates | `mandates()`, `mandate(id)`, `mandateTerms(mandate)` (checks domain `NEXUS-SIGN/MANDATE`, mandate, device, display rules and hash), `signMandate(mandate…)` (biometric prompt from the signed terms), `mandate(id, action)` for decline, suspend, resume, revoke | `/v1/mobile/mandates…` ([payment mandates v1](../docs/protocol/payment-mandates-v1.md)) |
+| Conversations | `conversations()`, `openConversation(…)`, `conversationMessages(…)`, `sendMessage(…)`, `markRead(…)`, `requestAgent(…)`, `closeConversation(…)` | `/v1/mobile/conversations…` ([conversations](../docs/architecture/customer-conversations.md)) |
+| Calls with the bank | `requestBankCall(channel, topic, conversationId)`, `bankCalls()`, `bankCall(id)`, `customerCallSignalling(call)` with the call engine | `/v1/mobile/customer-calls…` ([customer calls](../docs/architecture/customer-calls.md)) |
+
+Show a mandate only from `mandateTerms`, never from the JSON convenience fields, in the same way as payments are shown only from the signed bytes.

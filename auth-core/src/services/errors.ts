@@ -31,6 +31,12 @@ export class ConflictError extends Error {
   constructor(message: string, readonly code?: string) { super(message); this.name = 'ConflictError'; }
 }
 
+/** The request is understood but its content cannot be accepted (422), e.g.
+ * a signature that does not verify. */
+export class UnprocessableError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); this.name = 'UnprocessableError'; }
+}
+
 /** The resource existed but its validity window has passed (410). */
 export class GoneError extends Error {
   constructor(message: string) { super(message); this.name = 'GoneError'; }

@@ -12,7 +12,7 @@ A valid chain shows five things, each checkable offline:
 2. **That key was the one enrolled for the customer.** The `AUTHORIZATION` record names the `CREDENTIAL_ENROLLED` record of its credential, which sealed the device keys and the attestation that admitted them when the credential was registered.
 3. **The bank sealed the records.** The bank's HSM signed the hash of each record, and the record names the HSM key (`sealKeyId`).
 4. **No record has been removed, reordered or inserted.** Records of one NEXUS ID form a numbered hash chain, and the bank keeps the latest position it received (the chain head), so records removed from the end are detected as well.
-5. **Which verification factors were completed.** Audio and video checks are listed with the provider reference and the hash of the provider assertion. The assertion is the bank's or the provider's statement; Auth Core stores its hash, not a verification of it.
+5. **Which verification factors were completed.** Audio and video checks are listed with how they were closed: `method: PROVIDER` with the issuing provider key (`issuer`), the token's `jti` (`providerReference`) and the SHA-256 of the result token, which Auth Core verified before accepting it ([verification result v1](verification-result-v1.md)); or `method: OPERATOR` with the bank operator's username. The factor records who stated the result, not how it was reached. Records sealed before 2.0.0 list factors without `method`; their assertion was not verified by Auth Core.
 
 The HSM seal and the customer signature are independent. The holder of the HSM key can seal any record, but cannot produce a customer signature over terms the customer did not sign. The holder of a device key can sign, but cannot place a record in the bank's sealed chain. Point 2 closes the gap between them: someone who can write to the database cannot swap a credential's public key for their own and have the resulting approval verify, because the key no longer matches the sealed enrolment.
 
@@ -22,9 +22,16 @@ The HSM seal and the customer signature are independent. The holder of the HSM k
 |---|---|---|
 | `AUTHORIZATION` | An authorization becomes `VERIFIED`, in the transaction that consumes it | Signed bytes, device signature and key, `enrolmentEvidenceHash`, policy, verification factors |
 | `CREDENTIAL_ENROLLED` | A credential is registered (enrolment, replacement, recovery) or sealed once on upgrade (`BASELINE`), in the transaction that creates it | The credential's public keys, platform, security level, attestation material, replaced credentials, the bank's replacement authorization |
+| `MANDATE` | A payment mandate is signed, declined, suspended, resumed, revoked, withdrawn or expires, in the transaction that changes it | `mandateId`, `event`, `termsHash`, `reason`, the device's `enrolmentEvidenceHash`; for `SIGNED` also the terms bytes, the device signature and key ([payment mandates](payment-mandates-v1.md#evidence)) |
 | `RECOVERY_CONFIGURED` | A device registers a recovery key ([recovery protocol 2](recovery-protocol-v2.md)) | The recovery public key, the SHA-256 of the wrapped key, the KDF salt and iterations |
+| `AUTHORIZATION_OUTCOME` | An authorization ends without a confirmation: `REJECTED` (declined by the customer, signature attempts exhausted, verification failed), `EXPIRED`, `CANCELLED` (by the bank, or because the device or identity was revoked, suspended, replaced or recovered) or `OFFLINE_UNSIGNED` | `outcomeId`, `authorizationId`, `credentialId`, `transactionReference`, `canonicalPayloadHash`, `operationType`, `amountMinor`, `currency`, `issuedAt`, `expiresAt`, `outcome`, `reason`, `occurredAt`, `policyReference`, `policyVersion`, `credentialState`, `device` (`platform`, `securityLevel`), `enrolmentEvidenceHash`, `correlationId`, `verificationFactors` |
+| `CREDENTIAL_REVOKED` | A credential is revoked (by the bank, by replacement, recovery or identity revocation) | `outcomeId`, `credentialId`, `reason`, `revokedAt`, `device`, `enrolmentEvidenceHash` |
 
-All three types share one chain per NEXUS ID.
+All types share one chain per NEXUS ID.
+
+### How outcomes reach the chain
+
+Outcome records are not written by the code path that ends the authorization. A database trigger (migration 025) records the outcome in `evidence_outcomes` in the same transaction as the state change, whichever code or session made it, with the reason the transaction set (`nexus.outcome_reason`) or a default for the state. The expiry worker seals pending outcomes into the chain every `AUTHORIZATION_EXPIRY_SWEEP_MS` and links each to its record once; `evidence_outcomes` rows cannot be deleted or rewritten. While the HSM is unavailable outcomes stay pending and are sealed when it returns; the worker logs an error when the oldest pending outcome is older than 5 minutes. An outcome record therefore follows its state change by up to one sweep interval, and the `authorization.*` webhook that announced the outcome may arrive before it.
 
 ## Sealed fields
 
@@ -35,6 +42,7 @@ Every schema 3 record seals:
 | `schemaVersion` | `"3"` |
 | `recordType` | One of the types above |
 | `nexusId` | The NEXUS ID whose chain the record belongs to |
+| `clientId` | The bank (client ID) the identity belongs to. Sealed by Auth Core versions after 2.0.0-rc.2 (finding B-10); records sealed earlier have no such field. A verifier must accept its absence |
 | `chainSequence` | Position in the chain: 1 for the first record, then 2, 3 … |
 | `previousEvidenceHash` | `evidenceHash` of the record at `chainSequence - 1`; `null` for the first record |
 | `sealKeyId` | Lowercase hex SHA-256 of the DER SubjectPublicKeyInfo of the HSM evidence key that sealed the record |
@@ -44,7 +52,11 @@ evidenceHash = hex(SHA-256(canonicalJson(sealedPayload)))
 hsmSignature = base64(DER(ECDSA-P256-SHA256(evidence key, the 32 bytes of evidenceHash)))
 ```
 
-`canonicalJson` sorts object keys recursively and uses `JSON.stringify` escaping, UTF-8, as in [protocol v1](authorization-protocol-v1.md). Auth Core refuses to seal a record if the HSM reports a different key from the one named in `sealKeyId`.
+`canonicalJson` sorts object keys recursively and uses `JSON.stringify` escaping, UTF-8, as in [protocol v1](authorization-protocol-v1.md).
+
+Two precisions for verifiers written in other languages (finding B-15): keys are sorted by UTF-16 code units (JavaScript's default sort), and JavaScript places integer-like keys (`"0"`, `"17"`) before all other keys in ascending numeric order whatever the sort. No sealed object produced by Auth Core has integer-like keys (the authorization bytes refuse them; the other sealed objects use fixed field names), so for every record Auth Core writes the result is the plain lexicographic order; a verifier should reject a sealed payload with an integer-like key rather than guess. Numbers are written as JavaScript writes them; the sealed payloads carry amounts and identifiers as strings and only small integers (`chainSequence`) as numbers.
+
+Fields of an export that are **not** sealed (finding B-13): `evidenceId`, `createdAt`, `hsmKeyVersion` and the copies of sealed values outside `sealedPayload` (`authorizationId`, `chainSequence`, `sealKeyId` and the like). A verifier relies only on `sealedPayload`, `evidenceHash` and `hsmSignature`; `scripts/verify-evidence.mjs` compares the copies of the record type, chain position and previous hash with the sealed values and reports a difference; `createdAt`, `evidenceId` and `hsmKeyVersion` are not checked by anything and must not be relied on. Auth Core refuses to seal a record if the HSM reports a different key from the one named in `sealKeyId`.
 
 ### AUTHORIZATION
 
@@ -82,7 +94,7 @@ hsmSignature = base64(DER(ECDSA-P256-SHA256(evidence key, the 32 bytes of eviden
     "result": "VERIFIED",
     "correlationId": null,
     "verificationFactors": [
-      { "channel": "AUDIO", "status": "VERIFIED", "providerReference": "…", "assertionHash": "<hex>", "completedAt": "…" }
+      { "channel": "AUDIO", "status": "VERIFIED", "method": "PROVIDER", "issuer": "<providerId>/<keyId>", "providerReference": "<jti>", "assertionHash": "<hex>", "completedAt": "…" }
     ]
   },
   "evidenceHash": "<hex>",
@@ -181,7 +193,7 @@ Both responses include `evidencePublicKeyPem` (the current HSM key) and `evidenc
 |---|---|
 | Record hash | `evidenceHash = hex(SHA-256(canonicalJson(sealedPayload)))` |
 | HSM seal | ECDSA P-256 / SHA-256 over the 32 bytes of `evidenceHash`, DER, verifies with the evidence key whose key ID is `sealKeyId`. Another key that happens to verify is not accepted |
-| Metadata | `nexusId`, `previousEvidenceHash`, `recordType`, `chainSequence` (and `authorizationId` for authorizations) outside the payload equal the sealed values |
+| Metadata | `nexusId`, `previousEvidenceHash`, `recordType`, `chainSequence` (and `authorizationId` for authorizations) outside the payload equal the sealed values; for schema 3 also `credentialId`, `sealKeyId` and `schemaVersion` (a missing field counts as a mismatch). Auth Core applies the same rule to the database columns before using a record |
 | Signed bytes (`AUTHORIZATION`) | `SHA-256(signed bytes) = canonicalPayloadHash`, and the bytes name the same `authorization_id`, `nexus_id`, `credential_id` and `transaction_reference` |
 | Customer signature (`AUTHORIZATION`) | ECDSA P-256 / SHA-256 over the signed bytes verifies with `credentialPublicKeyPem` (`der`, or `raw` r‖s). Offline confirmations carry an HMAC tag (below) |
 | Key provenance (`AUTHORIZATION`) | The `CREDENTIAL_ENROLLED` record whose `evidenceHash` is `enrolmentEvidenceHash` appears earlier in the chain (or is attached to a single-record export), is valid, names the same credential and sealed the same signing key |
@@ -194,6 +206,8 @@ Both responses include `evidencePublicKeyPem` (the current HSM key) and `evidenc
 The signed bytes are the protocol v1 object, so the amount, currency, beneficiary and expiry the customer saw can be read directly from them.
 
 A transaction confirmed offline with an 8-digit code ([offline confirmation](device-authentication-and-offline-confirmation.md)) is sealed and chained the same way, with `confirmationMethod: OFFLINE_CODE`, `signatureFormat: hmac`, `signatureAlgorithm: HMAC-SHA256` and the HMAC tag behind the code in `signature`. The record binds the exact bytes the phone displayed, but the code was computed with a key Auth Core also holds, so the customer's part cannot be re-verified by a third party. The verifier checks everything else and counts these records separately (`offline_codes=… (not third-party verifiable)`).
+
+With [offline confirmation v2](offline-confirmation-v2-deferred-signature.md) the record is sealed only when the device's own signature has arrived: `confirmationMethod: OFFLINE_SIGNED`, `signature`/`signatureFormat`/`signatureAlgorithm` are the device's ECDSA signature (verified like `DEVICE_SIGNATURE`), and the payload adds `offlineCodeTag` (base64, 32 bytes), `offlineCodeAcceptedAt` and `deferredSignatureReceivedAt`. Verifiers before this addition report `unknown confirmation method`. `verify-evidence.mjs --reject-offline-code` fails every `OFFLINE_CODE` record.
 
 ## Running the verifier
 
@@ -215,9 +229,14 @@ EVIDENCE_VALID records=7 hsm_seal=verified device_signatures=5/5 verified chain=
 | Option | Use |
 |---|---|
 | `--public-keys=<file.pem>` | One file with one or more PEM public keys: the current and retired evidence keys, obtained out of band (for example from the HSM key ceremony records). Without it the keys in the export are used, which an audit should not rely on: the script then prints a `WARNING` on standard error, the summary starts with `EVIDENCE_SELF_CONSISTENT` and reports `hsm_seal=verified_with_export_keys`, and the exit code is 3. `--public-key` is accepted as an alias |
-| `--expect-head=<chainSequence>:<evidenceHash>` | The head the bank stored from its latest confirmation. Without it the summary says `head=not_checked`, and records removed from the end of the chain are not detected |
+| `--expect-head=<chainSequence>:<evidenceHash>` | The head the bank stored from its latest confirmation. Without it (and without `--heads`) the summary says `head=not_checked`, records removed from the end of the chain are not detected, and a chain export exits with 4 |
+| `--expect-nexus-id=<id>` | Every record must belong to this NEXUS ID; without it a valid export of another customer verifies as well |
+| `--expect-client-id=<id>` | Every record must be sealed for this bank. Records sealed before the bank identifier was sealed fail this check (they cannot show their bank) |
+| `--expect-authorization-id=<id>` | The export must contain the sealed record of this authorization; a single-record export must be that record |
+| `--allow-unchecked-head` | Exit 0 instead of 4 for a chain checked without a head the bank kept, for callers that check the end of the chain themselves |
+| `--heads=<file>` | The heads the bank kept from `evidence.appended` webhooks for this NEXUS ID (JSON array, or one JSON object per line). Each must carry a valid HSM seal and be present unchanged in the export; a head past the end of the export reports `records missing at the end of the chain`. The summary then says `heads=<n>_matched`. New (unreleased, planned for 2.0.0) |
 
-The input is either export. The exit code is 0 for evidence valid against the keys given with `--public-keys`, 3 for evidence that is consistent only with the keys inside the export, 1 for invalid evidence (one `INVALID` line per problem) and 2 for a usage error.
+The input is either export. The exit code is 0 for evidence valid against the keys given with `--public-keys` (for a chain export, also checked against a head the bank kept), 4 for a chain valid against those keys whose end was not checked, 3 for evidence that is consistent only with the keys inside the export, 1 for invalid evidence (one `INVALID` line per problem) and 2 for a usage error. A chain export with no records is invalid, and so is one that ends before the `head` it names itself (a page of a longer chain, or a truncated file); that `head` comes from the same export, so it does not replace a head the bank kept.
 
 ## Key rotation
 

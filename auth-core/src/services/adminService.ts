@@ -1,4 +1,5 @@
 import { pool } from '../db/pool';
+import { NotFoundError } from './errors';
 
 export interface AuditLogFilter {
   nexusId?: string;
@@ -165,4 +166,20 @@ export async function getDashboardStats(clientId: string | null = null): Promise
     authorizationsLast24hByStatus: toRecord(authorizationRows.rows),
     webhookDeliveriesLast24hByStatus: toRecord(webhookRows.rows),
   };
+}
+
+/**
+ * Sends a FAILED webhook delivery again (finding A2-08): the row returns to
+ * PENDING with its retry budget reset, keeping its event ID, so the bank's
+ * deduplication still applies. A bank-scoped admin reaches only that bank's
+ * deliveries.
+ */
+export async function redeliverWebhook(id: string, clientId: string | null): Promise<{ eventId: string; clientId: string; eventType: string }> {
+  const result = await pool.query<{ event_id: string; client_id: string; event_type: string }>(
+    `UPDATE webhook_deliveries SET status = 'PENDING', retry_count = 0, next_attempt_at = now(), last_error = NULL, last_http_status = NULL
+     WHERE id = $1 AND status = 'FAILED' AND ($2::text IS NULL OR client_id = $2)
+     RETURNING event_id, client_id, event_type`, [id, clientId]);
+  const row = result.rows[0];
+  if (!row) throw new NotFoundError('No failed webhook delivery with this ID');
+  return { eventId: row.event_id, clientId: row.client_id, eventType: row.event_type };
 }

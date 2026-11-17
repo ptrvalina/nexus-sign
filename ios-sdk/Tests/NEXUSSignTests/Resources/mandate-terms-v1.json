@@ -1,0 +1,230 @@
+{
+  "description": "Payment mandate terms v1: canonical bytes the device signs (valid) and terms the SDK refuses before showing (invalid, with the reason).",
+  "valid": [
+    {
+      "name": "monthly, no total limit",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "7978d80fa8cce7d67fd56613dffca1d06a426408d5d3ce6238092d3f4438da35",
+      "expected": {
+        "credential_id": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+        "currency": "EUR",
+        "domain": "NEXUS-SIGN/MANDATE",
+        "frequency": "MONTHLY",
+        "issued_at": "2026-11-16T10:00:00.000Z",
+        "mandate_id": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+        "mandate_reference": "MANDATE-2026-0001",
+        "nexus_id": "123456789",
+        "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "offer_expires_at": "2026-11-17T10:00:00.000Z",
+        "payee": {
+          "iban": "PL61109010140000071219812874",
+          "name": "Energy Co"
+        },
+        "per_payment_limit_minor": "15000",
+        "protocol_version": "1",
+        "terms_version": "2026-11",
+        "total_limit_minor": null,
+        "valid_from": "2026-11-01T00:00:00.000Z",
+        "valid_until": "2027-11-01T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "yearly, total limit, BIC payee",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJZRUFSTFkiLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTE2VDEwOjAwOjAwLjAwMFoiLCJtYW5kYXRlX2lkIjoiNWIwZjNjOWEtNmQxZS00YjdhLTljMmYtMGU4ZDdhNmI1YzRkIiwibWFuZGF0ZV9yZWZlcmVuY2UiOiJNQU5EQVRFLTIwMjYtMDAwMSIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwib2ZmZXJfZXhwaXJlc19hdCI6IjIwMjYtMTEtMTdUMTA6MDA6MDAuMDAwWiIsInBheWVlIjp7ImJpYyI6IkNPQkFERUZGWFhYIiwiaWJhbiI6IkRFODkzNzA0MDA0NDA1MzIwMTMwMDAiLCJuYW1lIjoiQUNNRSBHbWJIIn0sInBlcl9wYXltZW50X2xpbWl0X21pbm9yIjoiMTUwMDAiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRlcm1zX3ZlcnNpb24iOiIyMDI2LTExIiwidG90YWxfbGltaXRfbWlub3IiOiIxMjAwMDAiLCJ2YWxpZF9mcm9tIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI3LTExLTAxVDAwOjAwOjAwLjAwMFoifQ==",
+      "termsHash": "d4516c58b20f0572a5300a007f1e90c7db31b7618bdf3bd1045dcd692b48bc77",
+      "expected": {
+        "credential_id": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+        "currency": "EUR",
+        "domain": "NEXUS-SIGN/MANDATE",
+        "frequency": "YEARLY",
+        "issued_at": "2026-11-16T10:00:00.000Z",
+        "mandate_id": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+        "mandate_reference": "MANDATE-2026-0001",
+        "nexus_id": "123456789",
+        "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "offer_expires_at": "2026-11-17T10:00:00.000Z",
+        "payee": {
+          "bic": "COBADEFFXXX",
+          "iban": "DE89370400440532013000",
+          "name": "ACME GmbH"
+        },
+        "per_payment_limit_minor": "15000",
+        "protocol_version": "1",
+        "terms_version": "2026-11",
+        "total_limit_minor": "120000",
+        "valid_from": "2026-11-01T00:00:00.000Z",
+        "valid_until": "2027-11-01T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "all-Cyrillic payee name",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJQTE4iLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJuYW1lIjoi0K3QvdC10YDQs9C+0YHQsdGL0YIifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "b713091bc6e7b6df006386058e3e96ed6cf4d319631652c73168c809b8aec1a6",
+      "expected": {
+        "credential_id": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+        "currency": "PLN",
+        "domain": "NEXUS-SIGN/MANDATE",
+        "frequency": "MONTHLY",
+        "issued_at": "2026-11-16T10:00:00.000Z",
+        "mandate_id": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+        "mandate_reference": "MANDATE-2026-0001",
+        "nexus_id": "123456789",
+        "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "offer_expires_at": "2026-11-17T10:00:00.000Z",
+        "payee": {
+          "name": "Энергосбыт"
+        },
+        "per_payment_limit_minor": "15000",
+        "protocol_version": "1",
+        "terms_version": "2026-11",
+        "total_limit_minor": null,
+        "valid_from": "2026-11-01T00:00:00.000Z",
+        "valid_until": "2027-11-01T00:00:00.000Z"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "payment-domain bytes",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL1RSQU5TQUNUSU9OLUFVVEgiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "bc4b342ac61c5b2d5b34735c9593ab30c8cafd37ad3e1a0c8bd5b361d32fe2d3",
+      "reason": "wrong_domain"
+    },
+    {
+      "name": "other protocol version",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIyIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "4c4cbe685e9964771c06b0ab391f4f31624cccafb877787dd6be5bb578cdc991",
+      "reason": "wrong_domain"
+    },
+    {
+      "name": "another mandate",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "ab70f99a5377c0dd4b2c89668d626aae647c20e71c14aef7a7bc99eeca166ab0",
+      "reason": "mismatch"
+    },
+    {
+      "name": "another device",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "14cfb8e7a498f8c12c4c823aa13567ad3523f5dd650b6babeac45751c54f6d8d",
+      "reason": "wrong_device"
+    },
+    {
+      "name": "hash does not match the bytes",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "reason": "hash_mismatch"
+    },
+    {
+      "name": "bytes not in canonical form",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "ewogInByb3RvY29sX3ZlcnNpb24iOiAiMSIsCiAiZG9tYWluIjogIk5FWFVTLVNJR04vTUFOREFURSIsCiAibWFuZGF0ZV9pZCI6ICI1YjBmM2M5YS02ZDFlLTRiN2EtOWMyZi0wZThkN2E2YjVjNGQiLAogIm5leHVzX2lkIjogIjEyMzQ1Njc4OSIsCiAiY3JlZGVudGlhbF9pZCI6ICIzZjJiOGMxZS01ZDRhLTRlNmYtOWE3Yi0xYzJkM2U0ZjVhNmIiLAogIm1hbmRhdGVfcmVmZXJlbmNlIjogIk1BTkRBVEUtMjAyNi0wMDAxIiwKICJwYXllZSI6IHsKICAiaWJhbiI6ICJQTDYxMTA5MDEwMTQwMDAwMDcxMjE5ODEyODc0IiwKICAibmFtZSI6ICJFbmVyZ3kgQ28iCiB9LAogImN1cnJlbmN5IjogIkVVUiIsCiAicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiAiMTUwMDAiLAogInRvdGFsX2xpbWl0X21pbm9yIjogbnVsbCwKICJmcmVxdWVuY3kiOiAiTU9OVEhMWSIsCiAidmFsaWRfZnJvbSI6ICIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLAogInZhbGlkX3VudGlsIjogIjIwMjctMTEtMDFUMDA6MDA6MDAuMDAwWiIsCiAidGVybXNfdmVyc2lvbiI6ICIyMDI2LTExIiwKICJpc3N1ZWRfYXQiOiAiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwKICJvZmZlcl9leHBpcmVzX2F0IjogIjIwMjYtMTEtMTdUMTA6MDA6MDAuMDAwWiIsCiAibm9uY2UiOiAiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIKfQ==",
+      "termsHash": "7ad44e214567e1b80408920a38ed2d9ca93e340f3f49f176c4da85ab76d9b7d2",
+      "reason": "not_canonical"
+    },
+    {
+      "name": "mixed-script payee name",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJuYW1lIjoi0JVuZXJneSBDbyJ9LCJwZXJfcGF5bWVudF9saW1pdF9taW5vciI6IjE1MDAwIiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0ZXJtc192ZXJzaW9uIjoiMjAyNi0xMSIsInRvdGFsX2xpbWl0X21pbm9yIjpudWxsLCJ2YWxpZF9mcm9tIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI3LTExLTAxVDAwOjAwOjAwLjAwMFoifQ==",
+      "termsHash": "50287967b9af4fc8c84c5c0c8481fb0b2d76f4fd71ec981dbc71b100180e13a3",
+      "reason": "display"
+    },
+    {
+      "name": "payee name that is an IBAN (finding D-02)",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiREU4OTM3MDQwMDQ0MDUzMjAxMzAwMCIsIm5hbWUiOiJQTDYxIDEwOTAgMTAxNCAwMDAwIDA3MTIgMTk4MSAyODc0In0sInBlcl9wYXltZW50X2xpbWl0X21pbm9yIjoiMTUwMDAiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRlcm1zX3ZlcnNpb24iOiIyMDI2LTExIiwidG90YWxfbGltaXRfbWlub3IiOm51bGwsInZhbGlkX2Zyb20iOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjctMTEtMDFUMDA6MDA6MDAuMDAwWiJ9",
+      "termsHash": "91f5902ab463d02520d9cd46410b92540a095412cac24ad523152a8be5029ae1",
+      "reason": "display"
+    },
+    {
+      "name": "prompt separator in the payee name (finding D-02)",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJuYW1lIjoiRW5lcmd5IOKAoiBDbyJ9LCJwZXJfcGF5bWVudF9saW1pdF9taW5vciI6IjE1MDAwIiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0ZXJtc192ZXJzaW9uIjoiMjAyNi0xMSIsInRvdGFsX2xpbWl0X21pbm9yIjpudWxsLCJ2YWxpZF9mcm9tIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI3LTExLTAxVDAwOjAwOjAwLjAwMFoifQ==",
+      "termsHash": "6b163f9eea6c374aaf27f223124950637974e953c78cee21ffab9c814ab2e64f",
+      "reason": "display"
+    },
+    {
+      "name": "bidi override in the reference",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiUkVG4oCuZ25wLmV4ZSIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwib2ZmZXJfZXhwaXJlc19hdCI6IjIwMjYtMTEtMTdUMTA6MDA6MDAuMDAwWiIsInBheWVlIjp7ImliYW4iOiJQTDYxMTA5MDEwMTQwMDAwMDcxMjE5ODEyODc0IiwibmFtZSI6IkVuZXJneSBDbyJ9LCJwZXJfcGF5bWVudF9saW1pdF9taW5vciI6IjE1MDAwIiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0ZXJtc192ZXJzaW9uIjoiMjAyNi0xMSIsInRvdGFsX2xpbWl0X21pbm9yIjpudWxsLCJ2YWxpZF9mcm9tIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI3LTExLTAxVDAwOjAwOjAwLjAwMFoifQ==",
+      "termsHash": "7d9fe9531edb5f81fe5998616537c18a257f637c76d47643e06f0e1fe85b7234",
+      "reason": "display"
+    },
+    {
+      "name": "IBAN with wrong check digits",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MjEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNy0xMS0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "a2e98260caff2c0ef368b538e5e48322be905a39176ab39b35e4e583e9d3102e",
+      "reason": "iban"
+    },
+    {
+      "name": "missing field",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTE2VDEwOjAwOjAwLjAwMFoiLCJtYW5kYXRlX2lkIjoiNWIwZjNjOWEtNmQxZS00YjdhLTljMmYtMGU4ZDdhNmI1YzRkIiwibWFuZGF0ZV9yZWZlcmVuY2UiOiJNQU5EQVRFLTIwMjYtMDAwMSIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwib2ZmZXJfZXhwaXJlc19hdCI6IjIwMjYtMTEtMTdUMTA6MDA6MDAuMDAwWiIsInBheWVlIjp7ImliYW4iOiJQTDYxMTA5MDEwMTQwMDAwMDcxMjE5ODEyODc0IiwibmFtZSI6IkVuZXJneSBDbyJ9LCJwZXJfcGF5bWVudF9saW1pdF9taW5vciI6IjE1MDAwIiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0ZXJtc192ZXJzaW9uIjoiMjAyNi0xMSIsInRvdGFsX2xpbWl0X21pbm9yIjpudWxsLCJ2YWxpZF9mcm9tIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI3LTExLTAxVDAwOjAwOjAwLjAwMFoifQ==",
+      "termsHash": "e55bf0f5cff653d28c8dd3e7e482def10f57aa33a9084f94616052f4c17b378f",
+      "reason": "missing_field"
+    },
+    {
+      "name": "unexpected field",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkZWJpdF9kYXkiOiIxNSIsImRvbWFpbiI6Ik5FWFVTLVNJR04vTUFOREFURSIsImZyZXF1ZW5jeSI6Ik1PTlRITFkiLCJpc3N1ZWRfYXQiOiIyMDI2LTExLTE2VDEwOjAwOjAwLjAwMFoiLCJtYW5kYXRlX2lkIjoiNWIwZjNjOWEtNmQxZS00YjdhLTljMmYtMGU4ZDdhNmI1YzRkIiwibWFuZGF0ZV9yZWZlcmVuY2UiOiJNQU5EQVRFLTIwMjYtMDAwMSIsIm5leHVzX2lkIjoiMTIzNDU2Nzg5Iiwibm9uY2UiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwib2ZmZXJfZXhwaXJlc19hdCI6IjIwMjYtMTEtMTdUMTA6MDA6MDAuMDAwWiIsInBheWVlIjp7ImliYW4iOiJQTDYxMTA5MDEwMTQwMDAwMDcxMjE5ODEyODc0IiwibmFtZSI6IkVuZXJneSBDbyJ9LCJwZXJfcGF5bWVudF9saW1pdF9taW5vciI6IjE1MDAwIiwicHJvdG9jb2xfdmVyc2lvbiI6IjEiLCJ0ZXJtc192ZXJzaW9uIjoiMjAyNi0xMSIsInRvdGFsX2xpbWl0X21pbm9yIjpudWxsLCJ2YWxpZF9mcm9tIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidmFsaWRfdW50aWwiOiIyMDI3LTExLTAxVDAwOjAwOjAwLjAwMFoifQ==",
+      "termsHash": "583bcacb518fa997432b7c3d0b496880ef576c92470df9f67692ce66c75305ef",
+      "reason": "unexpected_field"
+    },
+    {
+      "name": "unknown frequency",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJEQUlMWSIsImlzc3VlZF9hdCI6IjIwMjYtMTEtMTZUMTA6MDA6MDAuMDAwWiIsIm1hbmRhdGVfaWQiOiI1YjBmM2M5YS02ZDFlLTRiN2EtOWMyZi0wZThkN2E2YjVjNGQiLCJtYW5kYXRlX3JlZmVyZW5jZSI6Ik1BTkRBVEUtMjAyNi0wMDAxIiwibmV4dXNfaWQiOiIxMjM0NTY3ODkiLCJub25jZSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJvZmZlcl9leHBpcmVzX2F0IjoiMjAyNi0xMS0xN1QxMDowMDowMC4wMDBaIiwicGF5ZWUiOnsiaWJhbiI6IlBMNjExMDkwMTAxNDAwMDAwNzEyMTk4MTI4NzQiLCJuYW1lIjoiRW5lcmd5IENvIn0sInBlcl9wYXltZW50X2xpbWl0X21pbm9yIjoiMTUwMDAiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRlcm1zX3ZlcnNpb24iOiIyMDI2LTExIiwidG90YWxfbGltaXRfbWlub3IiOm51bGwsInZhbGlkX2Zyb20iOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjctMTEtMDFUMDA6MDA6MDAuMDAwWiJ9",
+      "termsHash": "8c47fcd658444d4c93b8eb3fc72bfb25bc5fcc6e12b218a78833d577579eb592",
+      "reason": "invalid_value"
+    },
+    {
+      "name": "limit not an integer string",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAuMDAiLCJwcm90b2NvbF92ZXJzaW9uIjoiMSIsInRlcm1zX3ZlcnNpb24iOiIyMDI2LTExIiwidG90YWxfbGltaXRfbWlub3IiOm51bGwsInZhbGlkX2Zyb20iOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjctMTEtMDFUMDA6MDA6MDAuMDAwWiJ9",
+      "termsHash": "2b246b5312187bc2dd839fa99dacc5282d665d50df0b2d284a18049fbc9416d3",
+      "reason": "invalid_value"
+    },
+    {
+      "name": "total below the per-payment limit",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6IjEwMCIsInZhbGlkX2Zyb20iOiIyMDI2LTExLTAxVDAwOjAwOjAwLjAwMFoiLCJ2YWxpZF91bnRpbCI6IjIwMjctMTEtMDFUMDA6MDA6MDAuMDAwWiJ9",
+      "termsHash": "493ce67354eba155e91caebfcfb5eeb83b266c79d02a7963e4a40a06fb4bc780",
+      "reason": "invalid_value"
+    },
+    {
+      "name": "validity ends before it starts",
+      "mandateId": "5b0f3c9a-6d1e-4b7a-9c2f-0e8d7a6b5c4d",
+      "credentialId": "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b",
+      "termsBase64": "eyJjcmVkZW50aWFsX2lkIjoiM2YyYjhjMWUtNWQ0YS00ZTZmLTlhN2ItMWMyZDNlNGY1YTZiIiwiY3VycmVuY3kiOiJFVVIiLCJkb21haW4iOiJORVhVUy1TSUdOL01BTkRBVEUiLCJmcmVxdWVuY3kiOiJNT05USExZIiwiaXNzdWVkX2F0IjoiMjAyNi0xMS0xNlQxMDowMDowMC4wMDBaIiwibWFuZGF0ZV9pZCI6IjViMGYzYzlhLTZkMWUtNGI3YS05YzJmLTBlOGQ3YTZiNWM0ZCIsIm1hbmRhdGVfcmVmZXJlbmNlIjoiTUFOREFURS0yMDI2LTAwMDEiLCJuZXh1c19pZCI6IjEyMzQ1Njc4OSIsIm5vbmNlIjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsIm9mZmVyX2V4cGlyZXNfYXQiOiIyMDI2LTExLTE3VDEwOjAwOjAwLjAwMFoiLCJwYXllZSI6eyJpYmFuIjoiUEw2MTEwOTAxMDE0MDAwMDA3MTIxOTgxMjg3NCIsIm5hbWUiOiJFbmVyZ3kgQ28ifSwicGVyX3BheW1lbnRfbGltaXRfbWlub3IiOiIxNTAwMCIsInByb3RvY29sX3ZlcnNpb24iOiIxIiwidGVybXNfdmVyc2lvbiI6IjIwMjYtMTEiLCJ0b3RhbF9saW1pdF9taW5vciI6bnVsbCwidmFsaWRfZnJvbSI6IjIwMjYtMTEtMDFUMDA6MDA6MDAuMDAwWiIsInZhbGlkX3VudGlsIjoiMjAyNi0xMC0wMVQwMDowMDowMC4wMDBaIn0=",
+      "termsHash": "315ccf3b708347e73b1732cca97516d51f940c124fb7336fd5c1aa3348767c3e",
+      "reason": "invalid_value"
+    }
+  ]
+}

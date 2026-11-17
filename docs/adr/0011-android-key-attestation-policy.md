@@ -27,4 +27,4 @@ Android enrolment was verified with Play Integrity only. Play Integrity speaks f
 - Devices with an unlocked bootloader cannot enrol under the default settings.
 - The embedded roots must be updated when Google adds a root.
 - Imported keys (offline key, push key) are not covered.
-- The acceptance of a biometric-bound key and the SDK's key generation are verified on devices; the server tests use real device chains of keys without user authentication. See [Android key attestation](../security/attestation.md#android-key-attestation).
+- The acceptance of a biometric-bound key and the SDK's key generation can only be verified on devices, which has not been done yet ([device acceptance checklist](../engineering/DEVICE_ACCEPTANCE_CHECKLIST.md)); the server tests use real device chains of keys without user authentication. See [Android key attestation](../security/attestation.md#android-key-attestation).

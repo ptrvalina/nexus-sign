@@ -1,4 +1,4 @@
-// NXS-025: once attestation is required, credentials enrolled without
+// Once attestation is required, credentials enrolled without
 // verified attestation cannot approve new transactions.
 import { after, describe, test } from 'node:test';
 import assert from 'node:assert/strict';

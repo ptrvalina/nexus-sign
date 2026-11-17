@@ -32,16 +32,23 @@ public struct NexusSignedTransaction: Equatable {
         SignedPayload.formatMinorUnits(amountMinor, fractionDigits: SignedPayload.fractionDigits(currency: currency))
     }
 
-    /// Beneficiary for display: well-known keys first, remaining keys sorted.
+    /// Beneficiary for display: the account identifier first (iban, account
+    /// or account_number), then name and bic, then the other fields by key.
     public var beneficiaryDisplay: String { SignedPayload.beneficiaryDisplay(beneficiary) }
 
-    /// One-line summary suitable for the biometric prompt.
-    public var confirmationText: String {
-        var text = "\(operationType): \(formattedAmount) \(currency)"
-        let who = beneficiaryDisplay
-        if !who.isEmpty { text += " → \(who)" }
-        text += " • \(transactionReference)"
-        return text
+    /// Text of the Face ID / Touch ID prompt (finding D-02): the amount,
+    /// then one labelled line per beneficiary field (the account first, so a
+    /// long payee name cannot push it out of the visible part of the prompt;
+    /// then name, BIC and the other fields by key), last the operation and the
+    /// reference. Each value is on its own line after its own label. Shared
+    /// vectors fix the exact text with `NexusPromptLabels.english`.
+    public var confirmationText: String { confirmationText(labels: .english) }
+
+    public func confirmationText(labels: NexusPromptLabels) -> String {
+        var lines = ["\(formattedAmount) \(currency)"]
+        for key in SignedPayload.beneficiaryOrder(beneficiary) { lines.append("\(labels.label(for: key)): \(beneficiary[key]!)") }
+        lines.append("\(operationType) • \(transactionReference)")
+        return lines.joined(separator: "\n")
     }
 
     /// Expiry as a `Date`, parsed from the signed timestamp.
@@ -93,10 +100,13 @@ enum SignedPayload {
     indirect enum Value: Equatable {
         case string(String)
         case object([(key: String, value: Value)])
+        /// Only in documents read with `allowNull` (mandate terms).
+        case null
 
         static func == (lhs: Value, rhs: Value) -> Bool {
             switch (lhs, rhs) {
             case let (.string(a), .string(b)): return a == b
+            case (.null, .null): return true
             case let (.object(a), .object(b)):
                 return a.count == b.count && zip(a, b).allSatisfy { $0.key == $1.key && $0.value == $1.value }
             default: return false
@@ -106,11 +116,14 @@ enum SignedPayload {
 
     // MARK: - Parsing
 
-    static func parse(_ canonical: Data) throws -> NexusSignedTransaction {
+    /// Strict UTF-8, JSON, and canonical form (the bytes re-encode to
+    /// themselves). Shared by payment and mandate terms parsing; mirrors
+    /// `parseCanonicalObject` in the Android SDK.
+    static func parseCanonicalObject(_ canonical: Data, allowNull: Bool = false) throws -> [String: Value] {
         guard let text = String(data: canonical, encoding: .utf8) else {
             throw Rejected(reason: "invalid_json", detail: "payload is not valid UTF-8")
         }
-        var reader = Reader(units: Array(text.utf16))
+        var reader = Reader(units: Array(text.utf16), allowNull: allowNull)
         let document = try reader.readDocument()
         guard case let .object(pairs) = document else {
             throw Rejected(reason: "invalid_json", detail: "top level is not an object")
@@ -118,9 +131,13 @@ enum SignedPayload {
         guard encode(document) == canonical else {
             throw Rejected(reason: "not_canonical", detail: "bytes are not in canonical form")
         }
-
         var object: [String: Value] = [:]
         for pair in pairs { object[pair.key] = pair.value }
+        return object
+    }
+
+    static func parse(_ canonical: Data) throws -> NexusSignedTransaction {
+        let object = try parseCanonicalObject(canonical)
         let keys = Set(object.keys)
         let missing = fields.subtracting(keys)
         if !missing.isEmpty { throw Rejected(reason: "missing_field", detail: missing.sorted().joined(separator: ", ")) }
@@ -164,13 +181,45 @@ enum SignedPayload {
         guard matches(issuedAt, timestampPattern), matches(expiresAt, timestampPattern) else {
             throw Rejected(reason: "invalid_value", detail: "timestamps")
         }
-        for pair in pairs {
-            if case let .string(text) = pair.value, !isDisplaySafe(text) {
-                throw Rejected(reason: "invalid_value", detail: "\(pair.key) contains a control, format or separator character")
+        let authorizationID = try str("authorization_id")
+        let credentialID = try str("credential_id")
+        guard matches(authorizationID, uuidPattern), matches(credentialID, uuidPattern) else {
+            throw Rejected(reason: "invalid_value", detail: "authorization_id/credential_id")
+        }
+        let nexusID = try str("nexus_id")
+        guard matches(nexusID, nexusIDPattern) else { throw Rejected(reason: "invalid_value", detail: "nexus_id") }
+        let nonceValue = try str("nonce")
+        guard matches(nonceValue, noncePattern) else { throw Rejected(reason: "invalid_value", detail: "nonce") }
+        for (key, value) in object.sorted(by: { $0.key < $1.key }) {
+            if case let .string(text) = value, !isDisplaySafe(text) {
+                throw Rejected(reason: "invalid_value", detail: "\(key) contains a control, format or separator character")
             }
         }
-        for (key, value) in beneficiary where !isDisplaySafe(value) {
-            throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) contains a control, format or separator character")
+        if beneficiary.count > beneficiaryMaxFields {
+            throw Rejected(reason: "invalid_value", detail: "more than \(beneficiaryMaxFields) beneficiary fields")
+        }
+        for (key, value) in beneficiary {
+            // UTF-16 code units, as Auth Core and the Android SDK count.
+            if value.isEmpty || value.utf16.count > beneficiaryMaxValueLength {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) must be 1 to \(beneficiaryMaxValueLength) characters")
+            }
+            if let violation = displayTextViolation(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key): \(violation)")
+            }
+            if !accountKeys.contains(key), looksLikeIBAN(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.\(key) looks like an account number")
+            }
+            if key == "iban", !isValidIBAN(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.iban is not a valid IBAN")
+            }
+            if key == "bic", !isValidBIC(value) {
+                throw Rejected(reason: "invalid_value", detail: "beneficiary.bic is not a valid BIC")
+            }
+        }
+        for key in ["transaction_reference", "operation_type"] {
+            if let violation = displayTextViolation(try str(key)) {
+                throw Rejected(reason: "invalid_value", detail: "\(key): \(violation)")
+            }
         }
 
         return NexusSignedTransaction(
@@ -204,19 +253,34 @@ enum SignedPayload {
             if !ok { throw Rejected(reason: "response_mismatch", detail: field) }
         }
         try check("canonicalPayloadHash", hash == envelope.canonicalPayloadHash.lowercased())
-        try check("authorizationId", signed.authorizationId == envelope.authorizationId)
-        try check("nexusId", signed.nexusId == envelope.nexusId)
-        try check("credentialId", envelope.credentialId == nil || signed.credentialId == envelope.credentialId)
-        try check("transactionReference", signed.transactionReference == envelope.transactionReference)
-        try check("operationType", signed.operationType == envelope.operationType)
-        try check("amountMinor", signed.amountMinor == envelope.amountMinor)
-        try check("currency", signed.currency == envelope.currency)
-        try check("beneficiary", signed.beneficiary == envelope.beneficiary)
-        try check("policyReference", signed.policyReference == envelope.policyReference)
-        try check("policyVersion", signed.policyVersion == envelope.policyVersion)
+        try check("authorizationId", sameCodeUnits(signed.authorizationId, envelope.authorizationId))
+        try check("nexusId", sameCodeUnits(signed.nexusId, envelope.nexusId))
+        try check("credentialId", envelope.credentialId.map { sameCodeUnits(signed.credentialId, $0) } ?? true)
+        try check("transactionReference", sameCodeUnits(signed.transactionReference, envelope.transactionReference))
+        try check("operationType", sameCodeUnits(signed.operationType, envelope.operationType))
+        try check("amountMinor", sameCodeUnits(signed.amountMinor, envelope.amountMinor))
+        try check("currency", sameCodeUnits(signed.currency, envelope.currency))
+        try check("beneficiary", sameCodeUnits(signed.beneficiary, envelope.beneficiary))
+        try check("policyReference", sameCodeUnits(signed.policyReference, envelope.policyReference))
+        try check("policyVersion", sameCodeUnits(signed.policyVersion, envelope.policyVersion))
         try check("issuedAt", parseTimestamp(signed.issuedAt) == envelope.issuedAt)
         try check("expiresAt", parseTimestamp(signed.expiresAt) == envelope.expiresAt)
         return signed
+    }
+
+    /// Equality of UTF-16 code units, as in Auth Core and the Android SDK.
+    /// Swift `String ==` treats canonically equivalent strings as equal
+    /// ("é" precomposed and "e" + combining acute), which would let the
+    /// response differ from the signed bytes unnoticed (finding D-05).
+    static func sameCodeUnits(_ a: String, _ b: String) -> Bool {
+        a.utf16.elementsEqual(b.utf16)
+    }
+
+    static func sameCodeUnits(_ a: [String: String], _ b: [String: String]) -> Bool {
+        func units(_ d: [String: String]) -> [[UInt16]] {
+            d.map { Array($0.key.utf16) + [0] + Array($0.value.utf16) }.sorted { $0.lexicographicallyPrecedes($1) }
+        }
+        return a.count == b.count && units(a) == units(b)
     }
 
     // MARK: - Display helpers
@@ -255,15 +319,114 @@ enum SignedPayload {
         !value.unicodeScalars.contains { displayUnsafeCategories.contains($0.properties.generalCategory) }
     }
 
-    private static let preferredBeneficiaryKeys = ["name", "iban", "account", "account_number", "bic"]
+    /// Latin, Cyrillic, Greek, Armenian and Cherokee letters as fixed code point ranges, identical
+    /// in Auth Core, the Android SDK and the sandbox, so the decision does not
+    /// depend on the Unicode version of the device's runtime.
+    private static let confusableScripts: [[ClosedRange<UInt32>]] = [
+        [0x41...0x5A, 0x61...0x7A, 0xC0...0xD6, 0xD8...0xF6, 0xF8...0x24F, 0x1E00...0x1EFF],
+        [0x400...0x52F],
+        [0x370...0x3FF, 0x1F00...0x1FFF],
+        [0x530...0x58F],
+        [0x13A0...0x13FF, 0xAB70...0xABBF],
+    ]
+
+    /// The display text rules of authorization protocol v1 for values the
+    /// customer reads (beneficiary values, transaction_reference,
+    /// operation_type): NFC and no compatibility characters (NFKC-stable), only
+    /// the ASCII space and never doubled or at either end, only ASCII digits,
+    /// and no mix of Latin, Cyrillic, Greek, Armenian and Cherokee letters. Returns
+    /// the broken rule, or nil. Auth Core refuses to create an authorization
+    /// that breaks them; the device checks again because it trusts only the
+    /// signed bytes.
+    static func displayTextViolation(_ value: String) -> String? {
+        let scalars = value.unicodeScalars
+        if !isDisplaySafe(value) { return "control, format or separator character" }
+        if scalars.contains(where: { [0x2192, 0x00B7, 0x2022].contains($0.value) }) { return "the characters \u{2192} \u{00B7} \u{2022} are reserved for the confirmation prompt" }
+        // String equality in Swift is canonical equivalence, so compare scalars.
+        if !value.precomposedStringWithCanonicalMapping.unicodeScalars.elementsEqual(scalars) {
+            return "not in Unicode Normalization Form C"
+        }
+        if !value.precomposedStringWithCompatibilityMapping.unicodeScalars.elementsEqual(scalars) {
+            return "compatibility characters are not allowed"
+        }
+        if scalars.contains(where: { $0.properties.generalCategory == .spaceSeparator && $0.value != 0x20 }) {
+            return "only the ASCII space is allowed"
+        }
+        if scalars.first?.value == 0x20 || scalars.last?.value == 0x20 { return "leading or trailing space" }
+        var previousWasSpace = false
+        for scalar in scalars {
+            let isSpace = scalar.value == 0x20
+            if isSpace && previousWasSpace { return "repeated spaces" }
+            previousWasSpace = isSpace
+        }
+        if scalars.contains(where: { $0.properties.generalCategory == .decimalNumber && !(0x30...0x39).contains($0.value) }) {
+            return "only ASCII digits are allowed"
+        }
+        let scriptsUsed = confusableScripts.filter { ranges in
+            scalars.contains { scalar in ranges.contains { $0.contains(scalar.value) } }
+        }
+        if scriptsUsed.count > 1 { return "Latin, Cyrillic, Greek, Armenian and Cherokee letters mixed in one value" }
+        return nil
+    }
+
+    /// ISO 13616 IBAN in electronic format with valid check digits (mod 97).
+    static func isValidIBAN(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard (15...34).contains(bytes.count) else { return false }
+        for (index, byte) in bytes.enumerated() {
+            let isLetter = (65...90).contains(byte)
+            let isDigit = (48...57).contains(byte)
+            switch index {
+            case 0, 1: guard isLetter else { return false }
+            case 2, 3: guard isDigit else { return false }
+            default: guard isLetter || isDigit else { return false }
+            }
+        }
+        let check = Int(bytes[2] - 48) * 10 + Int(bytes[3] - 48)
+        guard (2...98).contains(check) else { return false }
+        var remainder = 0
+        for byte in Array(bytes[4...]) + Array(bytes[..<4]) {
+            remainder = byte >= 65 ? (remainder * 100 + Int(byte) - 55) % 97 : (remainder * 10 + Int(byte) - 48) % 97
+        }
+        return remainder == 1
+    }
+
+    /// ISO 9362 BIC: 4 letters (institution), 2 letters (country), 2 letters
+    /// or digits (location), optionally 3 letters or digits (branch).
+    static func isValidBIC(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 8 || bytes.count == 11 else { return false }
+        for (index, byte) in bytes.enumerated() {
+            let isLetter = (65...90).contains(byte)
+            let isDigit = (48...57).contains(byte)
+            guard index < 6 ? isLetter : (isLetter || isDigit) else { return false }
+        }
+        return true
+    }
+
+    /// ISO 20022 Max140Text, in UTF-16 code units; Auth Core applies the same limit.
+    static let beneficiaryMaxValueLength = 140
+    static let beneficiaryMaxFields = 16
+
+    static let accountKeys = ["iban", "account", "account_number"]
+
+    /// True when the value, without spaces and hyphens and in upper case, is a valid IBAN (finding D-02).
+    static func looksLikeIBAN(_ value: String) -> Bool {
+        isValidIBAN(String(value.unicodeScalars.filter { $0 != " " && $0 != "-" }).uppercased())
+    }
+
+    /// Keys in prompt order: the account, name, bic, then the others sorted.
+    static func beneficiaryOrder(_ beneficiary: [String: String]) -> [String] {
+        let account = accountKeys.first { beneficiary[$0] != nil }
+        let ordered = [account, "name", "bic"].compactMap { $0 }.filter { beneficiary[$0] != nil }
+        // Array.sorted on String compares Unicode scalars; keys are [a-z0-9_]
+        // (checked above), where that equals the UTF-16 order the other
+        // implementations use.
+        return ordered + beneficiary.keys.filter { !ordered.contains($0) }.sorted()
+    }
 
     static func beneficiaryDisplay(_ beneficiary: [String: String]) -> String {
-        let ordered = preferredBeneficiaryKeys.filter { beneficiary[$0] != nil }
-            + beneficiary.keys.filter { !preferredBeneficiaryKeys.contains($0) }.sorted()
-        return ordered.compactMap { key -> String? in
-            guard let value = beneficiary[key], !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-            return value
-        }.joined(separator: " · ")
+        beneficiaryOrder(beneficiary).compactMap { beneficiary[$0] }.joined(separator: " · ")
     }
 
     static func parseTimestamp(_ value: String) -> Date? {
@@ -288,6 +451,8 @@ enum SignedPayload {
         switch value {
         case let .string(s):
             writeString(s, into: &out)
+        case .null:
+            out.append(contentsOf: Array("null".utf16))
         case let .object(pairs):
             out.append(0x7B) // {
             // Array.prototype.sort() orders keys by UTF-16 code units.
@@ -326,6 +491,10 @@ enum SignedPayload {
     private static let currencyPattern = "^[A-Z]{3}$"
     private static let beneficiaryKeyPattern = "^[a-z][a-z0-9_]{0,63}$"
     private static let timestampPattern = "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    // Protocol v1 formats: lowercase UUIDs, 9-digit NEXUS ID, 32-byte nonce in lowercase hex.
+    private static let uuidPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    private static let nexusIDPattern = "^[0-9]{9}$"
+    private static let noncePattern = "^[0-9a-f]{64}$"
 
     private static func matches(_ value: String, _ pattern: String) -> Bool {
         value.range(of: pattern, options: .regularExpression) != nil
@@ -334,13 +503,15 @@ enum SignedPayload {
     // MARK: - Reader
 
     /// Minimal RFC 8259 reader limited to objects and strings (the only types
-    /// the v1 protocol uses). Works on UTF-16 code units, like Auth Core.
+    /// the v1 protocol uses), and null when `allowNull`. Works on UTF-16 code
+    /// units, like Auth Core.
     private struct Reader {
         let units: [UInt16]
+        let allowNull: Bool
         var i = 0
         var depth = 0
 
-        init(units: [UInt16]) { self.units = units }
+        init(units: [UInt16], allowNull: Bool = false) { self.units = units; self.allowNull = allowNull }
 
         mutating func readDocument() throws -> Value {
             skipWhitespace()
@@ -357,6 +528,9 @@ enum SignedPayload {
             case 0x7B?: return try readObject()
             case 0x22?: return .string(try readString())
             case 0x5B?: throw Rejected(reason: "invalid_json", detail: "arrays are not allowed")
+            case 0x6E? where allowNull && Array(units[i..<min(i + 4, units.count)]) == Array("null".utf16):
+                i += 4
+                return .null
             case nil: throw Rejected(reason: "invalid_json", detail: "unexpected end of input")
             default: throw Rejected(reason: "invalid_value", detail: "only strings and objects are allowed")
             }
@@ -443,6 +617,38 @@ enum SignedPayload {
 
         private mutating func skipWhitespace() {
             while let c = peek(), c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D { i += 1 }
+        }
+    }
+}
+
+/// Labels of the confirmation prompt. A bank app passes translated labels
+/// through `NEXUSSignConfig.promptLabels`; they label values, they never
+/// replace them. Fields without a label of their own show their key.
+public struct NexusPromptLabels: Equatable, Sendable {
+    public let iban: String
+    public let account: String
+    public let accountNumber: String
+    public let name: String
+    public let bic: String
+
+    public init(iban: String = "IBAN", account: String = "Account", accountNumber: String = "Account number", name: String = "Name", bic: String = "BIC") {
+        for label in [iban, account, accountNumber, name, bic] {
+            precondition(!label.isEmpty && label.utf16.count <= 40 && SignedPayload.displayTextViolation(label) == nil && !label.contains(":"),
+                         "prompt labels are 1 to 40 display-safe characters without a colon")
+        }
+        self.iban = iban; self.account = account; self.accountNumber = accountNumber; self.name = name; self.bic = bic
+    }
+
+    public static let english = NexusPromptLabels()
+
+    func label(for key: String) -> String {
+        switch key {
+        case "iban": return iban
+        case "account": return account
+        case "account_number": return accountNumber
+        case "name": return name
+        case "bic": return bic
+        default: return key
         }
     }
 }

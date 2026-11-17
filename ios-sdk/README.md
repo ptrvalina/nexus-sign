@@ -15,10 +15,11 @@ Native iOS SDK embedded into the bank's existing mobile application.
 1. The bank backend creates a NEXUS ID for the customer.
 2. When `bootstrap()` asks for a token, the host app gets one from its own backend, which calls Auth Core `POST /v1/mobile/sessions` with `{ nexusId, purpose: "BOOTSTRAP" }`.
 3. `NEXUSSignSDK.bootstrap()` requests a `BOOTSTRAP` token and creates three Secure Enclave keys: signing, request authentication and offline. One App Attest attestation covers all three. From then on the SDK signs every request with the authentication key; it holds no token.
-4. The bank backend creates a transaction authorization.
-5. The SDK fetches the exact authorization object and verifies it.
-6. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
-7. Auth Core verifies the signature and consumes the authorization atomically.
+4. The host app sends the credential ID and `try signingKeyFingerprint()` (the SHA-256 of the signing key, computed on the device) to its own backend, which approves exactly that key for the customer before it executes anything confirmed with it; the same after replacement and recovery ([bank credential trust](../docs/protocol/bank-credential-trust-v1.md)).
+5. The bank backend creates a transaction authorization.
+6. The SDK fetches the exact authorization object and verifies it.
+7. `approve()` signs the exact server-issued canonical bytes after biometric authentication.
+8. Auth Core verifies the signature and consumes the authorization atomically. The bank executes only after its own check of the evidence.
 
 ## Configuration
 
@@ -37,6 +38,12 @@ let sdk = NEXUSSignSDK(config: NEXUSSignConfig(
 
 `recoverySetupPromptText` (default `"Confirm to set up your recovery phrase"`) is the reason shown in the Face ID / Touch ID prompt of `generateRecoveryPhrase()`; localize it in the host app. `keychainAccessGroup`, `pushKeychainAccessGroup` and `requestTimeout` (default 10 s) are optional.
 
+`certificatePins` (new, unreleased, planned for 2.0.0) pins the public key of the host of `baseURL`: a set of `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>` strings, the same form as the Android SDK. Empty (the default) relies on the system's certificate validation only. When set, give at least two pins (the current key and a backup key kept offline) and an https URL; the system validation runs first, then a connection whose chain has none of the pinned keys is cancelled. Supported key types: P-256, P-384, RSA 2048/3072/4096. Compute a pin with:
+
+```bash
+openssl x509 -in server.pem -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64
+```
+
 | Token purpose | Lifetime | Used by |
 |---|---|---|
 | `BOOTSTRAP` | 5 minutes, single use | `bootstrap()` only |
@@ -49,6 +56,10 @@ If a device-signed request is rejected because the phone's clock is off, the SDK
 
 `isRegistered()` is true only when Auth Core has confirmed the credential (after `bootstrap()` or `recoverIdentity`) and the key is still on the device. A customer who already has an enrolled device can be enrolled again only with a `BOOTSTRAP` token that the bank backend requested with a replacement authorization after re-identifying the customer; otherwise `bootstrap()` fails with `serverError(statusCode: 409, ...)` (`ACTIVE_CREDENTIAL_EXISTS`). If enrolment fails, the current keys stay in place.
 
+## Audio and video verification calls
+
+When the bank's verification plan asks for an AUDIO or VIDEO step, the customer talks to a bank operator in the app before signing ([ADR 0017](../docs/adr/0017-in-app-audio-video-calls.md)). This SDK opens the session (`openVerificationCall`), signs the signalling (`callSignalling`) and runs the call state machine (`VerificationCallController`); the media, permissions and call screen are in the optional module [ios-sdk-calls](../ios-sdk-calls/README.md). The call never confirms the payment: after the operator's VERIFIED, call `approve` as usual.
+
 ## Offline confirmation
 
 When the bank has enabled it, the customer can confirm a transaction shown as a QR code (branch, ATM, web banking) with no network on the phone:
@@ -57,7 +68,14 @@ When the bank has enabled it, the customer can confirm a transaction shown as a 
 let challenge = try sdk.readOfflineChallenge(qrPayload: scannedText)   // verifies the bytes, no network
 show(challenge.transaction)                                             // same fields as online
 let code = try await sdk.confirmOffline(challenge)                      // Face ID / Touch ID, then 8 digits
+
+// Offline confirmation v2: when the app starts and when the connection returns
+Task { await sdk.submitPendingOfflineSignatures() }
 ```
+
+With a `NXS2.` or `NXS3.` QR code (`challenge.requiresDeviceSignature`, the default from Auth Core 2.0.0 (unreleased)) one biometric evaluation authorizes both Secure Enclave keys: the signing key signs the transaction and the signature is stored before the code is computed. Auth Core confirms the payment when the signature arrives ([offline confirmation v2](../docs/protocol/offline-confirmation-v2-deferred-signature.md)). Compiled and unit-tested in CI; not yet run on an iPhone.
+
+**A key of Auth Core's per authorization (finding D-01).** The Secure Enclave performs the ECDH with the offline key after Face ID or Touch ID, but returns the shared secret to the app process. The SDK therefore enrols with `offlineKeyAgreement: PER_AUTHORIZATION`: Auth Core keeps no offline key from enrolment and puts a fresh key of its own into each QR code (`NXS3.`), so a secret captured inside the app process serves that one authorization only ([offline v3](../docs/protocol/device-authentication-and-offline-confirmation.md#offline-v3-a-key-of-auth-cores-per-authorization-ios)). An `NXS3.` confirmation also stores the device signature, as `NXS2.` does. Devices enrolled by earlier SDK builds keep the static key until they are enrolled again. Tested with shared vectors and in CI; not yet run on an iPhone.
 
 The Secure Enclave key agreement runs inside the biometric prompt that shows the transaction. Check `isOfflineConfirmationAvailable()` before offering it. See [device authentication and offline confirmation](../docs/protocol/device-authentication-and-offline-confirmation.md).
 
@@ -80,7 +98,8 @@ When the bank uses NEXUS-SIGN secure push, Auth Core sends authorization request
 
    ```swift
    final class NotificationService: UNNotificationServiceExtension {
-       private let reader = NEXUSSignPushReader(bankID: "mybank", keychainAccessGroup: "TEAMID.com.mybank.shared")
+       // certificatePins: the same pins as NEXUSSignConfig.certificatePins, if the app sets any.
+       private let reader = NEXUSSignPushReader(bankID: "mybank", keychainAccessGroup: "TEAMID.com.mybank.shared", certificatePins: [])
 
        override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
            let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
@@ -118,14 +137,27 @@ When the bank uses NEXUS-SIGN secure push, Auth Core sends authorization request
 | `offlineConfirmationUnavailable` | The device was enrolled without offline confirmation; offer online confirmation. |
 | `pushMessageInvalid(reason:)` | A notification did not open as a NEXUS-SIGN secure push (`no_push_key`: call `registerPush` again; `decryption_failed`: altered or for another device). Show nothing from it. |
 | `invalidRecoveryPhrase` | Wrong or mistyped phrase. Detected on the device, without using a server attempt; also reported when Auth Core refuses the proof (401). |
-| `serverError(statusCode:message:)` | Auth Core rejected the request, e.g. 403 when the identity is suspended. |
+| `serverError(statusCode:message:)` | Auth Core rejected the request with this HTTP status, e.g. 403 when the identity is suspended. Used only for real HTTP answers (finding D-11). |
+| `invalidServerResponse(detail:)` | Auth Core answered in a way the protocol does not allow (format, key agreement, recovery parameters). Not retried; report it. New in 2.0. |
+| `invalidRecoverySession(detail:)` | The recovery session from the bank backend is malformed. Start a new one. New in 2.0. |
+| `invalidArgument(detail:)` | The app passed a malformed value (an ID that is not a UUID, a relay-only call without TURN). Nothing was sent. New in 2.0. |
+| `configurationInvalid(detail:)`, `randomGenerationFailed(status:)`, `cryptographicOperationFailed(detail:)` | A configuration or packaging error of the app, or a local failure of the system's cryptography. New in 2.0. |
 | `networkUnavailable` | Retry or fall back to another channel. |
 
 The SDK contains no bank OAuth client credentials and has no customer-facing UI of its own.
 
-Keys are created with `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` and are never part of a backup. The SDK's registration state lives in `UserDefaults`; if a backup is restored to another device, `isRegistered()` is false there because the keys are missing, and the app enrols the device again.
+Keys are created with `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` and are never part of a backup. The SDK's registration state and its pending offline signatures are two small files in Application Support (`NEXUSSign/<bankID>.state.json`, `<bankID>.offline-signatures.json`), each written atomically, protected until the first unlock and excluded from iCloud and computer backups (finding D-06); state written by earlier SDK builds to `UserDefaults` is moved there once. After a restore to another device the keys are missing, `isRegistered()` is false, and the app enrols the device again.
 
 If App Attest is unavailable or fails, the SDK still sends the enrolment with the reason, and Auth Core decides according to the bank's policy (`REQUIRE_VALID_ATTESTATION`, on in production).
+
+### App Attest setup in the bank app (finding D-15)
+
+App Attest needs, in the bank's app target:
+
+1. A paid Apple Developer Program team; the App ID has the **App Attest** capability enabled.
+2. The entitlement `com.apple.developer.devicecheck.appattest-environment` in the app's `.entitlements` file: `development` for debug builds, `production` for TestFlight and App Store builds. A free Apple ID cannot sign an app with this entitlement; without it `DCAppAttestService.isSupported` is false and enrolment reports attestation as unavailable.
+3. In Auth Core: `APPLE_APP_ID=<TEAMID>.<bundle identifier>` of exactly that app, and `APPLE_APP_ATTEST_ROOT_CA_PEM` with Apple's App Attestation Root CA. In production Auth Core accepts only the `production` environment; a development attestation is refused with the reason `development App Attest environment is not accepted in production`.
+4. The simulator does not support App Attest; test on a device ([device acceptance checklist](../docs/engineering/DEVICE_ACCEPTANCE_CHECKLIST.md)).
 
 ## Showing and signing a transaction ("what you see is what you sign")
 
@@ -135,7 +167,7 @@ If App Attest is unavailable or fails, the SDK still sends the enrolment with th
 let authorization = try await sdk.fetchAuthorization(authorizationID: id)
 let tx = try authorization.signedTransaction()
 amountLabel.text = "\(tx.formattedAmount) \(tx.currency)"   // e.g. "1250.00 PLN"
-beneficiaryLabel.text = tx.beneficiaryDisplay                // e.g. "Jan Kowalski · PL61…"
+beneficiaryLabel.text = tx.beneficiaryDisplay                // e.g. "PL61109010140000071219812874 · Jan Kowalski"
 referenceLabel.text = tx.transactionReference
 
 let outcome = try await sdk.approve(authorization: authorization)
@@ -145,16 +177,36 @@ let outcome = try await sdk.approve(authorization: authorization)
 
 Decode any NEXUS-SIGN payload your app receives from the bank backend (for example `NexusRecoverySession`) with `JSONDecoder.nexus()`: Auth Core timestamps carry milliseconds, which the default and `.iso8601` strategies reject.
 
+
+From 2.0.0 (unreleased) the beneficiary display and the prompt text put the account identifier first (`iban`, `account` or `account_number`), then the name, so a long name cannot push the account out of the system prompt. Beneficiary values are at most 140 characters. Your own confirmation screen should show every beneficiary field in full and wrap rather than truncate. Format: [authorization protocol, confirmation text](../docs/protocol/authorization-protocol-v1.md#confirmation-text).
+
 ## Recovery
 
 The SDK implements [recovery protocol 2](../docs/protocol/recovery-protocol-v2.md).
 
 `generateRecoveryPhrase()` creates 12 BIP-39 words and a P-256 recovery key on the device, wraps the recovery private key under a key derived from the phrase, and registers the recovery public key and the wrapped key with Auth Core. Since 2.0 the customer confirms with Face ID or Touch ID (prompt text `recoverySetupPromptText`): the registration is signed with the device's signing key, and a new phrase replaces the previous one. It throws `notRegistered` before enrolment, the biometric errors above, or `credentialInvalidated`. Neither the phrase nor the recovery private key leaves the device. The SDK refuses parameters other than protocol 2, PBKDF2-HMAC-SHA256 and a 32-byte key, iterations outside 100 000–5 000 000 and a salt shorter than 16 bytes.
 
-`recoverIdentity(session:recoveryPhrase:)` takes the `NexusRecoverySession` the bank backend received from `POST /v1/recovery/sessions`, passed on unchanged. Since 2.0 it carries `recoveryPublicKeyPem` and `wrappedRecoveryKey` next to `sessionId`, `nexusId`, `nonce`, `accessToken`, `parameters` and `expiresAt`; a session without them is refused with `serverError(statusCode: 0, ...)`. The phrase is accepted as typed or pasted (case and whitespace are normalized). The SDK opens the wrapped key with the phrase, so a wrong phrase fails on the device (`invalidRecoveryPhrase`) and uses no server attempt, then signs the recovery proof with the recovery key. It generates the replacement keys under separate keychain tags and activates them only after Auth Core confirms the recovery. A wrong phrase, a network failure or an interrupted call leaves the existing keys untouched; if the app is killed after Auth Core confirmed the recovery, the new keys are activated on next use. A recovery session allows five proofs; start a new session from the bank backend.
+`recoverIdentity(session:recoveryPhrase:)` takes the `NexusRecoverySession` the bank backend received from `POST /v1/recovery/sessions`, passed on unchanged. Since 2.0 it carries `recoveryPublicKeyPem` and `wrappedRecoveryKey` next to `sessionId`, `nexusId`, `nonce`, `accessToken`, `parameters` and `expiresAt`; a session without them is refused with `invalidRecoverySession(detail:)`. The phrase is accepted as typed or pasted (case and whitespace are normalized). The SDK opens the wrapped key with the phrase, so a wrong phrase fails on the device (`invalidRecoveryPhrase`) and uses no server attempt, then signs the recovery proof with the recovery key. It generates the replacement keys under separate keychain tags and activates them only after Auth Core confirms the recovery. A wrong phrase, a network failure or an interrupted call leaves the existing keys untouched; if the app is killed after Auth Core confirmed the recovery, the new keys are activated on next use. A recovery session allows five proofs; start a new session from the bank backend.
 
 Phrases set up with SDK 1.4 or earlier (recovery protocol 1) are refused by Auth Core 2.0; the customer sets up a new phrase with `generateRecoveryPhrase()` while the device is still enrolled.
 
 ## Tests
 
 `swift test` runs on macOS (the package declares `.macOS(.v12)` for this); CI runs it on every change. `SignedTransactionTests`, `DeviceProtocolTests`, `RecoveryProtocolTests` and `SecurePushTests` use the vectors in `Tests/NEXUSSignTests/Resources/` (`signed-payload-v1.json`, `device-protocols-v1.json`, `secure-push-v1.json`, `recovery-v2.json`). These are copies of `auth-core/test-vectors/`, because SwiftPM bundles only resources inside the package; `npm run generate:vectors` in `auth-core/` writes both, and `npm run test:vectors` fails when a copy differs. The PBKDF2 derivation of the recovery protocol uses CommonCrypto `CCKeyDerivationPBKDF`; `RecoveryProtocolTests` pins its output against `recovery-v2.json`.
+
+## Customer section, payment mandates, conversations (unreleased)
+
+These methods are not in a released version yet. CI builds them and runs their unit tests on every change; they have not been run on physical devices.
+
+| Area | Methods | Server API |
+|---|---|---|
+| Devices | `devices()`, `removeDevice(credentialId)` | `/v1/mobile/devices`, `/v1/mobile/devices/{id}/revoke` |
+| History and evidence | `history(filter)`, `evidence(authorizationId)` | `/v1/mobile/history`, `/v1/mobile/authorizations/{id}/evidence` |
+| Security log and feed | `securityEvents()`, `notifications()` | `/v1/mobile/security-events`, `/v1/mobile/notifications` |
+| Settings | `settings()`, `updateSettings(…)` (relaxing waits for the bank's hold) | `/v1/mobile/settings` |
+| Identity | `suspendIdentity(reason)` | `/v1/mobile/identity/suspend` |
+| Mandates | `mandates()`, `mandate(id)`, `mandateTerms(mandate)` (checks domain `NEXUS-SIGN/MANDATE`, mandate, device, display rules and hash), `signMandate(mandate…)` (biometric prompt from the signed terms), `mandate(id, action)` for decline, suspend, resume, revoke | `/v1/mobile/mandates…` ([payment mandates v1](../docs/protocol/payment-mandates-v1.md)) |
+| Conversations | `conversations()`, `openConversation(…)`, `conversationMessages(…)`, `sendMessage(…)`, `markRead(…)`, `requestAgent(…)`, `closeConversation(…)` | `/v1/mobile/conversations…` ([conversations](../docs/architecture/customer-conversations.md)) |
+| Calls with the bank | `requestBankCall(channel:topic:conversationID:)`, `bankCalls()`, `bankCall(callID:)`, `customerCallSignalling(for:)` with the call engine | `/v1/mobile/customer-calls…` ([customer calls](../docs/architecture/customer-calls.md)) |
+
+Show a mandate only from `mandateTerms`, never from the JSON convenience fields, in the same way as payments are shown only from the signed bytes.

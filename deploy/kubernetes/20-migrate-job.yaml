@@ -1,0 +1,42 @@
+# Applies the migrations with the ledger before a rollout
+# (docs/operations/database-migrations.md). Forward-only: take a backup first.
+# Run it once per release, for example as a pre-upgrade hook of the bank's
+# deployment tool; it waits on the migration lock if two run at once.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nexus-auth-core-migrate
+  labels: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/component: migrate, app.kubernetes.io/part-of: nexus-sign }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/component: migrate }
+    spec:
+      serviceAccountName: nexus-auth-core
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrate
+          image: registry.bank.example/nexus-sign/auth-core:2.0.0-rc.2 # CHANGE: pin by digest
+          command: ["node", "dist/cli/migrate.js"]
+          envFrom:
+            - configMapRef: { name: nexus-auth-core-config }
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: nexus-auth-core-migrate, key: DATABASE_URL } }
+            - name: REDIS_URL
+              value: rediss://unused.invalid:6379
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 256Mi }

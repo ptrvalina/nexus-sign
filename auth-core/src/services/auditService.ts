@@ -50,3 +50,25 @@ export async function recordAuditEvent(
     ],
   );
 }
+
+/**
+ * Records a security signal (an integrity violation, a rejected credential)
+ * outside the request's transaction. If the audit row cannot be written, the
+ * event goes to stderr as a pino-format error line instead of vanishing
+ * (finding A2-10); the caller's refusal stands either way.
+ */
+export async function recordSecurityEvent(
+  eventType: AuditEventType,
+  context: AuditContext,
+  details: Record<string, unknown> = {},
+  write: (line: string) => void = (line) => { process.stderr.write(line); },
+): Promise<void> {
+  try {
+    await recordAuditEvent(eventType, context, details);
+  } catch (error) {
+    write(`${JSON.stringify({
+      level: 50, time: Date.now(), msg: 'security audit event could not be recorded',
+      eventType, context, details, err: error instanceof Error ? error.message : String(error),
+    })}\n`);
+  }
+}

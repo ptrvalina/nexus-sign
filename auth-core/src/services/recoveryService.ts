@@ -2,16 +2,19 @@ import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, 
 import { pool, withTransaction } from '../db/pool';
 import { redis } from '../db/redis';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
-import { recordAuditEvent } from './auditService';
+import { recordAuditEvent, recordSecurityEvent } from './auditService';
+import { lockOpenAuthorizations } from './openAuthorizationLocks';
 import { type CredentialPlatform, type CredentialRecord } from './credentialService';
 import { NexusIdentityNotFoundError } from './nexusIdentityService';
 import { parseP256PublicKey } from '../crypto/p256PublicKey';
 import { ConflictError, ValidationError } from './errors';
 import { prepareDeviceKeys, type DeviceKeysInput } from './deviceKeysService';
 import { forgetInactivePushRegistrations } from './pushRegistrationService';
+import { queueReplacementNotice } from './pushService';
 import { getEvidenceRecord, sealCredentialEnrolment, sealRecoveryConfiguration, type EnrolmentAttestation } from './evidenceService';
 import { sealProblem } from './credentialIntegrity';
 import { enqueueWebhook } from './webhookService';
+import { setOutcomeReason } from './outcomeReason';
 
 /**
  * Account recovery, protocol 2 (docs/protocol/recovery-protocol-v2.md).
@@ -53,6 +56,21 @@ export const RECOVERY_WRAP_SALT = 'NEXUS-SIGN/RECOVERY-WRAP/v2';
 export class RecoveryNotConfiguredError extends Error {
   constructor() { super('Recovery has not been configured for this NEXUS ID'); this.name = 'RecoveryNotConfiguredError'; }
 }
+/**
+ * A recovery phrase recovers the identity once (audit finding A2-02): after a
+ * completed recovery the recovered device must set up a new phrase, so a
+ * phished phrase cannot take the identity back after the owner recovered it.
+ * Used means a completed recovery at or after the configuration was stored.
+ */
+async function assertPhraseNotUsed(runner: Pick<import('pg').PoolClient, 'query'>, nexusId: string): Promise<void> {
+  const used = await runner.query(
+    `SELECT 1 FROM recovery_sessions r JOIN nexus_identities i ON i.nexus_id = r.nexus_id
+      WHERE r.nexus_id = $1 AND r.used_at IS NOT NULL AND r.used_at >= coalesce(i.recovery_updated_at, '-infinity'::timestamptz) LIMIT 1`, [nexusId]);
+  if ((used.rowCount ?? 0) > 0) {
+    throw new ConflictError('This recovery phrase was already used; the customer must set up a new recovery phrase on the recovered device', 'RECOVERY_PHRASE_USED');
+  }
+}
+
 export class RecoverySessionNotFoundError extends Error {
   constructor() { super('Recovery session not found or expired'); this.name = 'RecoverySessionNotFoundError'; }
 }
@@ -184,12 +202,11 @@ export async function createRecoverySession(bankCustomerRef: string, clientId: s
   if (row.recovery_protocol !== RECOVERY_PROTOCOL) {
     throw new ConflictError('The recovery phrase uses retired protocol 1; the customer must set up a new recovery phrase', 'RECOVERY_PROTOCOL_RETIRED');
   }
-  const failures = await pool.query<{ failures: string }>(
-    `SELECT COALESCE(SUM(failed_attempt_count), 0) AS failures FROM recovery_sessions
-     WHERE nexus_id = $1 AND created_at > now() - interval '${RECOVERY_FAILURE_WINDOW}'`, [row.nexus_id]);
-  if (Number(failures.rows[0]?.failures ?? 0) >= MAX_IDENTITY_FAILURES) {
-    await recordAuditEvent('recovery_locked', { nexusId: row.nexus_id, actor: `bank:${clientId}` }, { failures: Number(failures.rows[0]?.failures) });
-    throw new ConflictError('Too many failed recovery attempts for this customer; try again later', 'RECOVERY_LOCKED');
+  await assertPhraseNotUsed(pool, row.nexus_id);
+  const failures = await identityRecoveryFailures(pool, row.nexus_id);
+  if (failures >= MAX_IDENTITY_FAILURES) {
+    await recordAuditEvent('recovery_locked', { nexusId: row.nexus_id, actor: `bank:${clientId}` }, { failures });
+    throw recoveryLocked();
   }
   // What the device receives must be what it registered.
   if (!row.recovery_public_key_pem || !row.recovery_wrapped_key) throw new RecoveryNotConfiguredError();
@@ -244,6 +261,16 @@ export interface CompleteRecoveryInput {
   hsm: HsmAdapter;
 }
 
+/** Failed recovery proofs of a NEXUS ID, across all its sessions, in RECOVERY_FAILURE_WINDOW. */
+async function identityRecoveryFailures(runner: Pick<import('pg').PoolClient, 'query'>, nexusId: string): Promise<number> {
+  const result = await runner.query<{ failures: string }>(
+    `SELECT COALESCE(SUM(failed_attempt_count), 0) AS failures FROM recovery_sessions
+     WHERE nexus_id = $1 AND created_at > now() - interval '${RECOVERY_FAILURE_WINDOW}'`, [nexusId]);
+  return Number(result.rows[0]?.failures ?? 0);
+}
+
+const recoveryLocked = () => new ConflictError('Too many failed recovery attempts for this customer; try again later', 'RECOVERY_LOCKED');
+
 export async function completeRecovery(input: CompleteRecoveryInput): Promise<RecoveryResult> {
   // A wrong proof must be committed as a failed attempt; throwing inside the
   // transaction would roll back the attempt counter and the audit event. The
@@ -258,6 +285,7 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     const accessTokenHash = createHash('sha256').update(input.accessToken).digest();
     if (!s.access_token_hash || s.access_token_hash.length !== accessTokenHash.length || !timingSafeEqual(s.access_token_hash, accessTokenHash)) throw new RecoverySessionNotFoundError();
     if (s.attempt_count >= MAX_ATTEMPTS) throw new RecoverySessionNotFoundError();
+    await lockOpenAuthorizations(tx, s.nexus_id);
     const identity = await tx.query<{ nexus_id: string; recovery_protocol: number | null; recovery_public_key_pem: string | null; recovery_wrapped_key: Buffer | null; recovery_evidence_id: string | null }>(
       `SELECT nexus_id, recovery_protocol, recovery_public_key_pem, recovery_wrapped_key, recovery_evidence_id
        FROM nexus_identities WHERE nexus_id=$1 AND client_id=$2 AND status='ACTIVE'
@@ -270,6 +298,11 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
       throw new ConflictError('The recovery phrase uses retired protocol 1; the customer must set up a new recovery phrase', 'RECOVERY_PROTOCOL_RETIRED');
     }
     if (!i.recovery_public_key_pem || !i.recovery_wrapped_key) throw new RecoveryNotConfiguredError();
+    await assertPhraseNotUsed(tx, s.nexus_id);
+    // The identity-wide limit applies to every attempt, not only when a session
+    // is opened: sessions opened in parallel share it (finding A2-04). The
+    // identity row is locked above, so attempts of one identity are serialized.
+    if (await identityRecoveryFailures(tx, s.nexus_id) >= MAX_IDENTITY_FAILURES) throw recoveryLocked();
     await assertRecoveryKeyIntegrity(tx, s.nexus_id, i.recovery_evidence_id, i.recovery_public_key_pem, i.recovery_wrapped_key);
     const proof = decodeBase64(input.proofB64);
     const signed = recoveryProofSigningInput({ sessionId: s.recovery_session_id, nonceB64: s.nonce.toString('base64'), nexusId: s.nexus_id, newSigningKeySpki: spkiOf(newPublicKey.pem) });
@@ -284,6 +317,11 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     const oldCredentials = await tx.query<{ credential_id: string; key_version: number }>(
       `SELECT credential_id,key_version FROM credentials WHERE nexus_id=$1 AND state = 'ACTIVE' FOR UPDATE`, [s.nexus_id]);
     const revokedIds = oldCredentials.rows.map((c) => c.credential_id);
+    // Announced on the old device while it can still be reached, as for a
+    // device replacement (audit finding A2-02): the owner learns that the
+    // identity moved, also when someone else recovered it with a phished phrase.
+    for (const credentialId of revokedIds) await queueReplacementNotice(tx, s.client_id, s.nexus_id, credentialId);
+    await setOutcomeReason(tx, 'IDENTITY_RECOVERED');
     if (revokedIds.length > 0) await tx.query(`UPDATE credentials SET state='REVOKED',revoked_at=now() WHERE credential_id = ANY($1::uuid[])`, [revokedIds]);
     await tx.query(`UPDATE authorization_requests SET state='CANCELLED' WHERE nexus_id=$1 AND state='PENDING_USER'`, [s.nexus_id]);
     await forgetInactivePushRegistrations(tx, s.nexus_id);
@@ -292,10 +330,10 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     const keys = prepareDeviceKeys(newId, newPublicKey.pem, input.deviceKeys ?? {});
     const created = await tx.query<{ credential_id: string; key_version: number }>(
       `INSERT INTO credentials (credential_id,nexus_id,key_algorithm,public_key_pem,platform,security_level,attestation_status,state,key_version,activated_at,
-         auth_public_key_pem,offline_public_key_pem,offline_server_public_key_pem,offline_secret_encrypted)
-       VALUES ($1,$2,'ES256',$3,$4,$5,$6,'ACTIVE',$7,now(),$8,$9,$10,$11) RETURNING credential_id,key_version`,
+         auth_public_key_pem,offline_public_key_pem,offline_server_public_key_pem,offline_secret_encrypted,offline_key_agreement)
+       VALUES ($1,$2,'ES256',$3,$4,$5,$6,'ACTIVE',$7,now(),$8,$9,$10,$11,$12) RETURNING credential_id,key_version`,
       [newId, s.nexus_id, newPublicKey.pem, input.platform, input.securityLevel, input.attestationStatus, nextVersion,
-        keys.authPublicKeyPem, keys.offlinePublicKeyPem, keys.offlineServerPublicKeyPem, keys.offlineSecretEncrypted]);
+        keys.authPublicKeyPem, keys.offlinePublicKeyPem, keys.offlineServerPublicKeyPem, keys.offlineSecretEncrypted, keys.offlineKeyAgreement]);
     const enrolment = await sealCredentialEnrolment(tx, input.hsm, {
       nexusId: s.nexus_id,
       credentialId: newId,
@@ -314,13 +352,14 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     await recordAuditEvent('credential_created', { nexusId: s.nexus_id }, { credentialId: newId, reason: 'RECOVERY', keyVersion: created.rows[0].key_version, enrolmentEvidenceHash: enrolment.evidenceHash }, tx);
     await recordAuditEvent('recovery_completed', { nexusId: s.nexus_id }, { recoverySessionId: input.sessionId, credentialId: newId, protocol: i.recovery_protocol }, tx);
     await enqueueWebhook(s.client_id, 'identity.recovered', { nexusId: s.nexus_id, newCredentialId: newId, revokedCredentialIds: revokedIds }, tx);
-    return { nexusId: s.nexus_id, credentialId: newId, keyVersion: created.rows[0].key_version, offlineServerPublicKeyPem: keys.offlineServerPublicKeyPem };
+    return { nexusId: s.nexus_id, credentialId: newId, keyVersion: created.rows[0].key_version, offlineServerPublicKeyPem: keys.offlineServerPublicKeyPem,
+      offlineKeyAgreement: keys.offlinePublicKeyPem ? keys.offlineKeyAgreement : null };
   });
   if (outcome === 'INVALID_PROOF') throw new InvalidRecoveryProofError();
   return outcome;
 }
 
-export interface RecoveryResult { nexusId: string; credentialId: string; keyVersion: number; offlineServerPublicKeyPem: string | null }
+export interface RecoveryResult { nexusId: string; credentialId: string; keyVersion: number; offlineServerPublicKeyPem: string | null; offlineKeyAgreement: 'STATIC' | 'PER_AUTHORIZATION' | null }
 
 /**
  * The stored recovery key and wrapped key must be the ones sealed when the
@@ -335,7 +374,7 @@ async function assertRecoveryKeyIntegrity(
   kdf?: { saltB64: string; iterations: number },
 ): Promise<void> {
   const fail = async (reason: string): Promise<never> => {
-    await recordAuditEvent('integrity_violation', { nexusId }, { reason: `recovery key: ${reason}` }).catch(() => undefined);
+    await recordSecurityEvent('integrity_violation', { nexusId }, { reason: `recovery key: ${reason}` });
     throw new ConflictError('Recovery configuration failed its integrity check', 'RECOVERY_INTEGRITY');
   };
   if (!evidenceId) return fail('no sealed recovery configuration');

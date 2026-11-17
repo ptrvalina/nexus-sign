@@ -31,8 +31,9 @@ RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack 
       /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
       /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 
-RUN addgroup -S nexus && adduser -S nexus -G nexus
-USER nexus
+# A fixed numeric user, so Kubernetes can verify runAsNonRoot (deploy/kubernetes).
+RUN addgroup -S -g 10001 nexus && adduser -S -u 10001 -G nexus nexus
+USER 10001:10001
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1

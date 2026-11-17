@@ -93,4 +93,14 @@ final class RecoveryProtocolTests: XCTestCase {
         XCTAssertEqual(RecoveryProtocol.seed(phrase: typed, salt: salt, iterations: 1),
                        RecoveryProtocol.seed(phrase: words, salt: salt, iterations: 1))
     }
+
+    /// Same cases as the Android SDK (finding D-10): Unicode White_Space
+    /// separates words; a zero-width space does not.
+    func testUnicodeSpacesSeparateWordsAsOnAndroid() {
+        let allZero = Array(repeating: "abandon", count: 11) + ["about"]
+        for space in ["\u{00A0}", "\u{3000}", "\u{2009}", "\u{202F}", "\u{2028}", "\u{0085}"] {
+            XCTAssertEqual(RecoveryPhrase.normalized([allZero.joined(separator: space)]), allZero, space.unicodeScalars.first.map { String($0.value, radix: 16) } ?? "")
+        }
+        XCTAssertFalse(RecoveryPhrase.isWellFormed([allZero.joined(separator: "\u{200B}")]))
+    }
 }

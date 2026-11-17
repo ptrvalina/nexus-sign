@@ -37,6 +37,16 @@ public struct NEXUSSignConfig {
     /// recovery phrase. Localize it in the host app.
     public let recoverySetupPromptText: String
 
+    /// Optional public-key pins for the host of `baseURL`:
+    /// `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>`, the form the
+    /// Android SDK (OkHttp) uses. Empty (the default) relies on the system's
+    /// certificate validation only. When set, give at least two pins (the
+    /// current key and a backup); a connection whose chain matches none of
+    /// them fails. The system validation still runs first.
+    public let certificatePins: Set<String>
+    /// Labels of the confirmation prompt, translated by the bank app if it wants (finding D-02).
+    public let promptLabels: NexusPromptLabels
+
     public init(
         bankID: String,
         baseURL: URL,
@@ -44,7 +54,9 @@ public struct NEXUSSignConfig {
         keychainAccessGroup: String? = nil,
         pushKeychainAccessGroup: String? = nil,
         requestTimeout: TimeInterval = 10,
-        recoverySetupPromptText: String = "Confirm to set up your recovery phrase"
+        recoverySetupPromptText: String = "Confirm to set up your recovery phrase",
+        certificatePins: Set<String> = [],
+        promptLabels: NexusPromptLabels = .english
     ) {
         // Enrolment tokens and signed requests travel to this URL. Plain HTTP is
         // accepted only for a server on this machine (simulator testing).
@@ -57,6 +69,10 @@ public struct NEXUSSignConfig {
         self.pushKeychainAccessGroup = pushKeychainAccessGroup ?? keychainAccessGroup
         self.requestTimeout = requestTimeout
         self.recoverySetupPromptText = recoverySetupPromptText
+        precondition(certificatePins.isEmpty || (certificatePins.count >= 2 && certificatePins.allSatisfy(CertificatePinning.isWellFormedPin) && baseURL.scheme == "https"),
+                     "NEXUSSignConfig.certificatePins must be empty or at least two sha256/<base64> pins for an https baseURL")
+        self.certificatePins = certificatePins
+        self.promptLabels = promptLabels
     }
 }
 

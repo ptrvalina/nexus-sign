@@ -16,7 +16,7 @@ export interface AuthenticatedRequest extends GatewayRequest {
 
 /**
  * With REQUIRE_MTLS_HEADER the token must also match the client certificate
- * the gateway verified (NXS-012).
+ * the gateway verified.
  */
 export async function authenticateBankClient(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
   try {

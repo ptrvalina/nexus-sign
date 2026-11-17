@@ -60,7 +60,7 @@ function validate(input: PushRegistrationInput, device: DeviceContext): void {
     if (device.platform !== 'IOS') throw new ValidationError('APNs registration requires an iOS credential');
     if (!APNS_TOKEN.test(input.deviceToken)) throw new ValidationError('deviceToken is not an APNs device token');
     if (!input.apnsEnvironment) throw new ValidationError('apnsEnvironment is required for APNs');
-    // Development builds of the app are not production customers (NXS-037).
+    // Development builds of the app are not production customers.
     if (input.apnsEnvironment === 'DEVELOPMENT' && env.NODE_ENV === 'production') {
       throw new ValidationError('apnsEnvironment DEVELOPMENT is not accepted in production');
     }

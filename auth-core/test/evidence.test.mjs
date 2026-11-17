@@ -120,6 +120,15 @@ test('the device signature is verified offline, so a re-sealed record with alter
 
   const otherRecord = payload('e', null, signedBytes('f'));
   assert.ok(verifyEvidenceRecord(await seal(hsm, otherRecord), key).some((p) => p.includes('different authorization')));
+
+  // Finding B-07: a valid signature by a key of another type or curve is refused.
+  for (const [type, options, encoding] of [['ec', { namedCurve: 'P-384' }, 'der'], ['rsa', { modulusLength: 2048 }, undefined], ['ed25519', {}, undefined]]) {
+    const other = generateKeyPairSync(type, options);
+    const record = payload('g', null);
+    record.credentialPublicKeyPem = other.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    record.signature = sign(type === 'ed25519' ? null : 'sha256', signedBytes('g'), encoding ? { key: other.privateKey, dsaEncoding: encoding } : other.privateKey).toString('base64');
+    assert.ok(verifyEvidenceRecord(await seal(hsm, record), key).some((p) => p.includes('not an ECDSA P-256 key')), type);
+  }
 });
 
 test('an offline confirmation is sealed and chained, but its code is not treated as a device signature', async () => {
@@ -143,15 +152,16 @@ test('an offline confirmation is sealed and chained, but its code is not treated
 
 // --- Schema 3: enrolment provenance, numbering, chain head ---
 
-async function chainV3(hsm) {
+async function chainV3(hsm, sealedExtra = {}) {
   const keyId = await hsm.evidenceKeyId();
   const records = [];
   const append = async (recordType, body) => {
     const previous = records.at(-1);
-    const sealedPayload = { schemaVersion: '3', recordType, nexusId: '123456789', chainSequence: records.length + 1, previousEvidenceHash: previous?.evidenceHash ?? null, sealKeyId: keyId, ...body };
+    const sealedPayload = { schemaVersion: '3', recordType, nexusId: '123456789', ...sealedExtra, chainSequence: records.length + 1, previousEvidenceHash: previous?.evidenceHash ?? null, sealKeyId: keyId, ...body };
     const hash = evidenceHash(sealedPayload);
     const { signature } = await hsm.signEvidence(Buffer.from(hash, 'hex'));
-    const record = { recordType, authorizationId: body.authorizationId ?? null, nexusId: '123456789', credentialId: CREDENTIAL, chainSequence: records.length + 1, sealedPayload, evidenceHash: hash, previousEvidenceHash: sealedPayload.previousEvidenceHash, hsmSignature: signature.toString('base64') };
+    // Export shape (mapEvidence): the columns that repeat sealed values, including seal key and schema.
+    const record = { recordType, authorizationId: body.authorizationId ?? null, nexusId: '123456789', credentialId: CREDENTIAL, chainSequence: records.length + 1, sealedPayload, evidenceHash: hash, previousEvidenceHash: sealedPayload.previousEvidenceHash, hsmSignature: signature.toString('base64'), sealKeyId: keyId, schemaVersion: '3' };
     records.push(record);
     return record;
   };
@@ -229,4 +239,82 @@ test('the verifier trusts only keys passed out of band: exit 0 with --public-key
   assert.match(selfConsistent.stdout, /EVIDENCE_SELF_CONSISTENT .*hsm_seal=verified_with_export_keys/);
   assert.match(selfConsistent.stderr, /WARNING/);
   assert.equal(verify(`--public-keys=${join(dir, 'other.pem')}`).status, 1, 'a key not used by the HSM makes the chain invalid');
+});
+
+test('the verifier binds an export to the expected customer and authorization (audit B-10)', async () => {
+  const hsm = new SoftwareHsmAdapter();
+  const records = await chainV3(hsm);
+  const key = await hsm.evidencePublicKeyPem();
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-verify-subject-'));
+  writeFileSync(join(dir, 'keys.pem'), key);
+  const file = join(dir, 'chain.json');
+  writeFileSync(file, JSON.stringify({ nexusId: '123456789', records, evidencePublicKeys: [key], head: { chainSequence: 3, evidenceHash: records[2].evidenceHash } }));
+  const run = (...extra) => spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-evidence.mjs', import.meta.url)), file, `--public-keys=${join(dir, 'keys.pem')}`, '--allow-unchecked-head', ...extra], { encoding: 'utf8' });
+  const authorizationId = records.find((r) => r.sealedPayload.authorizationId)?.sealedPayload.authorizationId;
+  assert.ok(authorizationId, 'the test chain has a confirmation');
+  assert.equal(run('--expect-nexus-id=123456789').status, 0);
+  const otherCustomer = run('--expect-nexus-id=987654321');
+  assert.equal(otherCustomer.status, 1);
+  assert.match(otherCustomer.stderr, /belongs to NEXUS ID 123456789, not 987654321/);
+  assert.equal(run(`--expect-authorization-id=${authorizationId}`).status, 0);
+  const otherAuthorization = run('--expect-authorization-id=00000000-0000-4000-8000-000000000000');
+  assert.equal(otherAuthorization.status, 1);
+  assert.match(otherAuthorization.stderr, /no sealed record of authorization/);
+});
+
+test('the verifier binds an export to the bank sealed in it (finding B-10)', async () => {
+  const hsm = new SoftwareHsmAdapter();
+  const key = await hsm.evidencePublicKeyPem();
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-verify-bank-'));
+  writeFileSync(join(dir, 'keys.pem'), key);
+  const run = (records, ...extra) => {
+    const file = join(dir, `e-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(file, JSON.stringify({ nexusId: '123456789', evidencePublicKeys: [key], records }));
+    return spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-evidence.mjs', import.meta.url)), file, `--public-keys=${join(dir, 'keys.pem')}`, '--allow-unchecked-head', ...extra], { encoding: 'utf8' });
+  };
+  const sealedForBankA = await chainV3(hsm, { clientId: 'bank-a' });
+  const ok = run(sealedForBankA, '--expect-client-id=bank-a');
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  const otherBank = run(sealedForBankA, '--expect-client-id=bank-b');
+  assert.equal(otherBank.status, 1);
+  assert.match(otherBank.stderr, /sealed for bank bank-a, not bank-b/);
+  // Changing the bank in the export breaks the seal, not only the check.
+  const moved = structuredClone(sealedForBankA);
+  moved[0].sealedPayload.clientId = 'bank-b';
+  assert.equal(run(moved, '--expect-client-id=bank-b').status, 1);
+  // Records sealed before the bank identifier was sealed: the check cannot pass.
+  const older = run(await chainV3(hsm), '--expect-client-id=bank-a');
+  assert.equal(older.status, 1);
+  assert.match(older.stderr, /sealed without a bank identifier/);
+  assert.equal(run(await chainV3(hsm)).status, 0, 'without the option an older chain stays valid');
+});
+
+test('the verifier does not call a chain valid when its end was not checked (audit B-05)', async () => {
+  const hsm = new SoftwareHsmAdapter();
+  const records = await chainV3(hsm);
+  const key = await hsm.evidencePublicKeyPem();
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-verify-head-'));
+  writeFileSync(join(dir, 'keys.pem'), key);
+  const run = (exported, ...extra) => {
+    const file = join(dir, `e-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(file, JSON.stringify({ nexusId: '123456789', evidencePublicKeys: [key], ...exported }));
+    return spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-evidence.mjs', import.meta.url)), file, `--public-keys=${join(dir, 'keys.pem')}`, ...extra], { encoding: 'utf8' });
+  };
+  const head = { chainSequence: 3, evidenceHash: records[2].evidenceHash };
+  // Whole chain, no head the bank kept: valid seals, but exit 4, not 0.
+  const unchecked = run({ records, head });
+  assert.equal(unchecked.status, 4, unchecked.stdout + unchecked.stderr);
+  assert.match(unchecked.stdout, /head=not_checked/);
+  assert.equal(run({ records, head }, '--allow-unchecked-head').status, 0);
+  // The last record removed: the export's own head shows it.
+  const truncated = run({ records: records.slice(0, 2), head }, '--allow-unchecked-head');
+  assert.equal(truncated.status, 1, truncated.stdout + truncated.stderr);
+  assert.match(truncated.stderr, /records missing at the end of the chain/);
+  // Removed together with the export's head: only a head the bank kept shows it.
+  assert.equal(run({ records: records.slice(0, 2) }).status, 4);
+  assert.equal(run({ records: records.slice(0, 2) }, `--expect-head=3:${records[2].evidenceHash}`).status, 1);
+  // Nothing at all is never a valid chain.
+  const empty = run({ records: [], head: null }, '--allow-unchecked-head');
+  assert.equal(empty.status, 1);
+  assert.match(empty.stderr, /no records/);
 });

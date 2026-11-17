@@ -23,7 +23,8 @@ const completeSchema = z.object({
   securityLevel: z.string().min(1).max(32),
   authPublicKeyPem: z.string().min(1).max(4096),
   offlinePublicKeyPem: z.string().min(1).max(4096).optional(),
-  deviceAttestation: z.record(z.unknown()).default({}),
+  offlineKeyAgreement: z.enum(['STATIC', 'PER_AUTHORIZATION']).optional(),
+  deviceAttestation: z.record(z.string(), z.unknown()).default({}),
 });
 
 export function buildRecoveryRouter(hsmAdapter: HsmAdapter): Router {
@@ -52,7 +53,7 @@ export function buildRecoveryRouter(hsmAdapter: HsmAdapter): Router {
       const body = completeSchema.parse(req.body);
       const sessionId = z.string().uuid().parse(req.params.sessionId);
       const nonce = await getRecoveryAttestationBinding(sessionId, token);
-      const deviceKeys = { authPublicKeyPem: body.authPublicKeyPem, offlinePublicKeyPem: body.offlinePublicKeyPem };
+      const deviceKeys = { authPublicKeyPem: body.authPublicKeyPem, offlinePublicKeyPem: body.offlinePublicKeyPem, offlineKeyAgreement: body.offlineKeyAgreement };
       const binding = buildAttestationBinding(nonce, body.newPublicKeyPem, deviceKeys);
       const verdict = await verifyDeviceAttestation(body.deviceAttestation, binding,
         { challenge: nonce, signingPublicKeyPem: body.newPublicKeyPem, authPublicKeyPem: body.authPublicKeyPem });

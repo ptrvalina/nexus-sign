@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
+import { sealedOutcomes } from '../observability/metrics';
 import type { PoolClient } from 'pg';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { pool } from '../db/pool';
 import { canonicalJson } from './canonicalAuthorization';
 import { NotFoundError } from './errors';
+import { enqueueWebhook } from './webhookService';
 
 /**
  * Evidence, schema version 3 (docs/protocol/evidence-format.md, ADR 0009).
@@ -15,7 +17,15 @@ import { NotFoundError } from './errors';
  *                        CREDENTIAL_ENROLLED record of the signing credential;
  *   CREDENTIAL_ENROLLED  the public keys of a credential and the attestation
  *                        material that admitted them;
- *   RECOVERY_CONFIGURED  the recovery public key a device registered.
+ *   RECOVERY_CONFIGURED  the recovery public key a device registered;
+ *   AUTHORIZATION_OUTCOME an authorization that ended without a confirmation
+ *                        (REJECTED, EXPIRED, CANCELLED, OFFLINE_UNSIGNED),
+ *                        with its reason and the transaction it was about;
+ *   CREDENTIAL_REVOKED   a credential that was revoked, with the reason.
+ *
+ * Outcomes are recorded by database triggers in evidence_outcomes in the
+ * transaction that changes the state (migration 025) and sealed afterwards
+ * by sealPendingOutcomes(), so a state change cannot happen without them.
  *
  * Each record seals { schemaVersion, recordType, nexusId, chainSequence,
  * previousEvidenceHash, sealKeyId, ...body }:
@@ -37,7 +47,7 @@ import { NotFoundError } from './errors';
  */
 export const EVIDENCE_SCHEMA_VERSION = '3';
 
-export type EvidenceRecordType = 'AUTHORIZATION' | 'CREDENTIAL_ENROLLED' | 'RECOVERY_CONFIGURED';
+export type EvidenceRecordType = 'AUTHORIZATION' | 'CREDENTIAL_ENROLLED' | 'RECOVERY_CONFIGURED' | 'AUTHORIZATION_OUTCOME' | 'CREDENTIAL_REVOKED' | 'MANDATE';
 
 export interface ChainPosition {
   evidenceId: string;
@@ -61,8 +71,13 @@ export interface AuthorizationEvidenceInput {
   signatureAlgorithm: string;
   /** DEVICE_SIGNATURE: ECDSA by the device signing key, verifiable by anyone.
    * OFFLINE_CODE: HMAC with a key shared by device and Auth Core; proves the
-   * device produced the code but is not verifiable by a third party. */
-  confirmationMethod: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE';
+   * device produced the code but is not verifiable by a third party.
+   * OFFLINE_SIGNED (offline confirmation v2): the accepted code and the
+   * device's ECDSA signature over the same bytes, uploaded later; the
+   * signature is verifiable like DEVICE_SIGNATURE. */
+  confirmationMethod: 'DEVICE_SIGNATURE' | 'OFFLINE_CODE' | 'OFFLINE_SIGNED';
+  /** OFFLINE_SIGNED only: the accepted code's tag and the two times. */
+  offline?: { offlineCodeTag: string; offlineCodeAcceptedAt: string; deferredSignatureReceivedAt: string };
   keyVersion: number;
   policyReference: string;
   policyVersion: string;
@@ -72,11 +87,10 @@ export interface AuthorizationEvidenceInput {
   correlationId: string | null;
 }
 
-/** Why a credential was enrolled. */
-/** Reasons sealed by this version. Chains written by 1.x and 2.0.0-rc.1 can
+/** Why a credential was enrolled. Reasons sealed by this version. Chains written by 1.x and 2.0.0-rc.1 can
  * also hold `ROTATION` and `BANK_PROVISIONED`, from the removed bank-side
  * provisioning endpoints; verifiers accept any reason string. */
-export type EnrolmentReason = 'ENROLMENT' | 'REPLACEMENT' | 'RECOVERY' | 'BASELINE';
+export type EnrolmentReason = 'ENROLMENT' | 'REPLACEMENT' | 'ADDITION' | 'RECOVERY' | 'BASELINE';
 
 /** The attestation material that admitted a credential, as stored in the
  * sealed record. `material` holds what a third party can re-check (the App
@@ -138,6 +152,7 @@ export function evidenceHash(sealedPayload: Record<string, unknown>): string {
 
 interface RecordColumns {
   authorizationId: string | null;
+  mandateId?: string | null;
   credentialId: string;
   transactionReference?: string;
   canonicalPayloadHash?: string;
@@ -172,11 +187,16 @@ async function appendRecord(
   const previousEvidenceHash = previous.rows[0]?.evidence_hash ?? null;
   const chainSequence = Number(previous.rows[0]?.chain_sequence ?? 0) + 1;
   const sealKeyId = await hsm.evidenceKeyId();
+  // The bank the identity belongs to is sealed too, so an export proves which
+  // bank a record is for (finding B-10). Records sealed before it lack it.
+  const bank = await tx.query<{ client_id: string }>(`SELECT client_id FROM nexus_identities WHERE nexus_id = $1`, [nexusId]);
+  const clientId = bank.rows[0]?.client_id;
 
   const sealedPayload = {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     recordType,
     nexusId,
+    ...(clientId ? { clientId } : {}),
     chainSequence,
     previousEvidenceHash,
     sealKeyId,
@@ -191,26 +211,84 @@ async function appendRecord(
        record_type, authorization_id, nexus_id, credential_id, chain_sequence, transaction_reference, canonical_payload_hash,
        signature, signature_algorithm, key_version, policy_version, attestation_verdict, verified_at, consumed_at, result,
        correlation_id, previous_evidence_hash, evidence_hash, hsm_signature, hsm_key_version, seal_key_id, schema_version,
-       verification_factors, sealed_payload, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,clock_timestamp())
+       verification_factors, sealed_payload, mandate_id, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,clock_timestamp())
      RETURNING evidence_id`,
     [recordType, columns.authorizationId, nexusId, columns.credentialId, chainSequence, columns.transactionReference ?? null,
       columns.canonicalPayloadHash ?? null, columns.signature ?? null, columns.signatureAlgorithm ?? null, columns.keyVersion ?? null,
       columns.policyVersion ?? null, columns.attestationVerdict ?? null, columns.verifiedAt ?? null, columns.result ?? null,
       columns.correlationId ?? null, previousEvidenceHash, hash, seal.signature.toString('base64'), seal.keyVersion, sealKeyId,
-      EVIDENCE_SCHEMA_VERSION, JSON.stringify(columns.verificationFactors ?? []), JSON.stringify(sealedPayload)],
+      EVIDENCE_SCHEMA_VERSION, JSON.stringify(columns.verificationFactors ?? []), JSON.stringify(sealedPayload), columns.mandateId ?? null],
   );
+  // Every new chain head goes to the bank (transactional outbox), so
+  // the bank holds HSM-sealed checkpoints that Auth Core cannot take back;
+  // verify-evidence --heads detects records removed after any of them.
+  if (clientId) {
+    await enqueueWebhook(clientId, 'evidence.appended', {
+      nexusId, recordType, evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash,
+      previousEvidenceHash, sealKeyId, hsmSignature: seal.signature.toString('base64'),
+    }, tx);
+  }
   return { evidenceId: inserted.rows[0].evidence_id, chainSequence, evidenceHash: hash };
+}
+
+export type MandateEvent = 'SIGNED' | 'DECLINED' | 'SUSPENDED' | 'RESUMED' | 'REVOKED' | 'WITHDRAWN' | 'EXPIRED';
+
+export interface MandateEvidenceInput {
+  nexusId: string;
+  mandateId: string;
+  credentialId: string;
+  event: MandateEvent;
+  /** SHA-256 of the canonical terms; every event names the terms it is about. */
+  termsHash: string;
+  mandateReference: string;
+  reason: string;
+  occurredAt: Date;
+  /** The credential's sealed enrolment, which proves its key. */
+  enrolmentEvidenceHash: string | null;
+  /** SIGNED only: the terms bytes, the device signature over them and the key. */
+  signed?: { termsBase64: string; signature: string; signatureFormat: 'der' | 'raw'; publicKeyPem: string };
+}
+
+/** Seals one event of a payment mandate, in the transaction that makes it. */
+export async function sealMandateEvent(tx: PoolClient, hsm: HsmAdapter, input: MandateEvidenceInput): Promise<ChainPosition> {
+  const body: Record<string, unknown> = {
+    mandateId: input.mandateId,
+    credentialId: input.credentialId,
+    event: input.event,
+    termsHash: input.termsHash,
+    mandateReference: input.mandateReference,
+    reason: input.reason,
+    occurredAt: input.occurredAt.toISOString(),
+    enrolmentEvidenceHash: input.enrolmentEvidenceHash,
+  };
+  if (input.signed) {
+    body.signedTermsBase64 = input.signed.termsBase64;
+    body.signature = input.signed.signature;
+    body.signatureFormat = input.signed.signatureFormat;
+    body.signatureAlgorithm = 'ES256';
+    body.credentialPublicKeyPem = input.signed.publicKeyPem;
+  }
+  return appendRecord(tx, hsm, input.nexusId, 'MANDATE', body, {
+    authorizationId: null, mandateId: input.mandateId, credentialId: input.credentialId,
+    canonicalPayloadHash: input.termsHash, result: input.event, signature: input.signed?.signature,
+    signatureAlgorithm: input.signed ? 'ES256' : undefined,
+  });
 }
 
 /** Seals a confirmed authorization, in the transaction that consumes it. */
 export async function sealAuthorizationEvidence(tx: PoolClient, hsm: HsmAdapter, input: AuthorizationEvidenceInput): Promise<ChainPosition> {
-  const factors = await tx.query<{ channel: string; status: string; provider_reference: string | null; assertion_hash: string | null; completed_at: Date | null }>(
-    `SELECT channel, status, provider_reference, assertion_hash, completed_at
+  const factors = await tx.query<{ channel: string; status: string; provider_reference: string | null; assertion_hash: string | null; completed_at: Date | null; result_method: string | null; result_issuer: string | null }>(
+    `SELECT channel, status, provider_reference, assertion_hash, completed_at, result_method, result_issuer
      FROM verification_sessions WHERE authorization_id = $1 ORDER BY created_at ASC`, [input.authorizationId]);
+  // method: PROVIDER (signed result token; issuer "<providerId>/<keyId>",
+  // assertionHash = SHA-256 of the token) or OPERATOR (issuer = the bank
+  // operator's username). Sessions closed without a result have neither.
   const verificationFactors = factors.rows.map((row) => ({
     channel: row.channel,
     status: row.status,
+    method: row.result_method,
+    issuer: row.result_issuer,
     providerReference: row.provider_reference,
     assertionHash: row.assertion_hash,
     completedAt: row.completed_at?.toISOString() ?? null,
@@ -227,6 +305,7 @@ export async function sealAuthorizationEvidence(tx: PoolClient, hsm: HsmAdapter,
     signatureFormat: input.signatureFormat,
     signatureAlgorithm: input.signatureAlgorithm,
     confirmationMethod: input.confirmationMethod,
+    ...(input.offline ?? {}),
     keyVersion: input.keyVersion,
     policyReference: input.policyReference,
     policyVersion: input.policyVersion,
@@ -289,6 +368,127 @@ export async function sealRecoveryConfiguration(tx: PoolClient, hsm: HsmAdapter,
   return position;
 }
 
+interface OutcomeRow {
+  outcome_id: string; subject: 'AUTHORIZATION' | 'CREDENTIAL'; authorization_id: string | null; credential_id: string;
+  nexus_id: string; outcome: string; reason: string; occurred_at: Date;
+}
+
+/**
+ * Seals outcomes recorded by the database triggers of migration 025 into
+ * the evidence chain, oldest first, each in its own transaction. Rows are
+ * claimed with FOR UPDATE SKIP LOCKED, so several instances can run it, and
+ * a row is linked to its record once (the table refuses a second link).
+ * Returns the number sealed.
+ */
+export async function sealPendingOutcomes(hsm: HsmAdapter, limit = 100): Promise<number> {
+  let sealed = 0;
+  for (; sealed < limit; sealed += 1) {
+    const done = await withTransactionOn(async (tx) => {
+      const claimed = await tx.query<OutcomeRow>(
+        `SELECT outcome_id, subject, authorization_id, credential_id, nexus_id, outcome, reason, occurred_at
+           FROM evidence_outcomes WHERE evidence_id IS NULL ORDER BY occurred_at, outcome_id LIMIT 1 FOR UPDATE SKIP LOCKED`);
+      const row = claimed.rows[0];
+      if (!row) return false;
+      const position = row.subject === 'AUTHORIZATION' ? await sealAuthorizationOutcome(tx, hsm, row) : await sealCredentialRevocation(tx, hsm, row);
+      await tx.query(`UPDATE evidence_outcomes SET evidence_id = $2, sealed_at = clock_timestamp() WHERE outcome_id = $1`, [row.outcome_id, position.evidenceId]);
+      return { subject: row.subject, outcome: row.outcome };
+    });
+    if (!done) break;
+    sealedOutcomes.inc({ subject: done.subject, outcome: done.outcome });
+  }
+  return sealed;
+}
+
+/** Outcomes recorded but not yet sealed, and the age of the oldest (seconds). */
+export async function unsealedOutcomes(): Promise<{ count: number; oldestSeconds: number }> {
+  const r = await pool.query<{ count: string; oldest: string | null }>(
+    `SELECT count(*) AS count, extract(epoch FROM now() - min(occurred_at)) AS oldest FROM evidence_outcomes WHERE evidence_id IS NULL`);
+  return { count: Number(r.rows[0].count), oldestSeconds: Math.max(0, Math.floor(Number(r.rows[0].oldest ?? 0))) };
+}
+
+async function withTransactionOn<T>(fn: (tx: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function credentialFacts(tx: PoolClient, credentialId: string): Promise<{ state: string; platform: string; securityLevel: string; enrolmentEvidenceHash: string | null }> {
+  const r = await tx.query<{ state: string; platform: string; security_level: string; enrolment_hash: string | null }>(
+    `SELECT c.state, c.platform, c.security_level, e.evidence_hash AS enrolment_hash
+       FROM credentials c LEFT JOIN evidence_records e ON e.evidence_id = c.enrolment_evidence_id WHERE c.credential_id = $1`, [credentialId]);
+  const row = r.rows[0];
+  if (!row) throw new Error(`credential ${credentialId} of an outcome was not found`);
+  return { state: row.state, platform: row.platform, securityLevel: row.security_level, enrolmentEvidenceHash: row.enrolment_hash };
+}
+
+async function sealAuthorizationOutcome(tx: PoolClient, hsm: HsmAdapter, row: OutcomeRow): Promise<ChainPosition> {
+  const a = (await tx.query<{ transaction_reference: string; canonical_payload_hash: string; operation_type: string; amount_minor: string;
+    currency: string; policy_reference: string; policy_version: string; issued_at: Date; expires_at: Date; correlation_id: string | null }>(
+    `SELECT transaction_reference, canonical_payload_hash, operation_type, amount_minor::text AS amount_minor, currency, policy_reference,
+            policy_version, issued_at, expires_at, correlation_id
+       FROM authorization_requests WHERE authorization_id = $1`, [row.authorization_id])).rows[0];
+  if (!a) throw new Error(`authorization ${row.authorization_id} of an outcome was not found`);
+  const credential = await credentialFacts(tx, row.credential_id);
+  const factors = await tx.query<{ channel: string; status: string; result_method: string | null; result_issuer: string | null; completed_at: Date | null }>(
+    `SELECT channel, status, result_method, result_issuer, completed_at FROM verification_sessions WHERE authorization_id = $1 ORDER BY created_at ASC`,
+    [row.authorization_id]);
+  const verificationFactors = factors.rows.map((f) => ({
+    channel: f.channel, status: f.status, method: f.result_method, issuer: f.result_issuer, completedAt: f.completed_at?.toISOString() ?? null,
+  }));
+  return appendRecord(tx, hsm, row.nexus_id, 'AUTHORIZATION_OUTCOME', {
+    outcomeId: row.outcome_id,
+    authorizationId: row.authorization_id,
+    credentialId: row.credential_id,
+    transactionReference: a.transaction_reference,
+    canonicalPayloadHash: a.canonical_payload_hash,
+    operationType: a.operation_type,
+    amountMinor: a.amount_minor,
+    currency: a.currency,
+    issuedAt: a.issued_at.toISOString(),
+    expiresAt: a.expires_at.toISOString(),
+    outcome: row.outcome,
+    reason: row.reason,
+    occurredAt: row.occurred_at.toISOString(),
+    policyReference: a.policy_reference,
+    policyVersion: a.policy_version,
+    credentialState: credential.state,
+    device: { platform: credential.platform, securityLevel: credential.securityLevel },
+    enrolmentEvidenceHash: credential.enrolmentEvidenceHash,
+    correlationId: a.correlation_id,
+    verificationFactors,
+  }, {
+    authorizationId: row.authorization_id,
+    credentialId: row.credential_id,
+    transactionReference: a.transaction_reference,
+    canonicalPayloadHash: a.canonical_payload_hash,
+    policyVersion: a.policy_version,
+    result: row.outcome,
+    correlationId: a.correlation_id,
+    verificationFactors,
+  });
+}
+
+async function sealCredentialRevocation(tx: PoolClient, hsm: HsmAdapter, row: OutcomeRow): Promise<ChainPosition> {
+  const credential = await credentialFacts(tx, row.credential_id);
+  return appendRecord(tx, hsm, row.nexus_id, 'CREDENTIAL_REVOKED', {
+    outcomeId: row.outcome_id,
+    credentialId: row.credential_id,
+    reason: row.reason,
+    revokedAt: row.occurred_at.toISOString(),
+    device: { platform: credential.platform, securityLevel: credential.securityLevel },
+    enrolmentEvidenceHash: credential.enrolmentEvidenceHash,
+  }, { authorizationId: null, credentialId: row.credential_id, result: 'REVOKED' });
+}
+
 /** One record by ID, for integrity checks. */
 export async function getEvidenceRecord(runner: Pick<PoolClient, 'query'>, evidenceId: string): Promise<SealedEvidence | null> {
   const result = await runner.query<EvidenceRow>(`SELECT * FROM evidence_records WHERE evidence_id = $1`, [evidenceId]);
@@ -341,11 +541,13 @@ export async function getAuthorizationEvidencePosition(authorizationId: string):
   return row ? { evidenceId: row.evidence_id, chainSequence: Number(row.chain_sequence), evidenceHash: row.evidence_hash } : null;
 }
 
-interface EvidenceRow {
+export interface EvidenceRow {
   evidence_id: string; record_type: EvidenceRecordType; authorization_id: string | null; nexus_id: string; credential_id: string;
   chain_sequence: string; sealed_payload: Record<string, unknown> | null; evidence_hash: string; previous_evidence_hash: string | null;
   hsm_signature: string; hsm_key_version: number; seal_key_id: string | null; schema_version: string; created_at: Date;
 }
+
+export function mapEvidenceRow(row: EvidenceRow): SealedEvidence { return mapEvidence(row); }
 
 function mapEvidence(row: EvidenceRow): SealedEvidence {
   return {

@@ -1,11 +1,12 @@
-// NXS-010 (audit attribution, append-only audit log), NXS-011 (admin bank
-// scope, TOTP, four-eyes approvals) and NXS-012 (bank tokens bound to the
+// (audit attribution, append-only audit log), (admin bank
+// scope, TOTP, four-eyes approvals) and (bank tokens bound to the
 // client certificate) against a live Auth Core and PostgreSQL.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { skipWithoutServices, startAuthCore } from './support/harness.mjs';
 import { adminSession, bankSession, call, totp } from './support/actors.mjs';
+import { redisModule } from '../support/resp-redis.mjs';
 
 const fingerprint = (label) => createHash('sha256').update(label).digest('hex');
 
@@ -89,6 +90,11 @@ describe('admin console', { skip: skipWithoutServices }, () => {
     assert.ok(logs.every((l) => l.clientId === 'bank-a'), 'no other bank\'s audit records');
     const viewed = await server.db.query(`SELECT actor, nexus_id FROM audit_logs WHERE event_type = 'admin_identity_viewed'`);
     assert.deepEqual(viewed.rows, [{ actor: 'admin:operator-a', nexus_id: identityA.nexusId }]);
+    // The logout record names the account and its bank (finding A2-07).
+    assert.equal((await a.call('POST', '/admin/api/logout')).status, 200);
+    const loggedOut = await server.db.query(`SELECT actor, client_id FROM audit_logs WHERE event_type = 'admin_logout'`);
+    assert.deepEqual(loggedOut.rows, [{ actor: 'admin:operator-a', client_id: 'bank-a' }]);
+    assert.equal((await a.call('GET', '/admin/api/me')).status, 401, 'the session ended');
   });
 
   test('revocation needs a second admin with access to the bank', async () => {
@@ -119,7 +125,7 @@ describe('admin console', { skip: skipWithoutServices }, () => {
     assert.equal((await approver.call('POST', `/admin/api/approvals/${id}/approve`)).status, 409, 'executed once');
   });
 
-  test('NXS-032: resetting the password ends existing sessions, and cross-origin state changes are refused', async () => {
+  test('Resetting the password ends existing sessions, and cross-origin state changes are refused', async () => {
     const account = await server.createAdmin('session-check', 'operator', { clientId: 'bank-a' });
     const session = await adminSession(server, account);
     assert.equal((await session.call('GET', '/admin/api/me')).status, 200);
@@ -130,6 +136,29 @@ describe('admin console', { skip: skipWithoutServices }, () => {
     assert.equal(sameSite.status, 200, sameSite.text);
     await server.createAdmin('session-check', 'operator', { clientId: 'bank-a' });
     assert.equal((await session.call('GET', '/admin/api/me')).status, 401, 'the old session ended');
+  });
+
+  test('a failed webhook delivery can be sent again, by an operator of its bank only (finding A2-08)', async () => {
+    const failed = async (clientId) => (await server.db.query(
+      `INSERT INTO webhook_deliveries (event_id, client_id, event_type, payload, status, retry_count, last_error)
+       VALUES (gen_random_uuid(), $1, 'authorization.verified', '{}', 'FAILED', 8, 'HTTP 503') RETURNING id, event_id`, [clientId])).rows[0];
+    const own = await failed('bank-a');
+    const other = await failed('bank-b');
+    // operator-a's TOTP codes are used up by earlier tests: a fresh operator of bank-a.
+    const a = await adminSession(server, await server.createAdmin('redeliver-a', 'operator', { clientId: 'bank-a' }));
+    const redeliver = (id) => a.call('POST', `/admin/api/webhook-deliveries/${id}/redeliver`);
+    const accepted = await redeliver(own.id);
+    assert.equal(accepted.status, 202, accepted.text);
+    assert.equal(accepted.json.eventId, own.event_id, 'the event ID is kept, so the bank can deduplicate');
+    const row = (await server.db.query(`SELECT retry_count, event_id FROM webhook_deliveries WHERE id = $1`, [own.id])).rows[0];
+    assert.deepEqual(row, { retry_count: 0, event_id: own.event_id });
+    const audit = await server.db.query(`SELECT actor, client_id, details FROM audit_logs WHERE event_type = 'webhook_redelivery_requested'`);
+    assert.equal(audit.rows.length, 1);
+    assert.equal(audit.rows[0].actor, 'admin:redeliver-a');
+    assert.equal(audit.rows[0].client_id, 'bank-a');
+    assert.equal((await redeliver(other.id)).status, 404, 'another bank\'s delivery is not visible');
+    const delivered = (await server.db.query(`INSERT INTO webhook_deliveries (event_id, client_id, event_type, payload, status) VALUES (gen_random_uuid(), 'bank-a', 'x', '{}', 'DELIVERED') RETURNING id`)).rows[0];
+    assert.equal((await redeliver(delivered.id)).status, 404, 'only FAILED deliveries are sent again');
   });
 
   test('the database refuses an approval executed by its requester', async () => {
@@ -188,5 +217,35 @@ describe('bank certificate binding', { skip: skipWithoutServices }, () => {
     assert.equal((await tokenRequest(credsA, gateway('cert-a'))).status, 401, 'the old certificate is no longer accepted');
     assert.notEqual(run(['bank-a', 'not-hex']).status, 0);
     assert.notEqual(run(['no-such-bank', fingerprint('x')]).status, 0);
+  });
+});
+
+
+describe('admin login while the account-wide failure limit is hit (finding A2-06)', { skip: skipWithoutServices }, () => {
+  let server; let redis; let operator; let noTotp;
+  before(async () => {
+    server = await startAuthCore({ env: { ADMIN_MFA_REQUIRED: 'false' } });
+    operator = await server.createAdmin('locked-operator', 'operator');
+    noTotp = await server.createAdmin('no-totp-operator', 'operator');
+    await server.db.query(`UPDATE admin_users SET totp_secret_encrypted = NULL WHERE username = 'no-totp-operator'`);
+    const Redis = redisModule();
+    redis = new Redis(server.env.REDIS_URL);
+    // As after 50 failures from any set of addresses: only the account-wide key is locked.
+    for (const user of ['locked-operator', 'no-totp-operator']) await redis.set(`admin_login_failures_user:${user}:locked`, '1', 'EX', 900);
+  });
+  after(async () => { redis?.disconnect(); await server?.stop(); });
+
+  test('the owner still logs in with password and TOTP; guesses get 429', async () => {
+    assert.equal((await adminSession(server, operator)).login.status, 200, 'password + TOTP passes the account-wide lock');
+    const wrong = await adminSession(server, { ...operator, password: 'not-the-password' });
+    assert.equal(wrong.login.status, 429);
+    assert.ok(Number(wrong.login.headers.get('retry-after')) > 0);
+  });
+
+  test('an account without TOTP cannot pass the lock, even with the right password', async () => {
+    assert.equal(noTotp.password.length > 0, true);
+    assert.equal((await adminSession(server, noTotp)).login.status, 429);
+    await redis.del('admin_login_failures_user:no-totp-operator:locked');
+    assert.equal((await adminSession(server, noTotp)).login.status, 200, 'without the lock the password alone is enough when MFA is not required');
   });
 });

@@ -50,14 +50,24 @@ test('canonical JSON is key-order independent, round-trips and is valid UTF-8', 
   }
 });
 
-test('a beneficiary value is accepted exactly when it has no unsafe character (incl. lone surrogates, NXS-033)', () => {
+test('a beneficiary value is accepted exactly when it satisfies the display text rules', () => {
+  // Independent oracle for the rules in docs/protocol/authorization-protocol-v1.md.
+  const LATIN = new Set(['a', 'Z', 'ł', 'é']);
+  const CYRILLIC = new Set(['Ж']);
   for (let i = 0; i < RUNS; i += 1) {
     const chars = Array.from({ length: 1 + int(20) }, () => (int(6) === 0 ? pick(UNSAFE) : pick(SAFE)));
     const text = chars.join('');
-    const unsafe = chars.some((c) => UNSAFE.includes(c));
+    // Surrogates are judged on the joined text: \ud800 followed by \udfff is a
+    // valid pair (U+103FF), not two lone surrogates.
+    const refused = chars.some((c) => UNSAFE.includes(c) && !/[\ud800-\udfff]/.test(c))
+      || !text.isWellFormed()
+      || text !== text.normalize('NFC')
+      || /^\p{Zs}|\p{Zs}$/u.test(text)
+      || text.includes('  ')
+      || (chars.some((c) => LATIN.has(c)) && chars.some((c) => CYRILLIC.has(c)));
     let accepted = true;
     try { canonicalizeAuthorization({ ...base, beneficiary: { name: text, iban: 'PL61109010140000071219812874' } }); } catch { accepted = false; }
-    if (accepted === unsafe) fail(unsafe ? 'unsafe value accepted' : 'safe value refused', text);
+    if (accepted === refused) fail(refused ? 'unsafe value accepted' : 'safe value refused', text);
   }
   assert.ok(DISPLAY_UNSAFE_CHARACTER.test('\ud83d'), 'a lone high surrogate is unsafe');
   assert.ok(!DISPLAY_UNSAFE_CHARACTER.test('😀'), 'a surrogate pair is a normal character');

@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
+import java.text.Normalizer
 
 /**
  * The transaction exactly as the device will sign it.
@@ -39,13 +40,20 @@ data class NexusSignedTransaction(
     /** Beneficiary for display: well-known keys first, remaining keys sorted. */
     fun beneficiaryDisplay(): String = SignedPayload.beneficiaryDisplay(beneficiary)
 
-    /** One-line summary suitable for the biometric prompt. */
-    fun confirmationText(): String = buildString {
-        append(operationType).append(": ").append(formattedAmount()).append(' ').append(currency)
-        val who = beneficiaryDisplay()
-        if (who.isNotEmpty()) append(" → ").append(who)
-        append(" • ").append(transactionReference)
-    }
+    /**
+     * Text of the biometric prompt (finding D-02): the amount, then one
+     * labelled line per beneficiary field (the account first, so a long payee
+     * name cannot push it out of the visible part of the prompt; then name,
+     * BIC and the other fields by key), last the operation and the reference.
+     * Each value is on its own line after its own label, so a name cannot be
+     * read as the account. Shared vectors fix the exact text with
+     * [NexusPromptLabels.ENGLISH].
+     */
+    fun confirmationText(labels: NexusPromptLabels = NexusPromptLabels.ENGLISH): String =
+        (listOf("${formattedAmount()} $currency") +
+            SignedPayload.beneficiaryOrder(beneficiary).map { "${labels.labelFor(it)}: ${beneficiary.getValue(it)}" } +
+            "$operationType • $transactionReference").joinToString("\n")
+
 }
 
 /**
@@ -93,8 +101,24 @@ internal object SignedPayload {
     private val CURRENCY = Regex("^[A-Z]{3}$")
     private val BENEFICIARY_KEY = Regex("^[a-z][a-z0-9_]{0,63}$")
     private val TIMESTAMP = Regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$")
+    // Protocol v1 formats (authorization-protocol-v1.md): lowercase UUIDs,
+    // 9-digit NEXUS ID, 32-byte nonce in lowercase hex.
+    private val UUID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    private val NEXUS_ID = Regex("^[0-9]{9}$")
+    private val NONCE = Regex("^[0-9a-f]{64}$")
 
     class Rejected(val reason: String, detail: String) : Exception("$reason: $detail")
+
+    /**
+     * Strict UTF-8, JSON, and canonical form (the bytes re-encode to
+     * themselves). Shared by payment and mandate terms parsing.
+     */
+    fun parseCanonicalObject(canonical: ByteArray, allowNull: Boolean = false): Map<*, *> {
+        val text = decodeUtf8Strict(canonical)
+        val obj = JsonReader(text, allowNull).readDocument() as? Map<*, *> ?: throw Rejected("invalid_json", "top level is not an object")
+        if (!encode(obj).contentEquals(canonical)) throw Rejected("not_canonical", "bytes are not in canonical form")
+        return obj
+    }
 
     fun parse(canonical: ByteArray): NexusSignedTransaction {
         val text = decodeUtf8Strict(canonical)
@@ -123,11 +147,22 @@ internal object SignedPayload {
         if (!AMOUNT.matches(str("amount_minor"))) throw Rejected("invalid_value", "amount_minor")
         if (!CURRENCY.matches(str("currency"))) throw Rejected("invalid_value", "currency")
         if (!TIMESTAMP.matches(str("issued_at")) || !TIMESTAMP.matches(str("expires_at"))) throw Rejected("invalid_value", "timestamps")
+        if (!UUID.matches(str("authorization_id")) || !UUID.matches(str("credential_id"))) throw Rejected("invalid_value", "authorization_id/credential_id")
+        if (!NEXUS_ID.matches(str("nexus_id"))) throw Rejected("invalid_value", "nexus_id")
+        if (!NONCE.matches(str("nonce"))) throw Rejected("invalid_value", "nonce")
         for ((key, value) in obj) {
             if (value is String && !isDisplaySafe(value)) throw Rejected("invalid_value", "$key contains a control, format or separator character")
         }
+        if (beneficiary.size > BENEFICIARY_MAX_FIELDS) throw Rejected("invalid_value", "more than $BENEFICIARY_MAX_FIELDS beneficiary fields")
         for ((key, value) in beneficiary) {
-            if (!isDisplaySafe(value)) throw Rejected("invalid_value", "beneficiary.$key contains a control, format or separator character")
+            if (value.isEmpty() || value.length > BENEFICIARY_MAX_VALUE_LENGTH) throw Rejected("invalid_value", "beneficiary.$key must be 1 to $BENEFICIARY_MAX_VALUE_LENGTH characters")
+            displayTextViolation(value)?.let { throw Rejected("invalid_value", "beneficiary.$key: $it") }
+            if (key !in ACCOUNT_KEYS && looksLikeIban(value)) throw Rejected("invalid_value", "beneficiary.$key looks like an account number")
+            if (key == "iban" && !isValidIban(value)) throw Rejected("invalid_value", "beneficiary.iban is not a valid IBAN")
+            if (key == "bic" && !BIC.matches(value)) throw Rejected("invalid_value", "beneficiary.bic is not a valid BIC")
+        }
+        for (key in listOf("transaction_reference", "operation_type")) {
+            displayTextViolation(str(key))?.let { throw Rejected("invalid_value", "$key: $it") }
         }
 
         return NexusSignedTransaction(
@@ -201,6 +236,7 @@ internal object SignedPayload {
     private val DISPLAY_UNSAFE_TYPES: Set<Int> = setOf(
         Character.CONTROL.toInt(), Character.FORMAT.toInt(),
         Character.LINE_SEPARATOR.toInt(), Character.PARAGRAPH_SEPARATOR.toInt(),
+        Character.SURROGATE.toInt(),
     )
 
     /** False for text with control, format (bidi, zero-width) or separator
@@ -208,13 +244,72 @@ internal object SignedPayload {
      * signed value. Auth Core applies the same rule. */
     fun isDisplaySafe(value: String): Boolean = value.codePoints().noneMatch { Character.getType(it) in DISPLAY_UNSAFE_TYPES }
 
-    private val PREFERRED_BENEFICIARY_KEYS = listOf("name", "iban", "account", "account_number", "bic")
+    /** ISO 20022 Max140Text, in UTF-16 code units; Auth Core applies the same limit. */
+    const val BENEFICIARY_MAX_VALUE_LENGTH = 140
+    const val BENEFICIARY_MAX_FIELDS = 16
 
-    fun beneficiaryDisplay(beneficiary: Map<String, String>): String {
-        val ordered = PREFERRED_BENEFICIARY_KEYS.filter { it in beneficiary } +
-            beneficiary.keys.filter { it !in PREFERRED_BENEFICIARY_KEYS }.sorted()
-        return ordered.mapNotNull { beneficiary[it]?.takeIf(String::isNotBlank) }.joinToString(" · ")
+    private val IBAN = Regex("[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}")
+    private val BIC = Regex("[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?")
+
+    /** Latin, Cyrillic, Greek, Armenian and Cherokee letters as fixed code point ranges, identical
+     * in Auth Core, the iOS SDK and the sandbox, so the decision does not
+     * depend on the Unicode version of the device's runtime. */
+    private val CONFUSABLE_SCRIPTS = listOf(
+        Regex("[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]"),
+        Regex("[\u0400-\u052F]"),
+        Regex("[\u0370-\u03FF\u1F00-\u1FFF]"),
+        Regex("[\u0530-\u058F]"),
+        Regex("[\u13A0-\u13FF\uAB70-\uABBF]"),
+    )
+
+    /**
+     * The display text rules of authorization protocol v1 for values the
+     * customer reads (beneficiary values, transaction_reference, operation_type):
+     * NFC and no compatibility characters (NFKC-stable), only the ASCII space and
+     * never doubled or at either end, only ASCII digits, and no mix of Latin,
+     * Cyrillic, Greek, Armenian and Cherokee letters in one value. Returns the broken
+     * rule, or null. Auth Core refuses to create an authorization that breaks
+     * them; the device checks again because it trusts only the signed bytes.
+     */
+    fun displayTextViolation(value: String): String? {
+        if (!isDisplaySafe(value)) return "control, format or separator character"
+        if (value.any { it == '\u2192' || it == '\u00B7' || it == '\u2022' }) return "the characters \u2192 \u00B7 \u2022 are reserved for the confirmation prompt"
+        if (!Normalizer.isNormalized(value, Normalizer.Form.NFC)) return "not in Unicode Normalization Form C"
+        if (!Normalizer.isNormalized(value, Normalizer.Form.NFKC)) return "compatibility characters are not allowed"
+        if (value.codePoints().anyMatch { Character.getType(it) == Character.SPACE_SEPARATOR.toInt() && it != 0x20 }) return "only the ASCII space is allowed"
+        if (value.startsWith(' ') || value.endsWith(' ')) return "leading or trailing space"
+        if (value.contains("  ")) return "repeated spaces"
+        if (value.codePoints().anyMatch { Character.getType(it) == Character.DECIMAL_DIGIT_NUMBER.toInt() && it !in 0x30..0x39 }) return "only ASCII digits are allowed"
+        if (CONFUSABLE_SCRIPTS.count { it.containsMatchIn(value) } > 1) return "Latin, Cyrillic, Greek, Armenian and Cherokee letters mixed in one value"
+        return null
     }
+
+    /** ISO 13616 IBAN in electronic format with valid check digits (mod 97). */
+    fun isValidIban(value: String): Boolean {
+        if (!IBAN.matches(value) || value.substring(2, 4).toInt() !in 2..98) return false
+        var remainder = 0
+        for (ch in value.substring(4) + value.substring(0, 4)) {
+            remainder = if (ch in 'A'..'Z') (remainder * 100 + (ch - 'A' + 10)) % 97 else (remainder * 10 + (ch - '0')) % 97
+        }
+        return remainder == 1
+    }
+
+    val ACCOUNT_KEYS = listOf("iban", "account", "account_number")
+
+    /** True when the value, without spaces and hyphens and in upper case, is a valid IBAN (finding D-02). */
+    fun looksLikeIban(value: String): Boolean = isValidIban(value.filter { it != ' ' && it != '-' }.uppercase(java.util.Locale.ROOT))
+
+    /** Keys in prompt order: the account, name, bic, then the others sorted. */
+    fun beneficiaryOrder(beneficiary: Map<String, String>): List<String> {
+        val account = ACCOUNT_KEYS.firstOrNull { it in beneficiary }
+        val ordered = listOfNotNull(account, "name", "bic").filter { it in beneficiary }
+        return ordered + beneficiary.keys.filter { it !in ordered }.sorted()
+    }
+
+    /** Account identifier first (the first of iban, account, account_number),
+     * then name and bic, then the other fields by key. */
+    fun beneficiaryDisplay(beneficiary: Map<String, String>): String =
+        beneficiaryOrder(beneficiary).map { beneficiary.getValue(it) }.joinToString(" · ")
 
     // --- Canonical encoding ---
     // Mirrors JSON.stringify over recursively sorted keys.
@@ -224,6 +319,7 @@ internal object SignedPayload {
     private fun write(out: StringBuilder, value: Any?) {
         when (value) {
             is String -> writeString(out, value)
+            JsonNull -> out.append("null")
             is Map<*, *> -> {
                 out.append('{')
                 // String.compareTo orders by UTF-16 code units, like Array.prototype.sort().
@@ -267,10 +363,14 @@ internal object SignedPayload {
         throw Rejected("invalid_json", "payload is not valid UTF-8")
     }
 
+    /** JSON null, accepted only where a protocol allows it (mandate terms:
+     * total_limit_minor). Payment bytes never contain it. */
+    object JsonNull
+
     /** Minimal RFC 8259 reader limited to objects and strings (the only types
-     * the v1 protocol uses). Numbers, arrays, booleans and null are rejected;
-     * duplicate keys are rejected explicitly. */
-    private class JsonReader(private val s: String) {
+     * the v1 protocol uses), and null when [allowNull]. Numbers, arrays and
+     * booleans are rejected; duplicate keys are rejected explicitly. */
+    private class JsonReader(private val s: String, private val allowNull: Boolean = false) {
         private var i = 0
         private var depth = 0
 
@@ -286,6 +386,7 @@ internal object SignedPayload {
             '{' -> readObject()
             '"' -> readString()
             '[' -> throw Rejected("invalid_json", "arrays are not allowed")
+            'n' -> if (allowNull && s.startsWith("null", i)) { i += 4; JsonNull } else throw Rejected("invalid_value", "only strings and objects are allowed")
             null -> throw Rejected("invalid_json", "unexpected end of input")
             else -> throw Rejected("invalid_value", "only strings and objects are allowed")
         }
@@ -350,4 +451,31 @@ internal object SignedPayload {
 
         private fun skipWs() { while (i < s.length && s[i] in " \t\r\n") i++ }
     }
+}
+
+/**
+ * Labels of the confirmation prompt. A bank app passes translated labels
+ * through [NEXUSSignConfig.promptLabels]; they label values, they never
+ * replace them. Fields without a label of their own show their key.
+ */
+data class NexusPromptLabels(
+    val iban: String = "IBAN",
+    val account: String = "Account",
+    val accountNumber: String = "Account number",
+    val name: String = "Name",
+    val bic: String = "BIC",
+) {
+    init {
+        for (label in listOf(iban, account, accountNumber, name, bic)) {
+            require(label.isNotBlank() && label.length <= 40 && SignedPayload.displayTextViolation(label) == null && ':' !in label) {
+                "prompt labels are 1 to 40 display-safe characters without a colon"
+            }
+        }
+    }
+
+    fun labelFor(key: String): String = when (key) {
+        "iban" -> iban; "account" -> account; "account_number" -> accountNumber; "name" -> name; "bic" -> bic; else -> key
+    }
+
+    companion object { val ENGLISH = NexusPromptLabels() }
 }

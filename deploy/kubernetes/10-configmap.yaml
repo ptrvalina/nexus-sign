@@ -1,0 +1,41 @@
+# Settings that are not secret. Values marked CHANGE are the bank's own; the
+# others are the production posture Auth Core requires at startup
+# (docs/operations/configuration.md#production-blockers). check-manifests.mjs
+# runs Auth Core's own posture checks over this file and secret.example.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexus-auth-core-config
+  labels: { app.kubernetes.io/name: nexus-auth-core, app.kubernetes.io/part-of: nexus-sign }
+data:
+  NODE_ENV: production
+  PORT: "8080"
+  DATABASE_SSL: "true"
+  REDIS_TLS_REQUIRED: "true"
+  DEVICE_NONCE_STORE: postgres
+  HSM_ADAPTER: pkcs11
+  MASTER_KEY_SOURCE: hsm
+  # The vendor's PKCS#11 library, provided by the image built on top of this one or a mounted volume. CHANGE
+  PKCS11_MODULE_PATH: /opt/hsm/lib/libvendorpkcs11.so
+  PKCS11_TOKEN_LABEL: nexus-sign            # CHANGE
+  PKCS11_EVIDENCE_KEY_LABEL: nexus-evidence # CHANGE
+  PKCS11_KEK_LABEL: nexus-kek               # CHANGE
+  HSM_OPERATION_TIMEOUT_MS: "5000"
+  REQUIRE_VALID_ATTESTATION: "true"
+  APPLE_APP_ID: ABCDE12345.com.bank.app     # CHANGE: <team ID>.<bundle ID>
+  ANDROID_PACKAGE_NAME: com.bank.app        # CHANGE
+  ANDROID_APP_CERT_SHA256: "0000000000000000000000000000000000000000000000000000000000000000" # CHANGE: the app signing certificate digest(s)
+  ANDROID_REQUIRE_LOCKED_BOOTLOADER: "true"
+  ANDROID_REQUIRED_DEVICE_VERDICT: MEETS_DEVICE_INTEGRITY
+  ANDROID_ATTESTATION_STATUS_FILE: /var/run/nexus/attestation-status/status.json
+  REQUIRE_MTLS_HEADER: "true"
+  TRUSTED_PROXY_IPS: 10.0.0.10,10.0.0.11    # CHANGE: the mTLS gateway addresses
+  WEBHOOK_ALLOWED_HOSTS: hooks.bank.example # CHANGE
+  WEBHOOK_REQUIRE_HTTPS: "true"
+  ADMIN_COOKIE_SECURE: "true"
+  ADMIN_MFA_REQUIRED: "true"
+  DEVICE_REPLACEMENT_HOLD_SECONDS: "86400"
+  CUSTOMER_SETTINGS_RELAX_HOLD_SECONDS: "86400"
+  OFFLINE_CONFIRMATION_ENABLED: "false"
+  CUSTOMER_CALL_WAIT_SECONDS: "300"
+  CUSTOMER_CALL_MAX_SECONDS: "3600"

@@ -176,22 +176,24 @@ Auth Core checks, in this order:
 3. The device attestation verifies against the session nonce and the three new public keys ([session-bound attestation](../security/attestation.md#session-bound-attestation)) and comes from the claimed platform. With `REQUIRE_VALID_ATTESTATION=true` a failure is 403. This step does not count as an attempt.
 4. In one transaction, with the session row locked: the session is re-checked, and refused (404) once it has had 5 attempts.
 5. The identity is `ACTIVE` and its bank client is `ACTIVE` (409 otherwise); its recovery protocol is the session's, and protocol 1 is refused with 409 `RECOVERY_PROTOCOL_RETIRED`.
-6. The stored recovery public key and wrapped key pass the [integrity check](#integrity-check) (sealed, this identity's, matching, latest record). Otherwise 409 `RECOVERY_INTEGRITY` and audit event `integrity_violation`; the attempt is not counted.
-7. The proof verifies over the proof signing input with the stored recovery public key.
-8. The attempt is counted (`attempt_count`, and `failed_attempt_count` for a failure). A failed proof is committed with audit event `recovery_failed` and answered 401; the SDKs report it as a wrong phrase.
+6. The phrase has not been used: no completed recovery of this identity since the recovery configuration was stored (409 `RECOVERY_PHRASE_USED` otherwise; the same check runs when the bank opens a session).
+7. The stored recovery public key and wrapped key pass the [integrity check](#integrity-check) (sealed, this identity's, matching, latest record). Otherwise 409 `RECOVERY_INTEGRITY` and audit event `integrity_violation`; the attempt is not counted.
+8. The proof verifies over the proof signing input with the stored recovery public key.
+9. The attempt is counted (`attempt_count`, and `failed_attempt_count` for a failure). A failed proof is committed with audit event `recovery_failed` and answered 401; the SDKs report it as a wrong phrase.
 
 A valid proof completes the recovery in the same transaction:
 
+- a `SECURITY` notice (`PUSH_REPLACEMENT_TITLE`, `PUSH_REPLACEMENT_BODY`) is queued for the old device, when push mode is `NEXUS`, `PUSH_DELIVERY_ENABLED` is on and the old device has a push registration, as for a [device replacement](../architecture/device-replacement.md#push-notice);
 - the identity's `ACTIVE` credential is revoked;
 - the identity's `PENDING_USER` authorizations are cancelled;
-- push registrations of the revoked credentials are removed;
+- push registrations of the revoked credentials are removed, except one that still has the notice to deliver;
 - the new credential is registered `ACTIVE`, with the next key version, and its keys and attestation material are sealed in a `CREDENTIAL_ENROLLED` record with reason `RECOVERY`;
 - the session is marked used;
 - audit events `credential_revoked`, `credential_created`, `recovery_completed`; webhook `identity.recovered` (`nexusId`, `newCredentialId`, `revokedCredentialIds`).
 
 The response is 200 with `nexusId`, `credentialId`, `keyVersion`, `offlineServerPublicKeyPem` and `requestAuthentication: DEVICE_SIGNATURE`; no access token is issued.
 
-A successful recovery does not change the recovery key. The same phrase recovers the identity again until a device sets up a new one.
+A phrase recovers the identity once (audit finding A2-02). After a recovery, the bank's next `POST /v1/recovery/sessions` for the identity, and the completion of any session opened before it, answer 409 `RECOVERY_PHRASE_USED` until the recovered device sets up a new phrase (`POST /v1/mobile/recovery/setup`). Before this change the same phrase recovered the identity again, so a phished phrase could take the identity back each time the owner recovered it.
 
 ## Attempt limits and lockout
 
@@ -251,4 +253,4 @@ Auth Core never receives the phrase, the seed, the wrapping key or the recovery 
 | `ios-sdk/Tests/NEXUSSignTests/RecoveryProtocolTests.swift` | Seed and wrapping key; wrapping with the vector IV reproduces the wrapped key and unwraps; wrong phrase and other identity fail with `invalidRecoveryPhrase`; signing inputs; the vector proof verifies; a fresh key round-trips; phrase normalization and checksum | CI job `ios-sdk / build and unit tests` (needs a Swift toolchain) |
 | `android-sdk/src/test/kotlin/com/nexis/nexussign/RecoveryProtocolTest.kt` | The same as iOS, plus the scalar encoding of a fresh key and phrase normalization against the protocol 1 vectors | CI job `android-sdk / build and unit tests` (needs Gradle) |
 
-End to end, `auth-core/test/integration/recovery.test.mjs` covers setup and recovery, that the database content alone cannot complete a recovery, the binding of the proof to the new key, a substituted recovery key, the issued salt and the biometric signature at setup, the identity lockout and protocol 1 refusal. The biometric prompt around setup and the SDKs' recovery flows on phones are not covered by these suites; they are verified on physical devices ([verification status](../operations/release.md)).
+End to end, `auth-core/test/integration/recovery.test.mjs` covers setup and recovery, that the database content alone cannot complete a recovery, the binding of the proof to the new key, a substituted recovery key, the issued salt and the biometric signature at setup, the identity lockout and protocol 1 refusal. The biometric prompt around setup and the SDKs' recovery flows on phones are not covered by these suites; they can only be verified on physical devices, which has not been done yet ([device acceptance checklist](../engineering/DEVICE_ACCEPTANCE_CHECKLIST.md)).

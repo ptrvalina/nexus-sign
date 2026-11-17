@@ -27,7 +27,7 @@ Two attempts running at the same time in one app would also share the replacemen
 - A failed re-enrolment or recovery leaves the working keys in place.
 - The device never signs with keys whose credential ID it has not recorded.
 - If the enrolment response is lost after Auth Core has registered the new keys, the phone discards them while Auth Core has already replaced the previous credential. The host app requests a new `BOOTSTRAP` token and enrols again; nothing is signed with keys Auth Core does not know.
-- Promotion on iOS depends on keychain re-tagging of Secure Enclave keys, which is verified on physical devices only ([verification status](../operations/release.md)).
+- Promotion on iOS depends on keychain re-tagging of Secure Enclave keys, which can only be verified on physical devices; this has not been done yet ([device acceptance checklist](../engineering/DEVICE_ACCEPTANCE_CHECKLIST.md)).
 - Covered by `KeySlotsTest` on Android. See [device authentication](../protocol/device-authentication-and-offline-confirmation.md#keys-on-the-device).
 
 ## Note

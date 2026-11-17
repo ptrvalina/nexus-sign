@@ -1,4 +1,4 @@
--- Database roles for an Auth Core deployment (NXS-015).
+-- Database roles for an Auth Core deployment.
 --
 -- Run once per database as a superuser (or the cloud provider's admin role),
 -- after the schema and migrations, and again after each upgrade:
@@ -12,9 +12,14 @@
 --                        so it cannot disable or replace the append-only and
 --                        lifecycle triggers; INSERT and SELECT only on the
 --                        evidence and audit tables; DELETE only on
---                        push_registrations; no TRUNCATE anywhere.
+--                        push_registrations and expired device_request_nonces;
+--                        no TRUNCATE anywhere.
 --   nexus_audit_reader   read-only access to evidence and audit records, for
 --                        export and archival.
+--   nexus_secret_rotator no privileges of its own: a login that holds it next to
+--                        nexus_app may re-encrypt stored secrets with
+--                        rotateSecretKeys.js (migration 033); nexus_app alone
+--                        may not.
 --
 -- Passwords are not set here: create the login with the provider's tooling or
 --   ALTER ROLE nexus_app WITH LOGIN PASSWORD '<from the secrets manager>';
@@ -27,9 +32,15 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_owner') THEN CREATE ROLE nexus_owner NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_app') THEN CREATE ROLE nexus_app NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_audit_reader') THEN CREATE ROLE nexus_audit_reader NOLOGIN; END IF;
+  -- Membership lets a session of the application role re-encrypt stored
+  -- secrets (rotateSecretKeys.js); grant it to the operator who runs the tool.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_secret_rotator') THEN CREATE ROLE nexus_secret_rotator NOLOGIN; END IF;
 END $$;
 
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+-- No temporary objects for the application (finding C-15): nothing a session
+-- creates can shadow what the triggers use. Auth Core uses no temporary tables.
+DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database()); END $$;
 GRANT USAGE ON SCHEMA public TO nexus_app, nexus_audit_reader;
 GRANT CREATE ON SCHEMA public TO nexus_owner;
 
@@ -55,9 +66,29 @@ END $$;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM nexus_app;
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO nexus_app;
 GRANT DELETE ON push_registrations TO nexus_app;
+-- Expired device request nonces (the trigger of migration 031 refuses live
+-- ones). Nonces are never updated: without UPDATE the role cannot move a live
+-- nonce's expiry into the past and then delete it (finding C-11).
+GRANT DELETE ON device_request_nonces TO nexus_app;
+REVOKE UPDATE ON device_request_nonces FROM nexus_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nexus_app;
 -- Evidence and audit records are only ever added.
 REVOKE UPDATE ON evidence_records, audit_logs FROM nexus_app;
+-- The migration ledger belongs to the migration tool, not the service.
+DO $$
+BEGIN
+  IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+    REVOKE INSERT, UPDATE ON schema_migrations FROM nexus_app;
+  END IF;
+END $$;
+
+-- Mandate debit decisions are only ever added.
+DO $$
+BEGIN
+  IF to_regclass('public.mandate_debits') IS NOT NULL THEN
+    REVOKE UPDATE ON mandate_debits FROM nexus_app;
+  END IF;
+END $$;
 
 -- Archival reads.
 GRANT SELECT ON evidence_records, audit_logs TO nexus_audit_reader;

@@ -38,7 +38,13 @@ enum class NEXUSTokenPurpose {
  *   confirms a new recovery phrase.
  * @param allowEmulatorHostHttp Development only: accept `http://10.0.2.2`, the
  *   emulator's alias for the developer's machine. Off by default, so a release
- *   build cannot be pointed at a cleartext server (NXS-028).
+ *   build cannot be pointed at a cleartext server.
+ * @param certificatePins Optional public-key pins for the host of [baseUrl]
+ *: `sha256/<base64 SHA-256 of the SubjectPublicKeyInfo>`,
+ *   as OkHttp's CertificatePinner and the iOS SDK use. Empty (the default)
+ *   relies on the platform's certificate validation only. When set, give at
+ *   least two pins (the current key and a backup) so a key rollover does not
+ *   lock the app out; a connection whose chain matches none of them fails.
  */
 data class NEXUSSignConfig(
     val bankId: String,
@@ -50,6 +56,9 @@ data class NEXUSSignConfig(
     val promptCancelText: String = "Cancel",
     val recoverySetupPromptText: String = "Confirm your new recovery phrase",
     val allowEmulatorHostHttp: Boolean = false,
+    val certificatePins: List<String> = emptyList(),
+    /** Labels of the confirmation prompt, translated by the bank app if it wants (finding D-02). */
+    val promptLabels: NexusPromptLabels = NexusPromptLabels.ENGLISH,
 ) {
     init {
         require(bankId.isNotBlank()) { "bankId must not be blank" }
@@ -61,6 +70,10 @@ data class NEXUSSignConfig(
                 (allowEmulatorHostHttp && EMULATOR_HOST_HTTP.containsMatchIn(baseUrl)),
         ) { "baseUrl must be an https URL" }
         require(requestTimeoutMillis > 0) { "requestTimeoutMillis must be positive" }
+        require(certificatePins.isEmpty() || (certificatePins.toSet().size >= 2 && certificatePins.all { PIN.matches(it) })) {
+            "certificatePins must be empty or at least two distinct sha256/<base64> pins"
+        }
+        require(certificatePins.isEmpty() || baseUrl.startsWith("https://")) { "certificatePins need an https baseUrl" }
         require(promptTitle.isNotBlank() && promptCancelText.isNotBlank() && recoverySetupPromptText.isNotBlank()) { "prompt texts must not be blank" }
     }
 
@@ -70,5 +83,6 @@ data class NEXUSSignConfig(
     private companion object {
         val LOOPBACK_HTTP = Regex("^http://(localhost|127\\.0\\.0\\.1)(:[0-9]+)?(/|$)")
         val EMULATOR_HOST_HTTP = Regex("^http://10\\.0\\.2\\.2(:[0-9]+)?(/|$)")
+        val PIN = Regex("^sha256/[A-Za-z0-9+/]{43}=$")
     }
 }

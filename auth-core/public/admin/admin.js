@@ -20,7 +20,9 @@ async function api(path, options = {}) {
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.error || `Request failed (HTTP ${response.status})`);
+    const error = new Error(body.error || `Request failed (HTTP ${response.status})`);
+    error.status = response.status;
+    throw error;
   }
   return body;
 }
@@ -238,6 +240,7 @@ async function lookupIdentity() {
         button.addEventListener('click', () => handleIdentityAction(nexusId, button.dataset.action));
       });
     }
+    if (typeof loadCustomerPanels === 'function') await loadCustomerPanels(nexusId);
   } catch (error) {
     resultEl.classList.add('visible');
     resultEl.innerHTML = `<div class="muted">${escapeHtml(error.message)}</div>`;
@@ -312,7 +315,7 @@ async function loadStats() {
 }
 
 async function loadEverything() {
-  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries()]);
+  await Promise.all([loadStats(), loadApprovals(), loadClients(), loadAuditLogs(), loadWebhookDeliveries(), loadCalls(), loadConversations(), ...(typeof loadCustomerCalls === 'function' ? [loadCustomerCalls()] : [])]);
 }
 
 function reportError(error) {

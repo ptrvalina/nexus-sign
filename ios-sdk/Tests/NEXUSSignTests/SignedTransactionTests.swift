@@ -78,6 +78,15 @@ final class SignedTransactionTests: XCTestCase {
                 XCTAssertEqual((error as? SignedPayload.Rejected)?.reason, "response_mismatch")
             }
         }
+
+        // Finding D-05: a canonically equivalent but different string is a
+        // mismatch (Swift's String == would call it equal).
+        let precomposed = "Caf\u{00E9}", decomposed = "Cafe\u{0301}"
+        XCTAssertEqual(precomposed, decomposed, "Swift String equality is canonical equivalence")
+        XCTAssertFalse(SignedPayload.sameCodeUnits(precomposed, decomposed))
+        XCTAssertFalse(SignedPayload.sameCodeUnits(["name": precomposed], ["name": decomposed]))
+        XCTAssertFalse(SignedPayload.sameCodeUnits([precomposed: "x"], [decomposed: "x"]))
+        XCTAssertTrue(SignedPayload.sameCodeUnits(["name": precomposed, "iban": "DE89"], ["iban": "DE89", "name": precomposed]))
     }
 
     func testAmountsAreFormattedWithIntegerArithmetic() throws {
@@ -97,10 +106,20 @@ final class SignedTransactionTests: XCTestCase {
         XCTAssertEqual(SignedPayload.fractionDigits(currency: "CLF"), 4)
     }
 
-    func testConfirmationTextIsBuiltFromSignedValues() throws {
+    func testPromptTextAndBeneficiaryDisplayMatchTheSharedVectors() throws {
+        let valid = try XCTUnwrap(try loadVectors()["valid"] as? [[String: Any]])
+        for vector in valid {
+            let name = vector["name"] as? String ?? "?"
+            let signed = try SignedPayload.parse(try bytes(vector["canonical_base64"]))
+            XCTAssertEqual(signed.beneficiaryDisplay, vector["beneficiary_display"] as? String, name)
+            XCTAssertEqual(signed.confirmationText, vector["confirmation_text"] as? String, name)
+        }
         let block = try XCTUnwrap(try loadVectors()["response_mismatch"] as? [String: Any])
         let signed = try SignedPayload.parse(try bytes(block["base_canonical_base64"]))
-        XCTAssertEqual(signed.confirmationText, "transfer: 1250.00 PLN → Jan Kowalski · PL61109010140000071219812874 • BANK-2026-000001")
+        XCTAssertEqual(signed.confirmationText, "1250.00 PLN\nIBAN: PL61109010140000071219812874\nName: Jan Kowalski\ntransfer • BANK-2026-000001")
+        // Translated labels label the same values in the same order.
+        XCTAssertEqual(signed.confirmationText(labels: NexusPromptLabels(iban: "Rachunek", name: "Odbiorca")),
+                       "1250.00 PLN\nRachunek: PL61109010140000071219812874\nOdbiorca: Jan Kowalski\ntransfer • BANK-2026-000001")
     }
 
     /// Auth Core sends timestamps with milliseconds, which JSONDecoder's default

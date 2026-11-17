@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { loadTs } from './support/load-ts.mjs';
 
-const { rawToDer, derToRaw } = loadTs('crypto/ecdsaSignatureFormat.ts');
+const { rawToDer, derToRaw, normalizeLowS } = loadTs('crypto/ecdsaSignatureFormat.ts');
 const { parseP256PublicKey } = loadTs('crypto/p256PublicKey.ts');
 const { SoftwareHsmAdapter } = loadTs('crypto/softwareHsmAdapter.ts');
 const { buildAttestationBinding, hashAttestationBinding } = loadTs('services/attestationBinding.ts');
@@ -91,4 +91,27 @@ test('attestation binding covers the authentication and offline keys when presen
     Buffer.concat([challenge, nul, Buffer.from(sig), nul, Buffer.from(auth), nul]));
   assert.notDeepEqual(buildAttestationBinding(challenge, sig, { authPublicKeyPem: auth }), buildAttestationBinding(challenge, sig, { offlinePublicKeyPem: auth }),
     'the slot of each key is fixed');
+});
+
+
+test('signatures are kept in low-S form; both forms verify (findings A1-05, B-06)', () => {
+  const n = BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551');
+  const { privateKey, publicKey } = p256();
+  let high = 0;
+  for (let i = 0; i < 64; i += 1) {
+    const data = Buffer.from(`message ${i}`);
+    const raw = sign('sha256', data, { key: privateKey, dsaEncoding: 'ieee-p1363' });
+    const s = BigInt(`0x${raw.subarray(32).toString('hex')}`);
+    const flipped = Buffer.concat([raw.subarray(0, 32), Buffer.from((n - s).toString(16).padStart(64, '0'), 'hex')]);
+    const [lowRaw, highRaw] = s <= n / 2n ? [raw, flipped] : [flipped, raw];
+    if (s > n / 2n) high += 1;
+    for (const format of ['raw', 'der']) {
+      const enc = (b) => (format === 'der' ? rawToDer(b) : b).toString('base64');
+      assert.equal(normalizeLowS(enc(highRaw), format), enc(lowRaw), `high-S ${format} is normalised`);
+      assert.equal(normalizeLowS(enc(lowRaw), format), enc(lowRaw), `low-S ${format} is unchanged`);
+      assert.ok(verify('sha256', data, { key: publicKey, dsaEncoding: format === 'der' ? 'der' : 'ieee-p1363' }, Buffer.from(normalizeLowS(enc(highRaw), format), 'base64')));
+    }
+  }
+  assert.ok(high > 0, 'the sample contains high-S signatures');
+  assert.equal(normalizeLowS('not a signature', 'der'), 'not a signature', 'malformed input is left to the verifier');
 });

@@ -193,9 +193,21 @@ struct PushKeyStore {
 /// ```
 public struct NEXUSSignPushReader {
     private let store: PushKeyStore
+    /// Public-key pins for the receipt request, as `NEXUSSignConfig.certificatePins`
+    /// (a Notification Service Extension passes the app's pins here).
+    let certificatePins: Set<String>
 
-    public init(bankID: String, keychainAccessGroup: String? = nil) {
+    public init(bankID: String, keychainAccessGroup: String? = nil, certificatePins: Set<String> = []) {
+        precondition(certificatePins.isEmpty || (certificatePins.count >= 2 && certificatePins.allSatisfy(CertificatePinning.isWellFormedPin)),
+                     "certificatePins must be empty or at least two sha256/<base64> pins")
         self.store = PushKeyStore(bankID: bankID, accessGroup: keychainAccessGroup)
+        self.certificatePins = certificatePins
+    }
+
+    /// The session for the receipt: the caller's, or one that enforces the
+    /// pins (finding D-08: receipts used to bypass the configured pins).
+    func receiptSession(_ provided: URLSession?) -> URLSession {
+        provided ?? CertificatePinning.session(pins: certificatePins)
     }
 
     /// True for a notification sent by NEXUS-SIGN secure push.
@@ -247,9 +259,9 @@ public struct NEXUSSignPushReader {
     /// Confirms delivery to Auth Core (`POST /v1/push-receipts/{id}`). Works
     /// while the phone is locked: the receipt is authenticated by the push
     /// key, not the request-signing key.
-    public func sendReceipt(for message: NexusPushMessage, baseURL: URL, session: URLSession = .shared, timeout: TimeInterval = 10) async throws {
+    public func sendReceipt(for message: NexusPushMessage, baseURL: URL, session: URLSession? = nil, timeout: TimeInterval = 10) async throws {
         guard baseURL.scheme == "https" || (baseURL.scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(baseURL.host ?? "")) else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Auth Core base URL must be https")
+            throw NEXUSSignError.configurationInvalid(detail: "Auth Core base URL must be https")
         }
         let body = try JSONSerialization.data(withJSONObject: ["credentialId": message.credentialId, "receipt": try receipt(for: message)])
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/push-receipts/\(message.messageId)"))
@@ -260,7 +272,7 @@ public struct NEXUSSignPushReader {
         request.httpBody = body
         let response: URLResponse
         do {
-            (_, response) = try await session.data(for: request)
+            (_, response) = try await receiptSession(session).data(for: request)
         } catch {
             throw NEXUSSignError.networkUnavailable(underlying: error)
         }

@@ -21,6 +21,10 @@ import { assertWebhookUrlAllowed, type AllowedWebhookTarget } from './webhookUrl
  *   X-NEXUS-SIGN-Event-Id:  <eventId>
  *   X-NEXUS-SIGN-Timestamp: <unix seconds>
  *   X-NEXUS-SIGN-Signature: v1=<hex HMAC-SHA256(webhookSecret, "<timestamp>.<raw body>")>
+ * During the overlap after a rotation of the webhook secret (finding A2-08)
+ * the header carries one entry per secret, the previous one first:
+ *   X-NEXUS-SIGN-Signature: v1=<HMAC with the previous secret>,v1=<HMAC with the new secret>
+ * The receiver accepts the request when any v1 entry matches its secret.
  * The receiver recomputes the HMAC over the exact bytes received, compares in
  * constant time and rejects timestamps outside its tolerance window.
  */
@@ -32,7 +36,7 @@ const CLAIM_LEASE_SECONDS = 30; // must exceed DELIVERY_TIMEOUT_MS
 type Runner = Pick<PoolClient, 'query'>;
 
 export async function enqueueWebhook(clientId: string, eventType: string, payload: Record<string, unknown>, runner: Runner = pool): Promise<void> {
-  if (!(await hasWebhookDestination(clientId))) return; // no webhook configured for this bank client
+  if (!(await hasWebhookDestination(clientId, runner))) return; // no webhook configured for this bank client
   await runner.query(
     `INSERT INTO webhook_deliveries (event_id, client_id, event_type, payload) VALUES ($1, $2, $3, $4)`,
     [randomUUID(), clientId, eventType, JSON.stringify(payload)],
@@ -41,6 +45,12 @@ export async function enqueueWebhook(clientId: string, eventType: string, payloa
 
 function webhookSignature(timestamp: string, rawBody: string, secret: string): string {
   return `v1=${createHmac('sha256', secret).update(`${timestamp}.${rawBody}`, 'utf8').digest('hex')}`;
+}
+
+/** The X-NEXUS-SIGN-Signature value: the previous secret's entry first while it overlaps. */
+export function webhookSignatureHeader(timestamp: string, rawBody: string, secret: string, previousSecret?: string): string {
+  const current = webhookSignature(timestamp, rawBody, secret);
+  return previousSecret ? `${webhookSignature(timestamp, rawBody, previousSecret)},${current}` : current;
 }
 
 interface PendingDelivery {
@@ -118,7 +128,7 @@ async function attemptDelivery(row: PendingDelivery): Promise<void> {
       'Content-Type': 'application/json',
       'X-NEXUS-SIGN-Event-Id': row.event_id,
       'X-NEXUS-SIGN-Timestamp': timestamp,
-      'X-NEXUS-SIGN-Signature': webhookSignature(timestamp, body, destination.webhookSecret),
+      'X-NEXUS-SIGN-Signature': webhookSignatureHeader(timestamp, body, destination.webhookSecret, destination.previousWebhookSecret),
     });
     if (status >= 200 && status < 300) {
       await pool.query(`UPDATE webhook_deliveries SET status = 'DELIVERED', delivered_at = now(), last_http_status = $2 WHERE id = $1`, [row.id, status]);

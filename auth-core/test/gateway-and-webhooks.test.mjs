@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { loadTs } from './support/load-ts.mjs';
 
 const { isDeviceFacingRequest } = loadTs('middleware/mtlsGateway.ts');
@@ -36,6 +37,45 @@ test('gateway mTLS exemption covers exactly the device routes', () => {
   for (const [method, path] of protectedRoutes) assert.equal(isDeviceFacingRequest({ method, path }), false, `${method} ${path}`);
 });
 
+// The allow-list in mtlsGateway.ts is maintained by hand. This test derives the
+// expected set from openapi.yaml so that a new device route cannot ship without
+// its exemption (a missing entry blocked offline deferred-signature uploads in
+// 2.0.0-rc.2), and so that no bank route is ever exempted by mistake.
+// Device-facing = tagged "Mobile SDK" or "Recovery" and authenticated by a
+// device-held credential (deviceSignature, bootstrapToken, recoveryToken or the
+// push receipt) instead of the default bankAuth.
+function operationsFromOpenApi() {
+  const operations = [];
+  let path = null;
+  let current = null;
+  for (const line of readFileSync(new URL('../openapi.yaml', import.meta.url), 'utf8').split('\n')) {
+    const pathMatch = /^ {2}(\/[^:]+):\s*$/.exec(line);
+    if (pathMatch) { path = pathMatch[1]; current = null; continue; }
+    if (/^[a-z]/.test(line)) { path = null; current = null; continue; }
+    const method = /^ {4}(get|post|put|patch|delete):/.exec(line);
+    if (method && path) { current = { method: method[1].toUpperCase(), path, tags: [], security: null }; operations.push(current); continue; }
+    if (!current) continue;
+    const tags = /^ {6}tags: \[(.*)\]/.exec(line);
+    if (tags) current.tags = tags[1].split(',').map((t) => t.trim());
+    const security = /^ {6}security: (.*)$/.exec(line);
+    if (security) current.security = security[1].trim();
+  }
+  return operations;
+}
+
+test('every device-authenticated route in openapi.yaml is mTLS-exempt, and no bank route is', () => {
+  const operations = operationsFromOpenApi();
+  assert.ok(operations.length >= 40, 'openapi.yaml parsed');
+  const concrete = (path) => path.replace(/\{[^}]+\}/g, '0b8f4e2c-0000-4000-8000-000000000001');
+  for (const op of operations) {
+    const deviceTag = op.tags.includes('Mobile SDK') || op.tags.includes('Recovery');
+    const deviceAuth = op.security !== null && op.security !== '[{ bankAuth: [] }]';
+    const expected = deviceTag && deviceAuth;
+    assert.equal(isDeviceFacingRequest({ method: op.method, path: concrete(op.path) }), expected,
+      `${op.method} ${op.path} (tags ${op.tags.join(',')}, security ${op.security ?? 'default bankAuth'})`);
+  }
+});
+
 test('webhook destinations: private, reserved and malformed targets are refused', async () => {
   process.env.WEBHOOK_REQUIRE_HTTPS = 'true';
   const { assertWebhookUrlAllowed } = loadTs('services/webhookUrlPolicy.ts');
@@ -69,6 +109,19 @@ test('IPv6 classification handles every textual form', () => {
     assert.equal(isPrivateIpv6(ip), true, ip);
   }
   for (const ip of ['2606:4700::1111', '2a00:1450:4001:82a::200e', '::ffff:93.184.216.34']) {
+    assert.equal(isPrivateIpv6(ip), false, ip);
+  }
+});
+
+test('IPv6 transition ranges cannot reach internal hosts (finding A2-05)', () => {
+  const { isPrivateIpv6 } = loadTs('services/webhookUrlPolicy.ts');
+  // 6to4 with a private or loopback IPv4 inside; Teredo; local-use NAT64; discard; benchmarking; ORCHIDv2.
+  for (const ip of ['2002:7f00:1::1', '2002:a00:1::', '2002:c0a8:101::1', '2002:a9fe:a9fe::', '2001:0:4136:e378:8000:63bf:3fff:fdd2',
+    '2001::1', '64:ff9b:1::a00:1', '100::1', '2001:2::1', '2001:20::1', '2001:2f::1']) {
+    assert.equal(isPrivateIpv6(ip), true, ip);
+  }
+  // 6to4 of a public IPv4 address stays allowed; ordinary 2001: unicast too.
+  for (const ip of ['2002:5db8:d822::1', '2001:4860:4860::8888', '2001:30::1']) {
     assert.equal(isPrivateIpv6(ip), false, ip);
   }
 });

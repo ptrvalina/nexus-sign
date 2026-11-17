@@ -39,6 +39,14 @@ export function isPrivateIpv6(ip: string): boolean {
   if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return isPrivateIpv4(embeddedIpv4()); // ::ffff:a.b.c.d
   if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return isPrivateIpv4(embeddedIpv4()); // NAT64
   if (g.slice(0, 6).every((x) => x === 0)) return true; // ::, ::1 and IPv4-compatible
+  // 6to4 (2002::/16) carries an IPv4 address in groups 1-2: judge that address.
+  if (g[0] === 0x2002) return isPrivateIpv4(`${g[1] >> 8}.${g[1] & 255}.${g[2] >> 8}.${g[2] & 255}`);
+  // Transition and special ranges a relay could route to an internal host:
+  // Teredo 2001::/32, local-use NAT64 64:ff9b:1::/48, discard 100::/64,
+  // benchmarking 2001:2::/48, ORCHIDv2 2001:20::/28.
+  if (g[0] === 0x2001 && (g[1] === 0 || g[1] === 2 || (g[1] & 0xfff0) === 0x20)) return true;
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) return true;
+  if (g[0] === 0x100 && g.slice(1, 4).every((x) => x === 0)) return true;
   return (g[0] & 0xfe00) === 0xfc00 // fc00::/7 unique local
     || (g[0] & 0xffc0) === 0xfe80 // fe80::/10 link local
     || (g[0] & 0xffc0) === 0xfec0 // fec0::/10 site local

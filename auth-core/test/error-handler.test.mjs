@@ -4,6 +4,7 @@ import { loadTs } from './support/load-ts.mjs';
 
 const errors = loadTs('services/errors.ts');
 class Named extends Error {}
+class IntegrityError extends Error {}
 const { errorHandler } = loadTs('middleware/errorHandler.ts', {
   stubs: {
     '../services/errors': errors,
@@ -11,6 +12,7 @@ const { errorHandler } = loadTs('middleware/errorHandler.ts', {
     '../services/authorizationRecord': { AuthorizationNotFoundError: Named },
     '../services/recoveryService': { InvalidRecoveryProofError: Named, RecoveryNotConfiguredError: Named, RecoverySessionNotFoundError: Named },
     '../services/credentialService': { CredentialNotFoundError: Named },
+    '../services/credentialIntegrity': { CredentialIntegrityError: IntegrityError },
   },
 });
 
@@ -43,4 +45,10 @@ test('anything else is a 500 without details', () => {
   assert.equal(result.status, 500);
   assert.deepEqual(result.body, { error: 'Internal server error' });
   assert.equal(result.logged.length, 1);
+});
+
+test('a failed credential integrity check does not say which check failed (finding A1-14)', () => {
+  const r = respond(new IntegrityError('Credential integrity check failed: the credential keys differ from the sealed enrolment'));
+  assert.equal(r.status, 403);
+  assert.deepEqual(r.body, { error: 'Credential integrity check failed' });
 });

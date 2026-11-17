@@ -19,13 +19,24 @@ import { ValidationError } from './errors';
 export interface DeviceKeysInput {
   authPublicKeyPem?: string;
   offlinePublicKeyPem?: string;
+  /**
+   * STATIC (default): one key agreed at enrolment, as Android keeps it in the
+   * Keystore. PER_AUTHORIZATION: no key is agreed now; Auth Core generates a
+   * key for each offline confirmation and puts it in the QR code (offline v3,
+   * finding D-01). The iOS SDK asks for it: the Secure Enclave returns the
+   * ECDH secret to the app process, so it must serve one authorization only.
+   */
+  offlineKeyAgreement?: OfflineKeyAgreement;
 }
+
+export type OfflineKeyAgreement = 'STATIC' | 'PER_AUTHORIZATION';
 
 export interface DeviceKeyColumns {
   authPublicKeyPem: string | null;
   offlinePublicKeyPem: string | null;
   offlineServerPublicKeyPem: string | null;
   offlineSecretEncrypted: string | null;
+  offlineKeyAgreement: OfflineKeyAgreement;
 }
 
 /** Validates the optional device keys and derives the credential columns stored for them. */
@@ -40,7 +51,8 @@ export function prepareDeviceKeys(credentialId: string, signingKeyPem: string, i
 
   let offlineServerPublicKeyPem: string | null = null;
   let offlineSecretEncrypted: string | null = null;
-  if (offline) {
+  const offlineKeyAgreement: OfflineKeyAgreement = input.offlineKeyAgreement ?? 'STATIC';
+  if (offline && offlineKeyAgreement === 'STATIC') {
     // A fresh server key per credential. Its private half is used once, here,
     // and discarded; only the derived key is kept, encrypted.
     const server = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -54,5 +66,6 @@ export function prepareDeviceKeys(credentialId: string, signingKeyPem: string, i
     offlinePublicKeyPem: offline?.pem ?? null,
     offlineServerPublicKeyPem,
     offlineSecretEncrypted,
+    offlineKeyAgreement,
   };
 }

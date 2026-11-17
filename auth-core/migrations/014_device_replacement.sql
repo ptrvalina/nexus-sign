@@ -1,4 +1,4 @@
--- 014: device replacement (NXS-002).
+-- 014: device replacement.
 --
 -- A new device for an identity that already has one is enrolled only with the
 -- bank's replacement authorization. The replaced device receives a security
