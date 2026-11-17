@@ -146,6 +146,15 @@ Keys are created with `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` and are 
 
 If App Attest is unavailable or fails, the SDK still sends the enrolment with the reason, and Auth Core decides according to the bank's policy (`REQUIRE_VALID_ATTESTATION`, on in production).
 
+### App Attest setup in the bank app (finding D-15)
+
+App Attest needs, in the bank's app target:
+
+1. A paid Apple Developer Program team; the App ID has the **App Attest** capability enabled.
+2. The entitlement `com.apple.developer.devicecheck.appattest-environment` in the app's `.entitlements` file: `development` for debug builds, `production` for TestFlight and App Store builds. A free Apple ID cannot sign an app with this entitlement; without it `DCAppAttestService.isSupported` is false and enrolment reports attestation as unavailable.
+3. In Auth Core: `APPLE_APP_ID=<TEAMID>.<bundle identifier>` of exactly that app, and `APPLE_APP_ATTEST_ROOT_CA_PEM` with Apple's App Attestation Root CA. In production Auth Core accepts only the `production` environment; a development attestation is refused with the reason `development App Attest environment is not accepted in production`.
+4. The simulator does not support App Attest; test on a device ([device acceptance checklist](../docs/engineering/DEVICE_ACCEPTANCE_CHECKLIST.md)).
+
 ## Showing and signing a transaction ("what you see is what you sign")
 
 `fetchAuthorization(authorizationID:)` parses the exact bytes the device will sign, requires them to be in canonical form (no duplicate keys, no alternative escaping, no extra or missing fields) and checks that every field of the response agrees with them. Build the confirmation screen **only** from the signed values:
