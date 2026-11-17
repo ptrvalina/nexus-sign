@@ -194,9 +194,9 @@ Phrases set up with SDK 1.4 or earlier (recovery protocol 1) are refused by Auth
 
 `swift test` runs on macOS (the package declares `.macOS(.v12)` for this); CI runs it on every change. `SignedTransactionTests`, `DeviceProtocolTests`, `RecoveryProtocolTests` and `SecurePushTests` use the vectors in `Tests/NEXUSSignTests/Resources/` (`signed-payload-v1.json`, `device-protocols-v1.json`, `secure-push-v1.json`, `recovery-v2.json`). These are copies of `auth-core/test-vectors/`, because SwiftPM bundles only resources inside the package; `npm run generate:vectors` in `auth-core/` writes both, and `npm run test:vectors` fails when a copy differs. The PBKDF2 derivation of the recovery protocol uses CommonCrypto `CCKeyDerivationPBKDF`; `RecoveryProtocolTests` pins its output against `recovery-v2.json`.
 
-## Customer section, payment mandates, conversations (unreleased; not yet compiled)
+## Customer section, payment mandates, conversations (unreleased)
 
-These methods were added on branch `engineering/production-readiness` and have not been built in the environment where they were written; the CI SDK job must build and test them before use.
+These methods are not in a released version yet. CI builds them and runs their unit tests on every change; they have not been run on physical devices.
 
 | Area | Methods | Server API |
 |---|---|---|

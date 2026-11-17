@@ -1,6 +1,6 @@
 # Known limitations
 
-What NEXUS-SIGN does not do, or has not been shown to do, on branch `engineering/production-readiness` (version `2.0.0-rc.2` plus unreleased changes), updated in the fourth cycle with the CI results. Collected from the [threat model](../security/threat-model.md#residual-risks), the [release notes](../operations/release.md), the [security assessment](SECURITY_ASSESSMENT_REPORT.md) and the [feature matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md). A bank reads this before a pilot.
+What NEXUS-SIGN does not do, or has not been shown to do, in the current version on `main` (`2.0.0-rc.2` plus unreleased changes, developed on branch `engineering/production-readiness`), updated in the fourth cycle with the CI results. Collected from the [threat model](../security/threat-model.md#residual-risks), the [release notes](../operations/release.md), the [security assessment](SECURITY_ASSESSMENT_REPORT.md) and the [feature matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md). A bank reads this before a pilot.
 
 ## Not yet shown to work
 

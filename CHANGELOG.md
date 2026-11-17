@@ -15,6 +15,14 @@ All notable changes to this project are documented here. Versions follow [Semant
 - iOS SDK: mandate terms are checked like on Android (finding N-13): canonical bytes, exactly the protocol's fields, frequency, integer limits, total not below the per-payment limit, validity in order. Before, the iOS SDK accepted 7 of the 17 invalid shared vectors, among them terms with a field it would sign without showing.
 - CI runs the eight HSM suites on SoftHSM 2.7.0 built from the pinned upstream tag; Ubuntu's SoftHSM 2.6.1 lacks `CKM_ECDSA_SHA256`, so the suites had not run.
 
+### Repository
+
+- Removed `setMasterKeysForTests` from `masterKeyVault.ts`: an exported setter that replaced the loaded master keys, used by nothing (no test, script or module imports it); an unused path to replace key material does not belong in product code.
+- One DTLS fingerprint parser per SDK: the answer check (`hasDtlsFingerprint`) reads the line the call code is computed from instead of parsing the SDP a second time.
+- The first- to third-cycle status reports moved to `docs/engineering/history/`; the current status is [engineering readiness](docs/engineering/ENGINEERING_READINESS.md).
+- README: repository layout with all components, the calls and offline v3 as built and tested, the verification status; SDK READMEs no longer say the customer-section methods are uncompiled (CI builds and tests them).
+- `.gitignore`: SwiftPM `.build/`, Android `local.properties`, app packages.
+
 ### Fixed
 
 - Recovery: the limit of 10 failed proofs per NEXUS ID in 24 hours applies to every attempt, also across sessions opened in parallel (finding A2-04).

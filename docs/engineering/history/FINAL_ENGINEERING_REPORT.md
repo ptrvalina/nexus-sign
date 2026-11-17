@@ -2,13 +2,13 @@
 
 NEXUS-SIGN, branch `engineering/production-readiness`, base `2.0.0-rc.2` (commit `5999984`), November 2026. Written for the bank's CTO, information security, bank architects and external auditors. Every statement of readiness below names the test, file or commit behind it; where a check could not run, the report says so.
 
-> **Superseded for status by [engineering readiness](ENGINEERING_READINESS.md) (fourth cycle).** This report records the first two cycles; numbers below are as of the end of the second cycle.
+> **Superseded for status by [engineering readiness](../ENGINEERING_READINESS.md) (fourth cycle).** This report records the first two cycles; numbers below are as of the end of the second cycle.
 
 **Status at the end of the second cycle: NOT COMPLETE — REMAINING BLOCKERS LISTED** ([section 17](#17-what-still-blocks-the-pilot-and-production)).
 
 ## 1. Initial state
 
-At `2.0.0-rc.2`: Auth Core (TypeScript, PostgreSQL, Redis, PKCS#11), iOS and Android SDKs, the bank execution boundary reference (`bank-integration/`), a sandbox and a demo bank. The internal review found 4 High, 16 Medium, 41 Low and 16 Info findings ([security assessment](SECURITY_ASSESSMENT_REPORT.md)). Of the 49 functions the product presentation shows, 11 had no code and 10 were partial ([feature matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md), earlier statuses in its summary).
+At `2.0.0-rc.2`: Auth Core (TypeScript, PostgreSQL, Redis, PKCS#11), iOS and Android SDKs, the bank execution boundary reference (`bank-integration/`), a sandbox and a demo bank. The internal review found 4 High, 16 Medium, 41 Low and 16 Info findings ([security assessment](../SECURITY_ASSESSMENT_REPORT.md)). Of the 49 functions the product presentation shows, 11 had no code and 10 were partial ([feature matrix](../FUNCTIONAL_COMPLETENESS_MATRIX.md), earlier statuses in its summary).
 
 ## 2. Changes
 
@@ -49,15 +49,15 @@ The chain NEXUS ID → credential → transaction binding → device signature �
 
 ## 4. Functions
 
-49 functions of the presentation: 7 implemented and verified, 29 implemented with external verification required, 8 partial, 5 not applicable, none missing. Per row: [feature matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md).
+49 functions of the presentation: 7 implemented and verified, 29 implemented with external verification required, 8 partial, 5 not applicable, none missing. Per row: [feature matrix](../FUNCTIONAL_COMPLETENESS_MATRIX.md).
 
 ## 5. Closed security findings
 
-All 4 High; 14 of 16 Medium (A1-02, A1-03, A1-04, A2-02, A2-03, B-01, B-02, B-03, B-04, B-05, C-03, C-04, C-05, C-06); Low D-03 and D-04. Details and commits: [security assessment](SECURITY_ASSESSMENT_REPORT.md).
+All 4 High; 14 of 16 Medium (A1-02, A1-03, A1-04, A2-02, A2-03, B-01, B-02, B-03, B-04, B-05, C-03, C-04, C-05, C-06); Low D-03 and D-04. Details and commits: [security assessment](../SECURITY_ASSESSMENT_REPORT.md).
 
 ## 6. Residual risks
 
-Open Medium: D-01 (iOS offline secret available to the app process), D-02 (prompt layout). Also open: D-07 (biometric change), App Attest and Play Integrity tests, 39 Low and 16 Info findings, master-key unwrap on the main thread at startup, conversation bodies stored in clear text in the database, forward-only migrations. Full list: [known limitations](KNOWN_LIMITATIONS.md).
+Open Medium: D-01 (iOS offline secret available to the app process), D-02 (prompt layout). Also open: D-07 (biometric change), App Attest and Play Integrity tests, 39 Low and 16 Info findings, master-key unwrap on the main thread at startup, conversation bodies stored in clear text in the database, forward-only migrations. Full list: [known limitations](../KNOWN_LIMITATIONS.md).
 
 ## 7. Test results
 
@@ -99,15 +99,15 @@ Workflows changed: the integration job sets `REQUIRE_ALL_INTEGRATION_SUITES=1`; 
 
 ## 13. The 49 functions
 
-See [section 4](#4-functions) and the [feature matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md).
+See [section 4](#4-functions) and the [feature matrix](../FUNCTIONAL_COMPLETENESS_MATRIX.md).
 
 ## 14. Needs real devices
 
-Key generation and protection in Secure Enclave and StrongBox, biometric binding and change (D-07), the confirmation and mandate screens (D-02, display on small screens, fonts, accessibility, localization), offline confirmation (D-01), push handling, calls on the phone, recovery. Package: [device acceptance checklist](DEVICE_ACCEPTANCE_CHECKLIST.md), [native build guide](NATIVE_BUILD_GUIDE.md).
+Key generation and protection in Secure Enclave and StrongBox, biometric binding and change (D-07), the confirmation and mandate screens (D-02, display on small screens, fonts, accessibility, localization), offline confirmation (D-01), push handling, calls on the phone, recovery. Package: [device acceptance checklist](../DEVICE_ACCEPTANCE_CHECKLIST.md), [native build guide](../NATIVE_BUILD_GUIDE.md).
 
 ## 15. Needs the bank's infrastructure
 
-The bank's HSM model; its push contour (APNs/FCM through the bank); its gateway with mTLS; its core banking and payment provider behind the execution boundary; its bot (webhooks and bot API); its attachment storage; its SIEM and anti-fraud; load tests in its infrastructure. Package: [pilot execution pack](../integration/pilot-execution-pack.md), [bank backend guide](../integration/bank-backend-guide.md).
+The bank's HSM model; its push contour (APNs/FCM through the bank); its gateway with mTLS; its core banking and payment provider behind the execution boundary; its bot (webhooks and bot API); its attachment storage; its SIEM and anti-fraud; load tests in its infrastructure. Package: [pilot execution pack](../../integration/pilot-execution-pack.md), [bank backend guide](../../integration/bank-backend-guide.md).
 
 ## 16. Needs an independent audit
 
@@ -120,7 +120,7 @@ Penetration test of Auth Core, both SDKs and the bank execution boundary; review
 3. No SoftHSM run in this cycle; no production HSM.
 4. The 22 HTTP integration suites not run here.
 5. Open Medium findings D-01 and D-02; D-07 and attestation tests.
-6. Eight partial functions ([remaining gaps](FUNCTIONAL_COMPLETENESS_MATRIX.md#remaining-gaps)).
+6. Eight partial functions ([remaining gaps](../FUNCTIONAL_COMPLETENESS_MATRIX.md#remaining-gaps)).
 7. Missing documents of the required set: Product Functional Specification, Cryptographic Architecture, Security Architecture (as single documents), Security Testing Guide.
 8. No penetration test, load test or bank acceptance.
 

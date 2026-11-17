@@ -1,6 +1,6 @@
 # Release blockers
 
-What still stands between branch `engineering/production-readiness` and a controlled bank pilot, after the fourth cycle. Every engineering blocker that could be closed with the available tools (CI, SoftHSM, the code) has been closed; see [engineering readiness](ENGINEERING_READINESS.md). What is left needs infrastructure, devices or people that NEXUS-SIGN engineering does not have. None of the checks below may be replaced by a simulation: SoftHSM is not the bank's HSM, a Chromium WebRTC test is not a phone call, a unit test is not a device.
+What still stands between the current version on `main` (developed on branch `engineering/production-readiness`) and a controlled bank pilot, after the fourth cycle. Every engineering blocker that could be closed with the available tools (CI, SoftHSM, the code) has been closed; see [engineering readiness](ENGINEERING_READINESS.md). What is left needs infrastructure, devices or people that NEXUS-SIGN engineering does not have. None of the checks below may be replaced by a simulation: SoftHSM is not the bank's HSM, a Chromium WebRTC test is not a phone call, a unit test is not a device.
 
 Status of each: **BLOCKED** (needs access that is not available) unless stated.
 

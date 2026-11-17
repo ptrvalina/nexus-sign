@@ -169,9 +169,9 @@ Phrases set up with SDK 1.4 or earlier (recovery protocol 1) are refused by Auth
 
 All unit tests are plain JVM tests. `SignedTransactionTest`, `DeviceProtocolTest`, `RecoveryProtocolTest` and `SecurePushTest` are driven by `signed-payload-v1.json`, `device-protocols-v1.json`, `recovery-v2.json` and `secure-push-v1.json`, read directly from `auth-core/test-vectors/` (Gradle test resources `srcDir("../auth-core/test-vectors")`), so the tests need a full repository checkout. `NEXUSSignConfigTest` covers the base URL rules, including `allowEmulatorHostHttp`. `RecoveryPhraseTest` checks the BIP-39 encoding against the reference vectors and the input normalization; `KeySlotsTest` covers the two-slot key replacement used by enrolment and recovery.
 
-## Customer section, payment mandates, conversations (unreleased; not yet compiled)
+## Customer section, payment mandates, conversations (unreleased)
 
-These methods were added on branch `engineering/production-readiness` and have not been built in the environment where they were written; the CI SDK job must build and test them before use.
+These methods are not in a released version yet. CI builds them and runs their unit tests on every change; they have not been run on physical devices.
 
 | Area | Methods | Server API |
 |---|---|---|

@@ -1,6 +1,6 @@
 # Security testing guide
 
-How to run every security-relevant test of NEXUS-SIGN, what each needs, what it proves, and what has to be tested outside the repository. Results of the last run are in the [final engineering report](FINAL_ENGINEERING_REPORT.md); open findings in the [findings register](SECURITY_FINDINGS.md).
+How to run every security-relevant test of NEXUS-SIGN, what each needs, what it proves, and what has to be tested outside the repository. Results of the last run are in the [final engineering report](history/FINAL_ENGINEERING_REPORT.md); open findings in the [findings register](SECURITY_FINDINGS.md).
 
 ## 1. Environments
 

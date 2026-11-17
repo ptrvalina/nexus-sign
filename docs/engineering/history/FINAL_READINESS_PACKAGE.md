@@ -1,6 +1,6 @@
 # NEXUS-SIGN — Final production readiness package
 
-> **Record of the third cycle.** Superseded for status by [engineering readiness](ENGINEERING_READINESS.md) (fourth cycle), which has the CI results this package could not have. Numbers below are as of the third cycle.
+> **Record of the third cycle.** Superseded for status by [engineering readiness](../ENGINEERING_READINESS.md) (fourth cycle), which has the CI results this package could not have. Numbers below are as of the third cycle.
 
 Directive: *Master Engineering Directive — Final Production Readiness Closure, v3.0*. Branch `engineering/production-readiness`, 41 commits on top of `2.0.0-rc.2` (`5999984`), of which 14 in this cycle (`770092f` … the commit of this package). Nothing has been pushed, published or deployed; no real bank data or keys were used.
 
@@ -23,11 +23,11 @@ What blocks the next status is verification, not code: nothing has run on a phon
 
 ## B. Functional coverage matrix
 
-[`FUNCTIONAL_COMPLETENESS_MATRIX.md`](FUNCTIONAL_COMPLETENESS_MATRIX.md): 44 software functions with backend, API, iOS, Android, UI, security, unit, integration, E2E, evidence and final status; the 5 non-software items listed separately. VERIFIED LOCALLY 7, IMPLEMENTED — NOT VERIFIED 36, PARTIAL 1 (F17 payee check, the bank's), NOT IMPLEMENTED 0. No row reaches VERIFIED ON REAL DEVICE, VERIFIED WITH BANK INFRASTRUCTURE or INDEPENDENTLY AUDITED.
+[`FUNCTIONAL_COMPLETENESS_MATRIX.md`](../FUNCTIONAL_COMPLETENESS_MATRIX.md): 44 software functions with backend, API, iOS, Android, UI, security, unit, integration, E2E, evidence and final status; the 5 non-software items listed separately. VERIFIED LOCALLY 7, IMPLEMENTED — NOT VERIFIED 36, PARTIAL 1 (F17 payee check, the bank's), NOT IMPLEMENTED 0. No row reaches VERIFIED ON REAL DEVICE, VERIFIED WITH BANK INFRASTRUCTURE or INDEPENDENTLY AUDITED.
 
 ## C. Security findings register
 
-[`SECURITY_FINDINGS.md`](SECURITY_FINDINGS.md), ASVS 4.0 / MASVS 2.0 groups. Critical 0. High 4, all fixed. Medium 16: 15 fixed, D-01 open with the decision *accepted for a controlled pilot under conditions, not for production* (a captured iOS offline secret yields only `OFFLINE_PROVISIONAL`; protocol fix before production). Low 44 (6 fixed, 38 open), Info 19. This is an internal review, not a penetration test.
+[`SECURITY_FINDINGS.md`](../SECURITY_FINDINGS.md), ASVS 4.0 / MASVS 2.0 groups. Critical 0. High 4, all fixed. Medium 16: 15 fixed, D-01 open with the decision *accepted for a controlled pilot under conditions, not for production* (a captured iOS offline secret yields only `OFFLINE_PROVISIONAL`; protocol fix before production). Low 44 (6 fixed, 38 open), Info 19. This is an internal review, not a penetration test.
 
 ## D. Test execution report
 
@@ -51,7 +51,7 @@ Review environment: Linux, Node 22, PostgreSQL 16, Redis 7 (started locally for 
 | iOS (`swift test`), Android build and unit tests | **Not run** |
 | Devices, bank HSM, bank systems, penetration test | **Not done** |
 
-Commands for each level: [security testing guide](SECURITY_TESTING_GUIDE.md).
+Commands for each level: [security testing guide](../SECURITY_TESTING_GUIDE.md).
 
 ## E. Mobile SDK build report
 
@@ -64,17 +64,17 @@ Commands for each level: [security testing guide](SECURITY_TESTING_GUIDE.md).
 
 ## F. HSM integration report
 
-The PKCS#11 adapter runs in a worker thread with per-call timeouts, a bounded queue and a circuit breaker (verified against a stalling module double: `hsm-worker-host` 6, `pkcs11-adapter-deadline` 3). The eight SoftHSM suites did not run (SoftHSM cannot be installed here); CI runs them and fails if they cannot run. SoftHSM is not a bank HSM. The [HSM acceptance procedure](../operations/hsm-acceptance.md) states what each suite proves and the vendor checks only the bank's HSM can answer (concurrent logins, session limits, timeout and breaker under a network cut, cluster failover, key attributes, restart, audit). New metrics `nexus_hsm_breaker_state`, `nexus_hsm_in_flight` and `nexus_evidence_unsealed_outcomes` support that procedure.
+The PKCS#11 adapter runs in a worker thread with per-call timeouts, a bounded queue and a circuit breaker (verified against a stalling module double: `hsm-worker-host` 6, `pkcs11-adapter-deadline` 3). The eight SoftHSM suites did not run (SoftHSM cannot be installed here); CI runs them and fails if they cannot run. SoftHSM is not a bank HSM. The [HSM acceptance procedure](../../operations/hsm-acceptance.md) states what each suite proves and the vendor checks only the bank's HSM can answer (concurrent logins, session limits, timeout and breaker under a network cut, cluster failover, key attributes, restart, audit). New metrics `nexus_hsm_breaker_state`, `nexus_hsm_in_flight` and `nexus_evidence_unsealed_outcomes` support that procedure.
 
 ## G. Architecture documentation
 
 | Document | Content |
 |---|---|
-| [Functional specification](FUNCTIONAL_SPECIFICATION.md) | Actors, every function with its rules and interface, what is outside NEXUS-SIGN |
-| [Cryptographic architecture](CRYPTOGRAPHIC_ARCHITECTURE.md) | Key inventory, signed structures, cross-platform byte compatibility (TS and Kotlin verified, Swift not run), known limits |
-| [Security architecture](SECURITY_ARCHITECTURE.md) | Trust, controls by layer, the bank's independent decision, threat → control |
-| [Security testing guide](SECURITY_TESTING_GUIDE.md) | Levels L0–L8, commands, property → tests, manual and external tests |
-| New in this cycle | [Customer calls](../architecture/customer-calls.md), [biometric behaviour](../architecture/biometric-behaviour.md), [bank console](../operations/bank-console.md), [HSM acceptance](../operations/hsm-acceptance.md), [Kubernetes manifests](../../deploy/kubernetes/README.md), SIEM export in [monitoring](../operations/monitoring.md#siem-export-of-the-audit-log) |
+| [Functional specification](../FUNCTIONAL_SPECIFICATION.md) | Actors, every function with its rules and interface, what is outside NEXUS-SIGN |
+| [Cryptographic architecture](../CRYPTOGRAPHIC_ARCHITECTURE.md) | Key inventory, signed structures, cross-platform byte compatibility (TS and Kotlin verified, Swift not run), known limits |
+| [Security architecture](../SECURITY_ARCHITECTURE.md) | Trust, controls by layer, the bank's independent decision, threat → control |
+| [Security testing guide](../SECURITY_TESTING_GUIDE.md) | Levels L0–L8, commands, property → tests, manual and external tests |
+| New in this cycle | [Customer calls](../../architecture/customer-calls.md), [biometric behaviour](../../architecture/biometric-behaviour.md), [bank console](../../operations/bank-console.md), [HSM acceptance](../../operations/hsm-acceptance.md), [Kubernetes manifests](../../../deploy/kubernetes/README.md), SIEM export in [monitoring](../../operations/monitoring.md#siem-export-of-the-audit-log) |
 
 ## H. Release readiness report
 

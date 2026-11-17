@@ -92,5 +92,5 @@ Architecture and method:
 
 Records of earlier cycles (numbers as of their date):
 
-- [Final readiness package (A–J), third cycle](engineering/FINAL_READINESS_PACKAGE.md)
-- [Final engineering report, first and second cycles](engineering/FINAL_ENGINEERING_REPORT.md)
+- [Final readiness package (A–J), third cycle](engineering/history/FINAL_READINESS_PACKAGE.md)
+- [Final engineering report, first and second cycles](engineering/history/FINAL_ENGINEERING_REPORT.md)
