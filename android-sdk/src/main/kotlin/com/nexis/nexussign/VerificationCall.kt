@@ -184,6 +184,14 @@ class VerificationCallController(
     private val _capture = MutableStateFlow(CaptureState(cameraOn = false, microphoneOn = false))
     /** Camera and microphone activity, for indicators that must stay visible. */
     val capture: StateFlow<CaptureState> = _capture.asStateFlow()
+    private val _callCode = MutableStateFlow<String?>(null)
+    /**
+     * The call code to compare with the one the operator reads out (finding
+     * A2-11, [CallCode]); set when the operator's answer arrives, before the
+     * state changes.
+     */
+    val callCode: StateFlow<String?> = _callCode.asStateFlow()
+    private var lastOffer: String? = null
 
     private val lock = Mutex()
     private var info: VerificationCallInfo? = null
@@ -273,6 +281,7 @@ class VerificationCallController(
         offerSent = false
         remoteDescription = false
         val sdp = engine.createOffer(iceRestart)
+        lastOffer = sdp
         sendReliably(CallMessage.Offer(sdp))
         offerSent = true
         awaitingAnswer = true
@@ -348,6 +357,7 @@ class VerificationCallController(
                     return
                 }
                 engine.applyAnswer(message.sdp)
+                lastOffer?.let { offer -> _callCode.value = CallCode.code(offer, message.sdp) }
                 awaitingAnswer = false
                 remoteDescription = true
                 for (candidate in pendingRemote.toList()) engine.addRemoteCandidate(candidate)
@@ -464,5 +474,41 @@ internal fun hasDtlsFingerprint(sdp: String): Boolean {
         val expected = parts.takeIf { it.size == 2 }?.let { lengths[it[0].lowercase()] } ?: return@any false
         val bytes = parts[1].split(':')
         bytes.size == expected && bytes.all { b -> b.length == 2 && b.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' } }
+    }
+}
+
+/**
+ * The call code (finding A2-11): six digits from the DTLS certificate
+ * fingerprints of the phone's offer and the operator's answer. The operator
+ * console shows the same code and the operator reads it out; if anyone in the
+ * signalling path substituted a fingerprint to sit in the middle of the
+ * media, the codes differ. Vectors: auth-core/test-vectors/call-code-v1.json.
+ */
+object CallCode {
+    /** "<hash> <HEX>" from the first `a=fingerprint` line, or null. */
+    fun fingerprint(sdp: String): String? {
+        for (raw in sdp.split("\r\n", "\n", "\r")) {
+            val line = raw.trim()
+            if (!line.startsWith("a=fingerprint:", ignoreCase = true)) continue
+            val parts = line.substring("a=fingerprint:".length).trim().split(' ').filter { it.isNotEmpty() }
+            if (parts.size != 2 || parts[1].isEmpty() || !parts[1].all { it == ':' || it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) continue
+            return "${parts[0].lowercase()} ${parts[1].uppercase()}"
+        }
+        return null
+    }
+
+    /** The six-digit code, or null when either description has no fingerprint. */
+    fun code(offer: String, answer: String): String? {
+        val offerPrint = fingerprint(offer) ?: return null
+        val answerPrint = fingerprint(answer) ?: return null
+        val digest = java.security.MessageDigest.getInstance("SHA-256").run {
+            update("NEXUS-SIGN/CALL-CODE/v1".toByteArray(Charsets.UTF_8)); update(0.toByte())
+            update(offerPrint.toByteArray(Charsets.UTF_8)); update(0.toByte())
+            update(answerPrint.toByteArray(Charsets.UTF_8))
+            digest()
+        }
+        val value = ((digest[0].toLong() and 0xff) shl 24) or ((digest[1].toLong() and 0xff) shl 16) or
+            ((digest[2].toLong() and 0xff) shl 8) or (digest[3].toLong() and 0xff)
+        return (value % 1_000_000).toString().padStart(6, '0')
     }
 }

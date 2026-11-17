@@ -8,6 +8,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { skipWithoutServices, startAuthCore } from '../integration/support/harness.mjs';
 import { bankSession, deviceHeaders, totp } from '../integration/support/actors.mjs';
 
@@ -67,7 +68,19 @@ async function phoneSide({ baseUrl, channel }) {
     callId: call.callId, state: pc.connectionState, callState: state, ended,
     received: Object.fromEntries(stats.filter((s) => s.type === 'inbound-rtp').map((s) => [s.kind, s.bytesReceived])),
     dtlsState: transport?.dtlsState, srtpCipher: transport?.srtpCipher,
+    offerSdp: pc.localDescription.sdp, answerSdp: pc.remoteDescription.sdp,
   };
+}
+
+/** The call code as the SDKs compute it (finding A2-11), independently of the console's call-code.js. */
+function expectedCallCode(offerSdp, answerSdp) {
+  const print = (sdp) => {
+    const m = /^a=fingerprint:(\S+) ([0-9A-Fa-f:]+)\s*$/im.exec(sdp);
+    return m ? `${m[1].toLowerCase()} ${m[2].toUpperCase()}` : null;
+  };
+  const digest = createHash('sha256').update(Buffer.concat([Buffer.from('NEXUS-SIGN/CALL-CODE/v1'), Buffer.from([0]),
+    Buffer.from(print(offerSdp)), Buffer.from([0]), Buffer.from(print(answerSdp))])).digest();
+  return String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0');
 }
 
 describe('real WebRTC call started by the customer: phone ↔ operator console', { skip }, () => {
@@ -102,7 +115,11 @@ describe('real WebRTC call started by the customer: phone ↔ operator console',
     await console_.click('#customer-calls-refresh-btn');
     await console_.waitForSelector('button[data-ccall]', { timeout: 15_000 });
     await console_.click('button[data-ccall]');
+    // Read while the call is up: the console shows the call code (finding A2-11).
+    await console_.waitForFunction(() => /^\d{3} \d{3}$/.test(document.getElementById('ccall-code').textContent), null, { timeout: 30_000 });
+    const shownCode = (await console_.textContent('#ccall-code')).replace(' ', '');
     const result = await running;
+    assert.equal(shownCode, expectedCallCode(result.offerSdp, result.answerSdp), 'console and phone show the same call code');
     t.diagnostic(JSON.stringify(result));
     assert.equal(result.state, 'connected', JSON.stringify(result));
     assert.equal(result.callState, 'CONNECTED');

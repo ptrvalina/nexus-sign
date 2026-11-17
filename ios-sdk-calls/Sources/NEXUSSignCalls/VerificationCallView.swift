@@ -29,6 +29,8 @@ public final class VerificationCallModel: ObservableObject {
     @Published public private(set) var capture = CaptureState(cameraOn: false, microphoneOn: false)
     @Published public private(set) var microphoneEnabled = true
     @Published public private(set) var cameraEnabled = true
+    /// The call code the operator reads out (finding A2-11); nil until the answer arrives.
+    @Published public private(set) var callCode: String?
 
     public let session: VerificationSession
     /// The terms from the signed bytes (`confirmationText`), the same the operator sees.
@@ -50,7 +52,12 @@ public final class VerificationCallModel: ObservableObject {
             await controller.observe { [weak self] state, capture in
                 // The capture list copies the weak reference into the task
                 // (a captured `var` may not be used from concurrent code).
-                Task { @MainActor [weak self] in self?.state = state; self?.capture = capture }
+                // The call code is set before the state changes (VerificationCallController.callCode).
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.state = state; self.capture = capture
+                    self.callCode = await self.controller.callCode
+                }
             }
             await controller.start()
         }
@@ -102,6 +109,9 @@ public struct VerificationCallView: View {
         public var cameraOn = "Camera on"
         public var off = "Camera and microphone off"
         public var notice = "The bank employee checks this payment with you. The call is not recorded. You confirm the payment yourself afterwards."
+        /// Shown before the six-digit call code (finding A2-11).
+        public var callCode = "Call code"
+        public var callCodeNotice = "The bank employee reads this code to you. If it is different, hang up."
         public init() {}
     }
 
@@ -130,6 +140,10 @@ public struct VerificationCallView: View {
                 .accessibilityElement(children: .combine)
                 Text(statusText).foregroundColor(.gray).font(.footnote)
                 Text(model.terms).foregroundColor(.white).font(.title3).padding(.top, 4)
+                if let code = model.callCode {
+                    Text("\(labels.callCode) \(code.prefix(3)) \(code.suffix(3))").foregroundColor(.white).font(.title2.monospacedDigit().weight(.bold))
+                    Text(labels.callCodeNotice).foregroundColor(.gray).font(.caption)
+                }
                 Text(labels.notice).foregroundColor(.gray).font(.caption)
             }
             .padding()

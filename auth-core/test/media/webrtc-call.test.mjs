@@ -12,6 +12,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { skipWithoutServices, startAuthCore } from '../integration/support/harness.mjs';
 import { bankSession, deviceHeaders, deviceSignature, submitSignature, totp } from '../integration/support/actors.mjs';
 
@@ -108,7 +109,20 @@ async function deviceSide({ baseUrl, sessionId, video, restart = false }) {
     tlsVersion: transport?.tlsVersion,
     restarted,
     after,
+    offerSdp: pc.localDescription.sdp,
+    answerSdp: pc.remoteDescription.sdp,
   };
+}
+
+/** The call code as the SDKs compute it (finding A2-11), independently of the console's call-code.js. */
+function expectedCallCode(offerSdp, answerSdp) {
+  const print = (sdp) => {
+    const m = /^a=fingerprint:(\S+) ([0-9A-Fa-f:]+)\s*$/im.exec(sdp);
+    return m ? `${m[1].toLowerCase()} ${m[2].toUpperCase()}` : null;
+  };
+  const digest = createHash('sha256').update(Buffer.concat([Buffer.from('NEXUS-SIGN/CALL-CODE/v1'), Buffer.from([0]),
+    Buffer.from(print(offerSdp)), Buffer.from([0]), Buffer.from(print(answerSdp))])).digest();
+  return String(digest.readUInt32BE(0) % 1_000_000).padStart(6, '0');
 }
 
 describe('real WebRTC call: phone ↔ operator console', { skip }, () => {
@@ -208,6 +222,9 @@ describe('real WebRTC call: phone ↔ operator console', { skip }, () => {
         await console_.waitForFunction(() => document.getElementById('call-remote').videoWidth > 0, null, { timeout: 15_000 });
       }
       assert.equal(await console_.textContent('#call-indicators'), channel === 'VIDEO' ? 'Camera and microphone on' : 'Microphone on');
+      // The operator reads out the same call code the phone shows (finding A2-11).
+      const code = expectedCallCode(result.offerSdp, result.answerSdp);
+      assert.equal((await console_.textContent('#call-code')).replace(' ', ''), code, 'console and phone show the same call code');
 
       await console_.click('#call-verified-btn');
       await console_.waitForFunction(() => /recorded VERIFIED/.test(document.getElementById('call-state').textContent));

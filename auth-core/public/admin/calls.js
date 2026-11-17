@@ -118,6 +118,7 @@ async function pollSignals() {
         await pc.setLocalDescription(answerDescription);
         await postSignal(sessionId, 'answer', { sdp: pc.localDescription.sdp });
         call.current.answered = true;
+        showCallCode(signal.payload.sdp, pc.localDescription.sdp).catch(reportError);
         for (const candidate of call.current.outgoing.splice(0)) await postSignal(sessionId, 'candidate', candidate);
       } else if (signal.type === 'candidate') {
         if (pc.remoteDescription) await pc.addIceCandidate(signal.payload).catch(reportError);
@@ -130,6 +131,12 @@ async function pollSignals() {
       }
     }
   }
+}
+
+/** The code the customer's app shows too (finding A2-11, call-code.js). */
+async function showCallCode(offerSdp, answerSdp) {
+  const code = await callCode(offerSdp, answerSdp);
+  document.getElementById('call-code').textContent = code ? `${code.slice(0, 3)} ${code.slice(3)}` : 'unavailable (no DTLS fingerprint): end the call';
 }
 
 async function decide(result) {
@@ -153,6 +160,7 @@ function endCall(hideImmediately = true) {
     for (const track of call.current.local.getTracks()) track.stop();
   }
   call.current = null;
+  document.getElementById('call-code').textContent = '—';
   document.getElementById('call-indicators').textContent = 'Camera and microphone off';
   document.getElementById('call-local').srcObject = null;
   document.getElementById('call-remote').srcObject = null;

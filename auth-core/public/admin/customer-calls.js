@@ -87,6 +87,10 @@ async function pollCustomerSignals() {
         await pc.setLocalDescription(await pc.createAnswer());
         await postCustomerSignal(callId, 'answer', { sdp: pc.localDescription.sdp });
         ccall.current.answered = true;
+        // The code the customer's app shows too (finding A2-11, call-code.js).
+        callCode(signal.payload.sdp, pc.localDescription.sdp).then((code) => {
+          document.getElementById('ccall-code').textContent = code ? `${code.slice(0, 3)} ${code.slice(3)}` : 'unavailable (no DTLS fingerprint): end the call';
+        }).catch(reportError);
         for (const candidate of ccall.current.outgoing.splice(0)) await postCustomerSignal(callId, 'candidate', candidate);
       } else if (signal.type === 'candidate') {
         if (pc.remoteDescription) await pc.addIceCandidate(signal.payload).catch(reportError);
@@ -108,6 +112,7 @@ function stopCustomerCall(hide = true) {
     for (const track of ccall.current.local.getTracks()) track.stop();
   }
   ccall.current = null;
+  document.getElementById('ccall-code').textContent = '—';
   document.getElementById('ccall-indicators').textContent = 'Camera and microphone off';
   for (const id of ['ccall-local', 'ccall-remote', 'ccall-remote-audio']) document.getElementById(id).srcObject = null;
   if (hide) document.getElementById('ccall-active').style.display = 'none';

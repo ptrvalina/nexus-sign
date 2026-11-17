@@ -86,6 +86,8 @@ final class VerificationCallControllerTests: XCTestCase {
         var video: Bool?
         private(set) var releases = 0
         private var offers = 0
+        /// When set, the offer this engine creates (with a DTLS fingerprint).
+        var offerSdp: String?
         var log: [String] { lock.lock(); defer { lock.unlock() }; return _log }
         private func add(_ entry: String) { lock.lock(); _log.append(entry); lock.unlock() }
 
@@ -93,7 +95,7 @@ final class VerificationCallControllerTests: XCTestCase {
             self.events = events; self.video = video; add("prepare")
             events.captureState(cameraOn: video, microphoneOn: true)
         }
-        func createOffer(iceRestart: Bool) async throws -> String { offers += 1; add("offer:\(iceRestart)"); return "v=0 offer \(offers)" }
+        func createOffer(iceRestart: Bool) async throws -> String { offers += 1; add("offer:\(iceRestart)"); return offerSdp ?? "v=0 offer \(offers)" }
         // Logs the first SDP line; the rest is the DTLS fingerprint.
         func applyAnswer(sdp: String) async throws { add("answer:\(sdp.components(separatedBy: "\r\n")[0])") }
         func addRemoteCandidate(_ candidate: IceCandidateInit) async throws { add("remote:\(candidate.candidate)") }
@@ -260,6 +262,35 @@ final class VerificationCallControllerTests: XCTestCase {
         XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-1 \(hash(20))"))
         XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-256 \(hash(31)):zz"))
         XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-256"))
+    }
+
+    /// Finding A2-11: the call code from the offer and the answer, as the
+    /// operator console computes it (shared vectors).
+    func testCallCodeVectors() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "call-code-v1", withExtension: "json"))
+        let vectors = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        for v in try XCTUnwrap(vectors["valid"] as? [[String: String]]) {
+            XCTAssertEqual(CallCode.fingerprint(v["offer"]!), v["offerFingerprint"], v["name"]!)
+            XCTAssertEqual(CallCode.fingerprint(v["answer"]!), v["answerFingerprint"], v["name"]!)
+            XCTAssertEqual(CallCode.code(offer: v["offer"]!, answer: v["answer"]!), v["code"], v["name"]!)
+        }
+        for v in try XCTUnwrap(vectors["noFingerprint"] as? [[String: String]]) {
+            XCTAssertNil(CallCode.code(offer: v["offer"]!, answer: v["answer"]!), v["name"]!)
+        }
+    }
+
+    func testCallCodeIsSetWhenTheAnswerArrives() async throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "call-code-v1", withExtension: "json"))
+        let vectors = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let v = try XCTUnwrap((vectors["valid"] as? [[String: String]])?.first)
+        let relay = Relay(), engine = Engine()
+        engine.offerSdp = v["offer"]
+        let call = VerificationCallController(signalling: relay, engine: engine, options: fast)
+        await call.start()
+        let before = await call.callCode
+        XCTAssertNil(before)
+        relay.operatorSends(.answer(sdp: v["answer"]!))
+        try await until("call code") { await call.callCode == v["code"] }
     }
 
     func testHangUpCancelsOnceAndReleasesMedia() async throws {

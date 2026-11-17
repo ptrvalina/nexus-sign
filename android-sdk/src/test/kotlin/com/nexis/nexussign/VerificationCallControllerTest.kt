@@ -89,11 +89,13 @@ class VerificationCallControllerTest {
         var video: Boolean? = null
         var releases = 0
         var offerCount = 0
+        /** When set, the offer this engine creates (with a DTLS fingerprint). */
+        var offerSdp: String? = null
         override suspend fun prepare(iceServers: List<IceServer>, video: Boolean, events: MediaEvents) {
             this.events = events; this.video = video; log += "prepare"
             events.onCaptureState(cameraOn = video, microphoneOn = true)
         }
-        override suspend fun createOffer(iceRestart: Boolean): String { offerCount++; log += "offer:$iceRestart"; return "v=0 offer $offerCount" }
+        override suspend fun createOffer(iceRestart: Boolean): String { offerCount++; log += "offer:$iceRestart"; return offerSdp ?: "v=0 offer $offerCount" }
         // Logs the first SDP line; the rest is the DTLS fingerprint.
         override suspend fun applyAnswer(sdp: String) { log += "answer:${sdp.lines()[0]}" }
         override suspend fun addRemoteCandidate(candidate: IceCandidateInit) { log += "remote:${candidate.candidate}" }
@@ -359,6 +361,34 @@ class VerificationCallControllerTest {
         } catch (e: NEXUSSignError.InvalidArgument) {
             assertEquals("relay-only call without a TURN server", e.detail)
         }
+    }
+
+    private val callCodeVectors: Map<*, *> by lazy {
+        TestJson.parse(javaClass.classLoader!!.getResource("call-code-v1.json")!!.readText()) as Map<*, *>
+    }
+
+    @Test fun `call code matches the shared vectors (finding A2-11)`() {
+        for (v in callCodeVectors["valid"] as List<*>) {
+            v as Map<*, *>
+            assertEquals(v["name"].toString(), v["offerFingerprint"], CallCode.fingerprint(v["offer"] as String))
+            assertEquals(v["name"].toString(), v["answerFingerprint"], CallCode.fingerprint(v["answer"] as String))
+            assertEquals(v["name"].toString(), v["code"], CallCode.code(v["offer"] as String, v["answer"] as String))
+        }
+        for (v in callCodeVectors["noFingerprint"] as List<*>) {
+            v as Map<*, *>
+            assertEquals(null, CallCode.code(v["offer"] as String, v["answer"] as String))
+        }
+    }
+
+    @Test fun `the call code is set when the operator's answer arrives`() = runBlocking {
+        val v = (callCodeVectors["valid"] as List<*>).first() as Map<*, *>
+        val relay = Relay(); val engine = Engine().apply { offerSdp = v["offer"] as String }
+        val call = VerificationCallController(relay, engine, scope, fast)
+        call.start()
+        until("offer") { relay.offersSent().isNotEmpty() }
+        assertEquals(null, call.callCode.value)
+        relay.operator(CallMessage.Answer(v["answer"] as String))
+        until("call code") { call.callCode.value == v["code"] }
     }
 
     @Test fun `DTLS fingerprint check`() {

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // In-app audio and video verification calls (ADR 0017).
 //
@@ -33,6 +34,36 @@ public struct IceServer: Equatable, Sendable {
         }
         guard !relays.isEmpty else { throw NEXUSSignError.invalidArgument(detail: "relay-only call without a TURN server") }
         return relays
+    }
+}
+
+/// The call code (finding A2-11): six digits from the DTLS certificate
+/// fingerprints of the phone's offer and the operator's answer. The operator
+/// console shows the same code and the operator reads it out; if anyone in
+/// the signalling path substituted a fingerprint to sit in the middle of the
+/// media, the codes differ. Vectors: auth-core/test-vectors/call-code-v1.json.
+public enum CallCode {
+    /// "<hash> <HEX>" from the first `a=fingerprint` line, or nil.
+    public static func fingerprint(_ sdp: String) -> String? {
+        for rawLine in sdp.split(whereSeparator: { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.lowercased().hasPrefix("a=fingerprint:") else { continue }
+            let parts = line.dropFirst("a=fingerprint:".count).split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count == 2, !parts[1].isEmpty, parts[1].allSatisfy({ $0.isHexDigit || $0 == ":" }) else { continue }
+            return "\(parts[0].lowercased()) \(parts[1].uppercased())"
+        }
+        return nil
+    }
+
+    /// The six-digit code, or nil when either description has no fingerprint.
+    public static func code(offer: String, answer: String) -> String? {
+        guard let offerPrint = fingerprint(offer), let answerPrint = fingerprint(answer) else { return nil }
+        var input = Data("NEXUS-SIGN/CALL-CODE/v1".utf8)
+        input.append(0); input.append(Data(offerPrint.utf8)); input.append(0); input.append(Data(answerPrint.utf8))
+        let digest = Array(SHA256.hash(data: input))
+        let value = (UInt32(digest[0]) << 24) | (UInt32(digest[1]) << 16) | (UInt32(digest[2]) << 8) | UInt32(digest[3])
+        let text = String(value % 1_000_000)
+        return String(repeating: "0", count: 6 - text.count) + text
     }
 }
 
@@ -174,11 +205,16 @@ public actor VerificationCallController {
 
     public private(set) var state: CallState = .idle
     public private(set) var capture = CaptureState(cameraOn: false, microphoneOn: false)
+    /// The call code to compare with the one the operator reads out (finding
+    /// A2-11); set when the operator's answer arrives, before the state
+    /// changes, so an observer of the state finds it.
+    public private(set) var callCode: String?
     /// Messages ignored as duplicates or out of order (diagnostics).
     public private(set) var ignoredMessages = 0
 
     private var lastSeq: Int64 = 0
     private var offerSent = false
+    private var lastOffer: String?
     private var awaitingAnswer = false
     private var remoteDescription = false
     private var pendingLocal: [IceCandidateInit] = []
@@ -310,6 +346,7 @@ public actor VerificationCallController {
         offerSent = false
         remoteDescription = false
         let sdp = try await engine.createOffer(iceRestart: iceRestart)
+        lastOffer = sdp
         try await sendReliably(.offer(sdp: sdp))
         offerSent = true
         awaitingAnswer = true
@@ -381,6 +418,7 @@ public actor VerificationCallController {
                 return
             }
             try await engine.applyAnswer(sdp: sdp)
+            if let offer = lastOffer { callCode = CallCode.code(offer: offer, answer: sdp) }
             awaitingAnswer = false
             remoteDescription = true
             let held = pendingRemote

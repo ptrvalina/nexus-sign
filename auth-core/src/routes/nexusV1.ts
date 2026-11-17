@@ -323,8 +323,28 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
   router.get('/v1/authorizations/:authorizationId', async (req: AuthenticatedRequest, res, next) => {
     try {
       const auth = await getAuthorizationForClient(uuidSchema.parse(req.params.authorizationId), clientIdOf(req));
+      // An explicit view: the fields of the contract (openapi.yaml,
+      // Authorization), not whatever the record holds (finding A1-12).
       res.json({
-        ...auth,
+        authorizationId: auth.authorizationId,
+        nexusId: auth.nexusId,
+        credentialId: auth.credentialId,
+        transactionReference: auth.transactionReference,
+        operationType: auth.operationType,
+        amountMinor: auth.amountMinor,
+        currency: auth.currency,
+        beneficiary: auth.beneficiary,
+        policyReference: auth.policyReference,
+        policyVersion: auth.policyVersion,
+        canonicalPayloadHash: auth.canonicalPayloadHash,
+        nonce: auth.nonce,
+        signature: auth.signature,
+        signatureAlgorithm: auth.signatureAlgorithm,
+        signatureFormat: auth.signatureFormat,
+        confirmationMethod: auth.confirmationMethod,
+        offlineCodeAcceptedAt: auth.offlineCodeAcceptedAt?.toISOString() ?? null,
+        offlineSignatureDeadline: auth.offlineSignatureDeadline?.toISOString() ?? null,
+        offlineUnsignedReason: auth.offlineUnsignedReason,
         state: reportedState(auth),
         // True only for VERIFIED with sealed evidence that verifies now (HSM
         // seal, binding, terms, device signature with the enrolment key): the

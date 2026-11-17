@@ -44,6 +44,9 @@ class VerificationCallView @JvmOverloads constructor(context: Context, attrs: At
         val cameraOnButton: String = "Camera on",
         val hangUp: String = "Hang up",
         val notice: String = "The bank employee checks this payment with you. The call is not recorded. You confirm the payment yourself afterwards.",
+        /** Shown before the six-digit call code (finding A2-11). */
+        val callCode: String = "Call code",
+        val callCodeNotice: String = "The bank employee reads this code to you. If it is different, hang up.",
     )
 
     private val remote = SurfaceViewRenderer(context)
@@ -52,6 +55,7 @@ class VerificationCallView @JvmOverloads constructor(context: Context, attrs: At
     private val indicator = TextView(context)
     private val terms = TextView(context)
     private val notice = TextView(context)
+    private val code = TextView(context)
     private val muteButton = Button(context)
     private val cameraButton = Button(context)
     private val hangUpButton = Button(context)
@@ -68,7 +72,7 @@ class VerificationCallView @JvmOverloads constructor(context: Context, attrs: At
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(16), dp(16), dp(12))
             setBackgroundColor(Color.argb(170, 0, 0, 0))
-            addView(indicator); addView(status); addView(terms); addView(notice)
+            addView(indicator); addView(status); addView(terms); addView(code); addView(notice)
         }
         addView(top, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP))
         indicator.setTextColor(Color.WHITE)
@@ -81,6 +85,10 @@ class VerificationCallView @JvmOverloads constructor(context: Context, attrs: At
         terms.setPadding(0, dp(8), 0, dp(4))
         notice.setTextColor(Color.LTGRAY)
         notice.textSize = 12f
+        code.setTextColor(Color.WHITE)
+        code.textSize = 22f
+        code.typeface = android.graphics.Typeface.MONOSPACE
+        code.visibility = View.GONE
         val buttons = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -130,6 +138,15 @@ class VerificationCallView @JvmOverloads constructor(context: Context, attrs: At
         }
         hangUpButton.setOnClickListener { call.hangUp() }
         owner.lifecycleScope.launch { call.controller.capture.collect(::showCapture) }
+        owner.lifecycleScope.launch {
+            call.controller.callCode.collect { value ->
+                code.visibility = if (value == null) View.GONE else View.VISIBLE
+                if (value != null) {
+                    code.text = "${labels.callCode} ${value.take(3)} ${value.takeLast(3)}"
+                    notice.text = "${labels.callCodeNotice}\n${labels.notice}"
+                }
+            }
+        }
         owner.lifecycleScope.launch {
             call.controller.state.collect { state ->
                 status.text = statusText(state)

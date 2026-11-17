@@ -151,6 +151,7 @@
           <div style="flex:1; min-width:240px;">
             <div id="ccall-title" style="font-weight:600"></div>
             <div style="margin-top:10px;"><span class="badge PENDING" id="ccall-indicators">Camera and microphone off</span> <span class="muted" id="ccall-state"></span></div>
+            <div style="margin-top:10px;">Call code <b class="mono" id="ccall-code" style="font-size:18px">—</b> <span class="muted">Read it to the customer: the app must show the same code. If it differs, end the call.</span></div>
             <div class="identity-actions"><button class="ghost" id="ccall-hangup-btn">Hang up</button></div>
             <div class="muted" style="margin-top:8px; font-size:12px;">Nothing of the call is recorded; the call's record (who, when, how it ended) and your username are kept.</div>
           </div>
@@ -175,6 +176,7 @@
             <div class="muted" style="margin-bottom:6px;">Confirm with the customer:</div>
             <div id="call-terms"></div>
             <div style="margin-top:10px;"><span class="badge PENDING" id="call-indicators">Camera and microphone off</span> <span class="muted" id="call-state"></span></div>
+            <div style="margin-top:10px;">Call code <b class="mono" id="call-code" style="font-size:18px">—</b> <span class="muted">Read it to the customer: the app must show the same code. If it differs, end the call.</span></div>
             <div class="identity-actions">
               <button class="primary" id="call-verified-btn">Verified</button>
               <button class="danger" id="call-failed-btn">Failed</button>
@@ -264,6 +266,7 @@
 </main>
 
 <script src="/admin/admin.js"></script>
+<script src="/admin/call-code.js"></script>
 <script src="/admin/calls.js"></script>
 <script src="/admin/conversations.js"></script>
 <script src="/admin/customer.js"></script>

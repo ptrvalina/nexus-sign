@@ -2222,7 +2222,11 @@ components:
         state: { $ref: '#/components/schemas/AuthorizationState' }
         signature: { type: string, nullable: true }
         signatureAlgorithm: { type: string, enum: [ES256] }
-        signatureFormat: { type: string, enum: [der, raw], nullable: true }
+        signatureFormat: { type: string, enum: [der, raw, hmac], nullable: true, description: hmac for an offline code (not a third-party verifiable signature) }
+        confirmationMethod: { type: string, enum: [DEVICE_SIGNATURE, OFFLINE_CODE, OFFLINE_SIGNED], nullable: true }
+        offlineCodeAcceptedAt: { type: string, format: date-time, nullable: true, description: When an offline code was accepted }
+        offlineSignatureDeadline: { type: string, format: date-time, nullable: true, description: "Offline v2/v3: until when the device signature may arrive" }
+        offlineUnsignedReason: { type: string, nullable: true, description: "OFFLINE_UNSIGNED: deadline, credential_not_active or identity_not_active" }
         verifiedAt: { type: string, format: date-time, nullable: true }
         evidence: { allOf: [{ $ref: '#/components/schemas/ChainPosition' }], nullable: true, description: "VERIFIED only: the sealed record's chain position. Store it as the identity's chain head; compare canonicalPayloadHash with the value returned at creation before committing." }
     MobileAuthorization:

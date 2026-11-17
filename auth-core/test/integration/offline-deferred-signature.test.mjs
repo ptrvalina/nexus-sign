@@ -92,6 +92,12 @@ describe('offline confirmation v2: deferred device signature', { skip: skipWitho
     const verified = await stateOf(phone.id);
     assert.equal(verified.state, 'VERIFIED');
     assert.equal(verified.confirmationMethod, 'OFFLINE_SIGNED');
+    // The bank sees exactly the fields of the contract (openapi.yaml, Authorization; finding A1-12).
+    assert.deepEqual(Object.keys(verified).sort(), ['amountMinor', 'authorizationId', 'beneficiary', 'canonicalPayloadHash', 'confirmationMethod', 'confirmed',
+      'credentialId', 'currency', 'evidence', 'evidenceProblem', 'expiresAt', 'issuedAt', 'nexusId', 'nonce', 'offlineCodeAcceptedAt', 'offlineSignatureDeadline',
+      'offlineUnsignedReason', 'operationType', 'policyReference', 'policyVersion', 'signature', 'signatureAlgorithm', 'signatureFormat', 'state',
+      'transactionReference', 'verifiedAt'].filter((k) => k !== 'evidenceProblem' || 'evidenceProblem' in verified));
+    assert.ok(Date.parse(verified.offlineCodeAcceptedAt) > 0, 'when the code was accepted');
     const hook = await webhooks(phone.id, 'authorization.verified');
     assert.equal(hook.length, 1);
     assert.equal(hook[0].payload.confirmationMethod, 'OFFLINE_SIGNED');

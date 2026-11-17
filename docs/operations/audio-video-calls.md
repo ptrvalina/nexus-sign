@@ -68,9 +68,22 @@ The `denied-peer-ip` lines keep the relay from reaching internal networks. Add t
 |---|---|
 | Phone → Auth Core (signalling) | TLS (optionally pinned in the SDK), device request signature with one-time nonce, session bound to the authorization and credential |
 | Operator browser → Auth Core | TLS, password + TOTP session, role `operator`, bank scope, one claim per call |
-| Phone ↔ operator browser (media) | DTLS-SRTP negotiated by WebRTC; fingerprints exchanged through the authenticated signalling |
+| Phone ↔ operator browser (media) | DTLS-SRTP negotiated by WebRTC; fingerprints exchanged through the authenticated signalling. Both SDKs end the call if the operator's answer has no fingerprint (finding D-14). The phone and the console show a six-digit **call code** derived from both fingerprints; the operator reads it out and the customer compares it (see below) |
 | Phone / browser → TURN | Per-session TURN REST credentials, valid until the session expires (at most `WEBRTC_TURN_CREDENTIAL_TTL_SECONDS`); TLS on 5349 |
 | TURN → internal network | `denied-peer-ip` ranges, `no-tcp-relay`, quotas (below) |
+
+### Call code (finding A2-11)
+
+Auth Core relays the session descriptions. Whoever can write signals (a compromised Auth Core or Redis) could replace the DTLS certificate fingerprints and relay the media through themselves. The call code makes that visible to the two people on the call:
+
+```text
+fingerprint(sdp) = first "a=fingerprint:<hash> <hex>" line, as "<hash in lower case> <HEX IN UPPER CASE>"
+digest = SHA-256("NEXUS-SIGN/CALL-CODE/v1" || 0x00 || fingerprint(phone's offer) || 0x00 || fingerprint(operator's answer))
+code   = (first 4 bytes of digest as a big-endian unsigned integer) mod 1 000 000, six digits
+```
+
+The console shows it next to the call state (verification calls and customer calls); the SDKs expose it as `VerificationCallController.callCode` (set when the answer arrives). The operator reads the code out at the start of the call; if the customer's app shows another code, the operator ends the call. Vectors: `auth-core/test-vectors/call-code-v1.json` (console, iOS and Android run them); the real WebRTC tests compare the console's code with the one computed from the phone's descriptions. The call screens of the call modules (`VerificationCallView` on iOS and Android) show it with a short notice; a bank app with its own screen reads `callCode`.
+
 
 The mobile apps contain no TURN secret; `WEBRTC_TURN_SECRET` stays in Auth Core and coturn.
 
