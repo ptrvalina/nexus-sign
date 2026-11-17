@@ -261,7 +261,7 @@ public struct NEXUSSignPushReader {
     /// key, not the request-signing key.
     public func sendReceipt(for message: NexusPushMessage, baseURL: URL, session: URLSession? = nil, timeout: TimeInterval = 10) async throws {
         guard baseURL.scheme == "https" || (baseURL.scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(baseURL.host ?? "")) else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Auth Core base URL must be https")
+            throw NEXUSSignError.configurationInvalid(detail: "Auth Core base URL must be https")
         }
         let body = try JSONSerialization.data(withJSONObject: ["credentialId": message.credentialId, "receipt": try receipt(for: message)])
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/push-receipts/\(message.messageId)"))

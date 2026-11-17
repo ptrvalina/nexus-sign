@@ -83,4 +83,20 @@ sealed class NEXUSSignError(message: String, cause: Throwable? = null) : Excepti
     /** The recovery phrase is malformed or does not match the one on file. */
     object InvalidRecoveryPhrase :
         NEXUSSignError("The recovery phrase is not correct. Check the words and try again.")
+
+    /**
+     * Auth Core answered, but not as the protocol allows (unexpected format,
+     * a key agreement that does not match, parameters outside the supported
+     * range). Not retried (finding D-11).
+     */
+    class InvalidServerResponse(val detail: String) :
+        NEXUSSignError("Auth Core sent an unexpected response ($detail).")
+
+    /** The recovery session the bank backend handed to the app is malformed (finding D-11). */
+    class InvalidRecoverySession(val detail: String) :
+        NEXUSSignError("The recovery could not be started ($detail). Ask the bank to start it again.")
+
+    /** The host app passed a malformed value (an identifier that is not a UUID); nothing was sent. */
+    class InvalidArgument(val detail: String) :
+        NEXUSSignError("Invalid value: $detail.")
 }

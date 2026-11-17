@@ -1,7 +1,7 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, timingSafeEqual } from 'node:crypto';
 import { authorizationConfirmations } from '../observability/metrics';
 import type { PoolClient } from 'pg';
-import { withTransaction } from '../db/pool';
+import { pool, withTransaction } from '../db/pool';
 import { recordAuditEvent, type AuditContext } from './auditService';
 import { getNexusIdentityForClient } from './nexusIdentityService';
 import { getCredentialForClient } from './credentialService';
@@ -10,10 +10,10 @@ import { sealAuthorizationEvidence, type ChainPosition } from './evidenceService
 import { assertCredentialIntegrity, CredentialIntegrityError } from './credentialIntegrity';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
 import { normalizeLowS } from '../crypto/ecdsaSignatureFormat';
-import { decryptSecretBytes } from '../crypto/secretBox';
+import { decryptSecretBytes, encryptSecret } from '../crypto/secretBox';
 import { parseOfflineLimits } from '../config/productionPosture';
 import { env } from '../config/env';
-import { OFFLINE_CODE_DIGITS, offlineCodeFromTag, offlineConfirmationTag, offlineQrPayload } from './deviceProtocol';
+import { OFFLINE_CODE_DIGITS, deriveOfflineKeyPerAuthorization, offlineCodeFromTag, offlineConfirmationTag, offlineQrPayload, offlineQrPayloadV3 } from './deviceProtocol';
 import { settlePlanForConfirmation } from './adaptiveVerificationService';
 import {
   AuthorizationNotFoundError,
@@ -105,12 +105,46 @@ export async function getOfflineChallenge(id: string, clientId: string): Promise
   if (!credential.offlineEnabled) throw new ConflictError('The customer\'s device is not enrolled for offline confirmation');
   const limitReason = offlineLimitExceeded(auth.currency, auth.amountMinor);
   if (limitReason) throw new ConflictError(limitReason, 'OFFLINE_LIMIT_EXCEEDED');
+  const canonical = canonicalizeAuthorization(authorizationObjectOf(auth));
   return {
     authorizationId: auth.authorizationId,
-    qrPayload: offlineQrPayload(canonicalizeAuthorization(authorizationObjectOf(auth)), deferredSignatureMode() ? 2 : 1),
+    // Offline v3 (finding D-01): a key of Auth Core's for this authorization only.
+    qrPayload: credential.offlineKeyAgreement === 'PER_AUTHORIZATION'
+      ? offlineQrPayloadV3(canonical, await offlineChallengeKey(auth.authorizationId, credential.credentialId))
+      : offlineQrPayload(canonical, deferredSignatureMode() ? 2 : 1),
     codeDigits: OFFLINE_CODE_DIGITS,
     expiresAt: auth.expiresAt.toISOString(),
   };
+}
+
+/** Owner bound into the ciphertext of a challenge key. */
+const challengeKeyOwner = (authorizationId: string): string => `offline-challenge:${authorizationId}`;
+
+/**
+ * Auth Core's P-256 key for one authorization (offline v3), created by the
+ * first challenge and returned again by later ones, so every QR code of the
+ * authorization carries the same key. Returns the DER SubjectPublicKeyInfo.
+ */
+async function offlineChallengeKey(authorizationId: string, credentialId: string): Promise<Buffer> {
+  const read = async () => (await pool.query<{ server_public_key_pem: string; credential_id: string }>(
+    `SELECT server_public_key_pem, credential_id FROM offline_challenges WHERE authorization_id = $1`, [authorizationId])).rows[0];
+  let row = await read();
+  if (!row) {
+    const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    const privateDer = pair.privateKey.export({ type: 'pkcs8', format: 'der' });
+    try {
+      await pool.query(
+        `INSERT INTO offline_challenges (authorization_id, credential_id, server_public_key_pem, server_private_key_encrypted)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (authorization_id) DO NOTHING`,
+        [authorizationId, credentialId, pair.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+          encryptSecret(privateDer, 'device', challengeKeyOwner(authorizationId))]);
+    } finally {
+      privateDer.fill(0);
+    }
+    row = await read(); // a parallel first challenge may have won
+  }
+  if (!row || row.credential_id !== credentialId) throw new ConflictError('The offline challenge belongs to another device');
+  return createPublicKey(row.server_public_key_pem).export({ type: 'spki', format: 'der' });
 }
 
 async function confirmAuthorization(
@@ -210,14 +244,34 @@ async function checkOfflineCode(
         return { result: { status: 'FAILED', reason: OFFLINE_LIMIT_REASON } };
       }
     }
-    const stored = await tx.query<{ offline_secret_encrypted: string | null }>(
-      `SELECT offline_secret_encrypted FROM credentials WHERE credential_id = $1`, [credentialId]);
-    const encrypted = stored.rows[0]?.offline_secret_encrypted;
-    if (!encrypted) return { result: { status: 'FAILED', reason: 'The device is not enrolled for offline confirmation' } };
-
-    // K is needed for this one comparison; the copy is wiped afterwards (the
-    // master key that decrypts it stays in memory, KEY_MANAGEMENT.md).
-    const offlineKey = decryptSecretBytes(encrypted, 'device', credentialId);
+    const stored = await tx.query<{ offline_secret_encrypted: string | null; offline_key_agreement: string; offline_public_key_pem: string | null }>(
+      `SELECT offline_secret_encrypted, offline_key_agreement, offline_public_key_pem FROM credentials WHERE credential_id = $1`, [credentialId]);
+    const credentialKeys = stored.rows[0];
+    let offlineKey: Buffer;
+    if (credentialKeys?.offline_key_agreement === 'PER_AUTHORIZATION') {
+      // Offline v3 (finding D-01): K from this authorization's challenge key.
+      const challenge = await tx.query<{ server_private_key_encrypted: string; credential_id: string }>(
+        `SELECT server_private_key_encrypted, credential_id FROM offline_challenges WHERE authorization_id = $1`, [id]);
+      const row = challenge.rows[0];
+      if (!row || row.credential_id !== credentialId || !credentialKeys.offline_public_key_pem) {
+        return { result: { status: 'FAILED', reason: 'No offline challenge was issued for this authorization and device' } };
+      }
+      const privateDer = decryptSecretBytes(row.server_private_key_encrypted, 'device', challengeKeyOwner(id));
+      let shared: Buffer | undefined;
+      try {
+        shared = diffieHellman({ privateKey: createPrivateKey({ key: privateDer, format: 'der', type: 'pkcs8' }), publicKey: createPublicKey(credentialKeys.offline_public_key_pem) });
+        offlineKey = deriveOfflineKeyPerAuthorization(shared, credentialId, id);
+      } finally {
+        privateDer.fill(0);
+        shared?.fill(0);
+      }
+    } else {
+      const encrypted = credentialKeys?.offline_secret_encrypted;
+      if (!encrypted) return { result: { status: 'FAILED', reason: 'The device is not enrolled for offline confirmation' } };
+      // K is needed for this one comparison; the copy is wiped afterwards (the
+      // master key that decrypts it stays in memory, KEY_MANAGEMENT.md).
+      offlineKey = decryptSecretBytes(encrypted, 'device', credentialId);
+    }
     let tag: Buffer;
     try {
       tag = offlineConfirmationTag(offlineKey, canonical);

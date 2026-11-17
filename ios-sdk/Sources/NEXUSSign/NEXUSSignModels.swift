@@ -58,6 +58,10 @@ public struct NexusMobileRegistration: Decodable, Equatable {
     /// Always `DEVICE_SIGNATURE`: the device signs its own requests.
     public let requestAuthentication: String?
     public let offlineServerPublicKeyPem: String?
+    /// `PER_AUTHORIZATION` when every offline confirmation uses a fresh Auth
+    /// Core key from the QR code (finding D-01); `STATIC` for a key agreed
+    /// once at enrolment; absent when offline confirmation is off.
+    public let offlineKeyAgreement: String?
 }
 
 public struct NexusRecoveryParameters: Decodable, Equatable {
@@ -98,6 +102,10 @@ public struct NexusRecoveryResult: Decodable, Equatable {
     /// `DEVICE_SIGNATURE` when the device signs its own requests.
     public let requestAuthentication: String?
     public let offlineServerPublicKeyPem: String?
+    /// `PER_AUTHORIZATION` when every offline confirmation uses a fresh Auth
+    /// Core key from the QR code (finding D-01); `STATIC` for a key agreed
+    /// once at enrolment; absent when offline confirmation is off.
+    public let offlineKeyAgreement: String?
 }
 
 /// A transaction read from an offline QR code, verified and ready to show.
@@ -108,11 +116,14 @@ public struct NexusOfflineChallenge {
     /// Offline confirmation v2 (QR `NXS2.`): `confirmOffline` also signs the
     /// transaction and keeps the signature for upload.
     public let requiresDeviceSignature: Bool
+    /// Offline v3 (QR `NXS3.`): Auth Core's key for this authorization.
+    let serverPublicKeyPEM: String?
 
-    init(transaction: NexusSignedTransaction, canonicalPayload: Data, requiresDeviceSignature: Bool = false) {
+    init(transaction: NexusSignedTransaction, canonicalPayload: Data, requiresDeviceSignature: Bool = false, serverPublicKeyPEM: String? = nil) {
         self.transaction = transaction
         self.canonicalPayload = canonicalPayload
         self.requiresDeviceSignature = requiresDeviceSignature
+        self.serverPublicKeyPEM = serverPublicKeyPEM
     }
 }
 

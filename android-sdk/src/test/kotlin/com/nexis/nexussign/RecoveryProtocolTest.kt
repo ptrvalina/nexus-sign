@@ -62,6 +62,14 @@ class RecoveryProtocolTest {
     }
 
     @Test
+    fun `a wrapped key of the wrong length is a server response error, not a fake HTTP status (finding D-11)`() {
+        val error = assertThrows(NEXUSSignError.InvalidServerResponse::class.java) {
+            RecoveryProtocol.unwrap(ByteArray(10), hex(str("wrap_key_hex")), RecoveryProtocol.associatedData(str("nexus_id"), recoverySpki))
+        }
+        assertEquals("invalid wrapped recovery key", error.detail)
+    }
+
+    @Test
     fun `setup and proof signing inputs match, and the vector proof verifies`() {
         val wrapped = Base64.getDecoder().decode(str("wrapped_recovery_key_b64"))
         val setup = RecoveryProtocol.setupSigningInput(str("nexus_id"), str("credential_id"), str("salt_b64"), recoverySpki, wrapped)

@@ -330,10 +330,10 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     const keys = prepareDeviceKeys(newId, newPublicKey.pem, input.deviceKeys ?? {});
     const created = await tx.query<{ credential_id: string; key_version: number }>(
       `INSERT INTO credentials (credential_id,nexus_id,key_algorithm,public_key_pem,platform,security_level,attestation_status,state,key_version,activated_at,
-         auth_public_key_pem,offline_public_key_pem,offline_server_public_key_pem,offline_secret_encrypted)
-       VALUES ($1,$2,'ES256',$3,$4,$5,$6,'ACTIVE',$7,now(),$8,$9,$10,$11) RETURNING credential_id,key_version`,
+         auth_public_key_pem,offline_public_key_pem,offline_server_public_key_pem,offline_secret_encrypted,offline_key_agreement)
+       VALUES ($1,$2,'ES256',$3,$4,$5,$6,'ACTIVE',$7,now(),$8,$9,$10,$11,$12) RETURNING credential_id,key_version`,
       [newId, s.nexus_id, newPublicKey.pem, input.platform, input.securityLevel, input.attestationStatus, nextVersion,
-        keys.authPublicKeyPem, keys.offlinePublicKeyPem, keys.offlineServerPublicKeyPem, keys.offlineSecretEncrypted]);
+        keys.authPublicKeyPem, keys.offlinePublicKeyPem, keys.offlineServerPublicKeyPem, keys.offlineSecretEncrypted, keys.offlineKeyAgreement]);
     const enrolment = await sealCredentialEnrolment(tx, input.hsm, {
       nexusId: s.nexus_id,
       credentialId: newId,
@@ -352,13 +352,14 @@ export async function completeRecovery(input: CompleteRecoveryInput): Promise<Re
     await recordAuditEvent('credential_created', { nexusId: s.nexus_id }, { credentialId: newId, reason: 'RECOVERY', keyVersion: created.rows[0].key_version, enrolmentEvidenceHash: enrolment.evidenceHash }, tx);
     await recordAuditEvent('recovery_completed', { nexusId: s.nexus_id }, { recoverySessionId: input.sessionId, credentialId: newId, protocol: i.recovery_protocol }, tx);
     await enqueueWebhook(s.client_id, 'identity.recovered', { nexusId: s.nexus_id, newCredentialId: newId, revokedCredentialIds: revokedIds }, tx);
-    return { nexusId: s.nexus_id, credentialId: newId, keyVersion: created.rows[0].key_version, offlineServerPublicKeyPem: keys.offlineServerPublicKeyPem };
+    return { nexusId: s.nexus_id, credentialId: newId, keyVersion: created.rows[0].key_version, offlineServerPublicKeyPem: keys.offlineServerPublicKeyPem,
+      offlineKeyAgreement: keys.offlinePublicKeyPem ? keys.offlineKeyAgreement : null };
   });
   if (outcome === 'INVALID_PROOF') throw new InvalidRecoveryProofError();
   return outcome;
 }
 
-export interface RecoveryResult { nexusId: string; credentialId: string; keyVersion: number; offlineServerPublicKeyPem: string | null }
+export interface RecoveryResult { nexusId: string; credentialId: string; keyVersion: number; offlineServerPublicKeyPem: string | null; offlineKeyAgreement: 'STATIC' | 'PER_AUTHORIZATION' | null }
 
 /**
  * The stored recovery key and wrapped key must be the ones sealed when the

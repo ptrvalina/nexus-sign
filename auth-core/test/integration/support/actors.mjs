@@ -54,6 +54,27 @@ export function offlineCode(device, canonical) {
   return String(bin % 100000000).padStart(8, '0');
 }
 
+/**
+ * Offline v3 (finding D-01): the code from a `NXS3.` QR code, with Auth
+ * Core's key for that authorization, as the iOS SDK computes it.
+ */
+export function offlineCodeV3(device, qrPayload) {
+  const [prefix, canonicalB64, serverKeyB64] = qrPayload.split('.');
+  if (prefix !== 'NXS3') throw new Error(`not a v3 QR payload: ${prefix}`);
+  const canonical = Buffer.from(canonicalB64, 'base64url');
+  const serverKey = createPublicKey({ key: Buffer.from(serverKeyB64, 'base64url'), format: 'der', type: 'spki' });
+  const shared = diffieHellman({ privateKey: device.offlineKey.privateKey, publicKey: serverKey });
+  const authorizationId = JSON.parse(canonical.toString('utf8')).authorization_id;
+  const info = Buffer.concat([Buffer.from(device.credentialId), Buffer.from([0]), Buffer.from(authorizationId)]);
+  const key = Buffer.from(hkdfSync('sha256', shared, Buffer.from('NEXUS-SIGN/OFFLINE/v3'), info, 32));
+  const tag = createHmac('sha256', key)
+    .update(Buffer.concat([Buffer.from('NEXUS-SIGN/OFFLINE-CODE/v1'), Buffer.from([0]), createHash('sha256').update(canonical).digest()]))
+    .digest();
+  const offset = tag[31] & 0x0f;
+  const bin = ((tag[offset] & 0x7f) << 24) | (tag[offset + 1] << 16) | (tag[offset + 2] << 8) | tag[offset + 3];
+  return { code: String(bin % 100000000).padStart(8, '0'), canonical, sharedSecret: shared };
+}
+
 /** A bank backend with an access token. `headers` are added to every call
  * (the mTLS gateway's headers in the gateway tests). */
 export async function bankSession(server, { clientId, secret }, { headers = {} } = {}) {
@@ -75,10 +96,10 @@ export async function bankSession(server, { clientId, secret }, { headers = {} }
       return bank.call('POST', '/v1/mobile/sessions', { body: { nexusId, purpose: 'BOOTSTRAP', ...extra } });
     },
     /** Enrols a simulated device for the identity; returns it. */
-    async enrolDevice(nexusId, extra = {}) {
+    async enrolDevice(nexusId, extra = {}, { extraBody = {} } = {}) {
       const issued = await bank.bootstrapToken(nexusId, extra);
       if (issued.status !== 201) throw new Error(`bootstrap token: ${issued.status} ${issued.text}`);
-      return enrolWithToken(server, nexusId, issued.json.accessToken);
+      return enrolWithToken(server, nexusId, issued.json.accessToken, { extraBody });
     },
     /**
      * Replaces an enrolled device the way a bank and its customer do since

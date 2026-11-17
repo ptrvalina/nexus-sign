@@ -97,7 +97,7 @@ internal object RecoveryProtocol {
 
     /** The recovery private scalar; a wrong phrase fails the GCM tag. */
     fun unwrap(wrapped: ByteArray, wrapKey: ByteArray, associatedData: ByteArray): ByteArray {
-        if (wrapped.size != WRAPPED_LENGTH) throw NEXUSSignError.ServerError(0, "Invalid wrapped recovery key")
+        if (wrapped.size != WRAPPED_LENGTH) throw NEXUSSignError.InvalidServerResponse("invalid wrapped recovery key")
         return try {
             Cipher.getInstance("AES/GCM/NoPadding").run {
                 init(Cipher.DECRYPT_MODE, SecretKeySpec(wrapKey, "AES"), GCMParameterSpec(TAG_BITS, wrapped.copyOfRange(0, IV_LENGTH)))

@@ -76,6 +76,30 @@ public enum NEXUSSignError: Error, LocalizedError {
     /// `invalid_content`, `unsafe_text`, `malformed_envelope`, `unsupported_version`).
     case pushMessageInvalid(reason: String)
 
+    /// Auth Core answered, but the answer is not what the protocol allows
+    /// (unexpected format, a key agreement that does not match, parameters
+    /// outside the supported range). Not retried by the SDK (finding D-11).
+    case invalidServerResponse(detail: String)
+
+    /// The recovery session the bank backend handed to the app is malformed
+    /// (not a UUID, missing fields). Check the bank backend (finding D-11).
+    case invalidRecoverySession(detail: String)
+
+    /// The system random number generator failed. `status` is the `OSStatus`
+    /// of `SecRandomCopyBytes` (finding D-11).
+    case randomGenerationFailed(status: OSStatus)
+
+    /// The SDK's configuration or packaging is wrong (an `http` base URL, a
+    /// missing bundled resource). A programming error of the host app.
+    case configurationInvalid(detail: String)
+
+    /// A local cryptographic operation failed unexpectedly.
+    case cryptographicOperationFailed(detail: String)
+
+    /// The host app passed a malformed value (an identifier that is not a
+    /// UUID); nothing was sent to Auth Core.
+    case invalidArgument(detail: String)
+
     public var errorDescription: String? {
         switch self {
         case .secureEnclaveUnavailable:
@@ -110,6 +134,18 @@ public enum NEXUSSignError: Error, LocalizedError {
             return "Face ID or Touch ID settings changed on this device. Set up confirmation again with your recovery phrase or your bank."
         case .pushMessageInvalid(let reason):
             return "This notification could not be opened (\(reason))."
+        case .invalidServerResponse:
+            return "Auth Core sent an unexpected response. Try again later."
+        case .invalidRecoverySession:
+            return "The recovery could not be started. Ask your bank to start it again."
+        case .randomGenerationFailed:
+            return "A secure random number could not be generated. Try again."
+        case .configurationInvalid(let detail):
+            return "The app is not configured correctly (\(detail))."
+        case .cryptographicOperationFailed:
+            return "A cryptographic operation failed on this device."
+        case .invalidArgument(let detail):
+            return "Invalid value: \(detail)."
         }
     }
 }

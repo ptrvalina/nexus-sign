@@ -44,6 +44,7 @@ Run migrations as the table owner. After `scripts/db/roles.sql` has been applied
 | `032_audit_field_immutability.sql` | Triggers `authorization_audit_fields` (`consumed_at` set once on verification; `bank_commit_at`/`bank_commit_error` set once with the final bank transaction state) and `audit_logs_server_time` (audit rows carry the database's time, except for the table owner) (finding C-07) |
 | `033_secret_rewrap_role.sql` | `secret_rewrap_allowed()`: a session of the application role re-encrypts stored secrets only if it also holds `nexus_secret_rotator` (created by `scripts/db/roles.sql`) (findings B-09, C-08) |
 | `034_webhook_secret_overlap.sql` | `bank_clients.webhook_secret_previous_encrypted` and `webhook_secret_previous_until`: after a rotation of the webhook secret, deliveries are signed with the new and the previous secret until the overlap ends (finding A2-08) |
+| `035_offline_per_authorization_key.sql` | `credentials.offline_key_agreement` (`STATIC` or `PER_AUTHORIZATION`, fixed at enrolment) and `offline_challenges`: offline confirmation v3 with an Auth Core key per authorization (finding D-01) |
 
 ## Notes on 009
 

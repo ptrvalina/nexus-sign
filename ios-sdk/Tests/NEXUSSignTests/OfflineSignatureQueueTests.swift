@@ -15,9 +15,13 @@ final class OfflineSignatureQueueTests: XCTestCase {
         return defaults
     }
 
+    private func freshDirectory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("OfflineSignatureQueueTests-\(UUID().uuidString)", isDirectory: true)
+    }
+
     func testKeepsOnlyWhatAuthCoreHasNotTakenOrRefused() async throws {
-        let defaults = freshDefaults()
-        let queue = OfflineSignatureQueue(bankID: "test", defaults: defaults, clock: { 1_000 })
+        let directory = freshDirectory()
+        let queue = OfflineSignatureQueue(bankID: "test", directory: directory, legacyDefaults: freshDefaults(), clock: { 1_000 })
         try queue.add(authorizationID: a, signature: Data("sig-a".utf8))
         try queue.add(authorizationID: b, signature: Data("sig-b".utf8))
         try queue.add(authorizationID: c, signature: Data("sig-c".utf8))
@@ -25,7 +29,7 @@ final class OfflineSignatureQueueTests: XCTestCase {
         let result = await queue.deliver { UploadOutcome.of(statusCode: answers[$0.authorizationId]!) }
         XCTAssertEqual(result, OfflineSignatureDelivery(delivered: 1, refused: 1, pending: 1))
         XCTAssertEqual(queue.pending().map(\.authorizationId), [b])
-        XCTAssertEqual(OfflineSignatureQueue(bankID: "test", defaults: defaults, clock: { 1_000 }).pending().map(\.authorizationId), [b])
+        XCTAssertEqual(OfflineSignatureQueue(bankID: "test", directory: directory, legacyDefaults: freshDefaults(), clock: { 1_000 }).pending().map(\.authorizationId), [b])
     }
 
     func testStatusClassification() {
@@ -36,7 +40,7 @@ final class OfflineSignatureQueueTests: XCTestCase {
 
     func testOldItemsAreDroppedWithoutUpload() async throws {
         var now: Int64 = 1_000
-        let queue = OfflineSignatureQueue(bankID: "test", defaults: freshDefaults(), clock: { now })
+        let queue = OfflineSignatureQueue(bankID: "test", directory: freshDirectory(), legacyDefaults: freshDefaults(), clock: { now })
         try queue.add(authorizationID: a, signature: Data("first".utf8))
         try queue.add(authorizationID: a, signature: Data("second".utf8))
         XCTAssertEqual(queue.pending().count, 1)
@@ -54,7 +58,7 @@ final class OfflineSignatureQueueTests: XCTestCase {
         XCTAssertEqual(try DeviceProtocol.qrPayloadVersion("NXS2.\(body)"), 2)
         XCTAssertEqual(try DeviceProtocol.qrPayloadBytes("NXS1.\(body)"), bytes)
         XCTAssertEqual(try DeviceProtocol.qrPayloadBytes("NXS2.\(body)"), bytes)
-        for unknown in ["NXS3.\(body)", "nxs2.\(body)", body] {
+        for unknown in ["NXS9.\(body)", "nxs2.\(body)", body] {
             XCTAssertThrowsError(try DeviceProtocol.qrPayloadBytes(unknown))
         }
     }

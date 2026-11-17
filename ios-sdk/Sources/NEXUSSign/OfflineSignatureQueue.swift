@@ -41,15 +41,22 @@ final class OfflineSignatureQueue {
     /// Auth Core's longest signature deadline (OFFLINE_SIGNATURE_DEADLINE_HOURS ≤ 720).
     static let maxAgeSeconds: Int64 = 30 * 24 * 3600
 
-    private let defaults: UserDefaults
-    private let key: String
+    /// One atomic, backup-excluded file per bank (finding D-06): an item is
+    /// on disk when `add` returns, before the code is computed.
+    private let file: DurableFile
     private let clock: () -> Int64
     private let lock = NSLock()
 
-    init(bankID: String, defaults: UserDefaults = .standard, clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }) {
-        self.defaults = defaults
-        self.key = "com.nexis.nexussign.\(bankID).offline.pending"
+    init(bankID: String, directory: URL? = nil, legacyDefaults: UserDefaults = .standard,
+         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }) {
+        self.file = DurableFile(name: "\(SDKState.safeName(bankID)).offline-signatures.json", directory: directory)
         self.clock = clock
+        // Items of earlier SDK builds, kept in UserDefaults, are moved once.
+        let legacyKey = "com.nexis.nexussign.\(bankID).offline.pending"
+        if file.read() == nil, let data = legacyDefaults.data(forKey: legacyKey),
+           let items = try? JSONDecoder().decode([PendingOfflineSignature].self, from: data) {
+            if (try? save(items)) != nil { legacyDefaults.removeObject(forKey: legacyKey) }
+        }
     }
 
     func pending() -> [PendingOfflineSignature] {
@@ -85,17 +92,19 @@ final class OfflineSignatureQueue {
         return OfflineSignatureDelivery(delivered: delivered, refused: refused, pending: pending().count)
     }
 
+    /// If the write fails the item stays and is uploaded again later; Auth
+    /// Core answers a repeated upload with ALREADY_RECORDED.
     private func remove(_ item: PendingOfflineSignature) {
         lock.lock(); defer { lock.unlock() }
         try? save(load().filter { $0 != item })
     }
 
     private func load() -> [PendingOfflineSignature] {
-        guard let data = defaults.data(forKey: key) else { return [] }
+        guard let data = file.read() else { return [] }
         return (try? JSONDecoder().decode([PendingOfflineSignature].self, from: data)) ?? []
     }
 
     private func save(_ items: [PendingOfflineSignature]) throws {
-        defaults.set(try JSONEncoder().encode(items), forKey: key)
+        try file.write(try JSONEncoder().encode(items))
     }
 }

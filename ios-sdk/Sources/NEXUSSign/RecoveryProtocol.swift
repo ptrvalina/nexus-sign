@@ -38,7 +38,7 @@ enum RecoveryProtocol {
     static func wrap(_ privateKey: P256.Signing.PrivateKey, wrapKey: SymmetricKey, associatedData: Data, nonce: AES.GCM.Nonce = AES.GCM.Nonce()) throws -> Data {
         let box = try AES.GCM.seal(privateKey.rawRepresentation, using: wrapKey, nonce: nonce, authenticating: associatedData)
         guard let combined = box.combined, combined.count == wrappedLength else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Recovery key could not be wrapped")
+            throw NEXUSSignError.cryptographicOperationFailed(detail: "recovery key could not be wrapped")
         }
         return combined
     }
@@ -46,7 +46,7 @@ enum RecoveryProtocol {
     /// The recovery private key; a wrong phrase fails the GCM tag.
     static func unwrap(_ wrapped: Data, wrapKey: SymmetricKey, associatedData: Data) throws -> P256.Signing.PrivateKey {
         guard wrapped.count == wrappedLength, let box = try? AES.GCM.SealedBox(combined: wrapped) else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Invalid wrapped recovery key")
+            throw NEXUSSignError.invalidServerResponse(detail: "invalid wrapped recovery key")
         }
         guard let scalar = try? AES.GCM.open(box, using: wrapKey, authenticating: associatedData) else {
             throw NEXUSSignError.invalidRecoveryPhrase

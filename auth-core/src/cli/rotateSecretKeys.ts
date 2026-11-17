@@ -32,6 +32,7 @@ const COLUMNS: Column[] = [
   { purpose: 'webhook', table: 'bank_clients', key: 'client_id', column: 'webhook_secret_previous_encrypted', owner: (r) => r.client_id },
   { purpose: 'device', table: 'credentials', key: 'credential_id', column: 'offline_secret_encrypted', owner: (r) => r.credential_id },
   { purpose: 'device', table: 'push_registrations', key: 'credential_id', column: 'push_key_encrypted', owner: (r) => `push:${r.credential_id}` },
+  { purpose: 'device', table: 'offline_challenges', key: 'authorization_id', column: 'server_private_key_encrypted', owner: (r) => `offline-challenge:${r.authorization_id}` },
   { purpose: 'admin', table: 'admin_users', key: 'username', column: 'totp_secret_encrypted', owner: (r) => r.username },
 ];
 

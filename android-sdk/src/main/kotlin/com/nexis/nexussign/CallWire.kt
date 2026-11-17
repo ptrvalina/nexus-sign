@@ -83,7 +83,7 @@ internal object CallWire {
 
     private fun channel(value: String?) = VerificationChannel.entries.firstOrNull { it.name == value } ?: invalid()
     private fun instant(value: String?) = runCatching { Instant.parse(value) }.getOrNull() ?: invalid()
-    private fun invalid(): Nothing = throw NEXUSSignError.ServerError(200, "Unexpected response format")
+    private fun invalid(): Nothing = throw NEXUSSignError.InvalidServerResponse("unexpected response format")
 
     private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
     private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.content?.toLongOrNull()

@@ -801,7 +801,7 @@ paths:
                 type: object
                 properties:
                   authorizationId: { type: string, format: uuid }
-                  qrPayload: { type: string, description: 'NXS1. + base64url(canonical authorization bytes)' }
+                  qrPayload: { type: string, description: 'NXS1. or NXS2. + base64url(canonical authorization bytes); for a device enrolled with offlineKeyAgreement PER_AUTHORIZATION, NXS3. + base64url(canonical bytes) + . + base64url(DER SPKI of the Auth Core key for this authorization) (offline v3)' }
                   codeDigits: { type: integer, example: 8 }
                   expiresAt: { type: string, format: date-time }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1139,6 +1139,7 @@ paths:
                   attestationStatus: { type: string, enum: [UNKNOWN, VERIFIED, FAILED, EXPIRED] }
                   requestAuthentication: { type: string, enum: [DEVICE_SIGNATURE] }
                   offlineServerPublicKeyPem: { type: string, nullable: true }
+                  offlineKeyAgreement: { type: string, nullable: true, enum: [STATIC, PER_AUTHORIZATION] }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -1701,6 +1702,7 @@ paths:
                 securityLevel: { type: string, maxLength: 32 }
                 authPublicKeyPem: { type: string }
                 offlinePublicKeyPem: { type: string }
+                offlineKeyAgreement: { type: string, enum: [STATIC, PER_AUTHORIZATION] }
                 deviceAttestation: { type: object, additionalProperties: true }
       responses:
         '200':
@@ -1715,6 +1717,7 @@ paths:
                   keyVersion: { type: integer }
                   requestAuthentication: { type: string, enum: [DEVICE_SIGNATURE] }
                   offlineServerPublicKeyPem: { type: string, nullable: true }
+                  offlineKeyAgreement: { type: string, nullable: true, enum: [STATIC, PER_AUTHORIZATION] }
         '401': { description: Wrong proof or missing token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2069,6 +2072,7 @@ components:
       properties:
         authPublicKeyPem: { type: string, description: 'P-256 SPKI PEM; hardware key without user presence that signs device requests' }
         offlinePublicKeyPem: { type: string, description: 'P-256 SPKI PEM; biometric-protected key-agreement key for offline confirmation' }
+        offlineKeyAgreement: { type: string, enum: [STATIC, PER_AUTHORIZATION], description: 'STATIC (default): one key agreed at enrolment. PER_AUTHORIZATION: an Auth Core key per offline confirmation, sent in an NXS3. QR code (offline v3, the iOS SDK)' }
     AuthorizationRequest:
       type: object
       required: [nexusId, credentialId, transactionReference, operationType, amountMinor, currency, beneficiary, policyReference, policyVersion]

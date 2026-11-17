@@ -39,6 +39,8 @@ const bootstrapSchema = z.object({
   authPublicKeyPem: z.string().min(1).max(4096),
   /** Biometric-protected key agreement key for offline confirmation. */
   offlinePublicKeyPem: z.string().min(1).max(4096).optional(),
+  /** PER_AUTHORIZATION: a fresh Auth Core key per offline confirmation (offline v3). */
+  offlineKeyAgreement: z.enum(['STATIC', 'PER_AUTHORIZATION']).optional(),
   deviceAttestation: z.record(z.string(), z.unknown()).default({}),
 });
 
@@ -237,7 +239,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
       const body = bootstrapSchema.parse(req.body);
       if (!req.mobileAttestationChallenge) throw new ForbiddenError('Bootstrap attestation challenge is missing or expired');
       const challenge = Buffer.from(req.mobileAttestationChallenge, 'base64url');
-      const deviceKeys = { authPublicKeyPem: body.authPublicKeyPem, offlinePublicKeyPem: body.offlinePublicKeyPem };
+      const deviceKeys = { authPublicKeyPem: body.authPublicKeyPem, offlinePublicKeyPem: body.offlinePublicKeyPem, offlineKeyAgreement: body.offlineKeyAgreement };
       const binding = buildAttestationBinding(challenge, body.publicKeyPem, deviceKeys);
       const verdict = await verifyDeviceAttestation(body.deviceAttestation, binding,
         { challenge, signingPublicKeyPem: body.publicKeyPem, authPublicKeyPem: body.authPublicKeyPem });
@@ -278,6 +280,7 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
         attestationStatus: credential.attestationStatus,
         requestAuthentication: 'DEVICE_SIGNATURE',
         offlineServerPublicKeyPem: credential.offlineServerPublicKeyPem,
+        offlineKeyAgreement: credential.offlineEnabled ? credential.offlineKeyAgreement : null,
       });
     } catch (e) { next(e); }
   });

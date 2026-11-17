@@ -540,7 +540,7 @@ enum CallWire {
         return VerificationCallInfo(sessionID: id, channel: channel, expiresAt: expires, iceServers: servers, operatorJoined: call["state"] as? String == "CONNECTED")
     }
 
-    private static let invalid = NEXUSSignError.serverError(statusCode: 200, message: "Unexpected response format")
+    private static let invalid = NEXUSSignError.invalidServerResponse(detail: "unexpected response format")
 
     private static func int64(_ value: Any?) -> Int64? {
         if let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.int64Value }

@@ -51,6 +51,30 @@ test('offline key, tag, code and QR payload match the shared vectors', () => {
   }
 });
 
+test('offline v3: a key per authorization, from the QR code, matches the shared vectors (finding D-01)', () => {
+  const v3 = vectors.offline_v3;
+  const device = deviceKey(v3.device_private_scalar_hex);
+  const keys = new Set();
+  for (const c of v3.confirmations) {
+    const server = deviceKey(c.server_private_scalar_hex);
+    const shared = device.computeSecret(server.getPublicKey());
+    assert.equal(shared.toString('hex'), c.shared_secret_hex, c.name);
+    const key = protocol.deriveOfflineKeyPerAuthorization(shared, v3.credential_id, c.authorization_id);
+    assert.equal(key.toString('hex'), c.offline_key_hex, c.name);
+    const canonical = Buffer.from(c.canonical_base64, 'base64');
+    const tag = protocol.offlineConfirmationTag(key, canonical);
+    assert.equal(tag.toString('base64'), c.tag_base64, c.name);
+    assert.equal(protocol.offlineCodeFromTag(tag), c.code, c.name);
+    const spki = createPublicKey(c.server_public_key_pem).export({ type: 'spki', format: 'der' });
+    assert.equal(protocol.offlineQrPayloadV3(canonical, spki), c.qr_payload, c.name);
+    keys.add(c.offline_key_hex);
+  }
+  assert.equal(keys.size, v3.confirmations.length, 'a secret taken for one authorization does not serve another');
+  // The same shared secret bound to another authorization gives another key.
+  const z = Buffer.from(v3.confirmations[0].shared_secret_hex, 'hex');
+  assert.notEqual(protocol.deriveOfflineKeyPerAuthorization(z, v3.credential_id, '00000000-0000-4000-8000-0000000000ff').toString('hex'), v3.confirmations[0].offline_key_hex);
+});
+
 test('offline codes are always 8 digits and change with every payload byte', () => {
   const key = randomBytes(32);
   const seen = new Set();

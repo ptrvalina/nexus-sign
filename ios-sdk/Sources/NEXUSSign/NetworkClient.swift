@@ -44,6 +44,8 @@ final class NetworkClient {
             "publicKeyPem": keys.signing,
             "authPublicKeyPem": keys.authentication,
             "offlinePublicKeyPem": keys.offline,
+            // A fresh Auth Core key for each offline confirmation (finding D-01).
+            "offlineKeyAgreement": "PER_AUTHORIZATION",
             "platform": "IOS",
             "securityLevel": securityLevel,
             "deviceAttestation": attestation,
@@ -118,6 +120,7 @@ final class NetworkClient {
             "newPublicKeyPem": keys.signing,
             "authPublicKeyPem": keys.authentication,
             "offlinePublicKeyPem": keys.offline,
+            "offlineKeyAgreement": "PER_AUTHORIZATION",
             "platform": "IOS",
             "securityLevel": "SECURE_ENCLAVE",
             "deviceAttestation": attestation,
@@ -194,7 +197,7 @@ final class NetworkClient {
     private func sendJSON(_ method: String, _ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
         let data = try await perform(method, path, body: body, token: .device)
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Unexpected response format")
+            throw NEXUSSignError.invalidServerResponse(detail: "unexpected response format")
         }
         return object
     }
@@ -209,13 +212,13 @@ final class NetworkClient {
     private func send<T: Decodable>(_ method: String, _ path: String, body: [String: Any]? = nil, token: TokenSource = .device) async throws -> T {
         let data = try await perform(method, path, body: body, token: token)
         guard !data.isEmpty else {
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Unexpected empty response")
+            throw NEXUSSignError.invalidServerResponse(detail: "unexpected empty response")
         }
         do {
             return try JSONDecoder.nexus().decode(T.self, from: data)
         } catch {
             // A body that does not decode is an Auth Core contract problem, not a connectivity one.
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Unexpected response format")
+            throw NEXUSSignError.invalidServerResponse(detail: "unexpected response format")
         }
     }
 

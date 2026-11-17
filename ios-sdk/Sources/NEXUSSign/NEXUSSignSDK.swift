@@ -18,7 +18,7 @@ public final class NEXUSSignSDK {
 
     public init(config: NEXUSSignConfig) {
         self.config = config
-        self.state = SDKState(bankID: config.bankID)
+        self.state = SDKState.shared(bankID: config.bankID)
         self.offlineSignatures = OfflineSignatureQueue(bankID: config.bankID)
         self.keyManager = KeyManager(bankID: config.bankID, accessGroup: config.keychainAccessGroup, state: state)
         self.networkClient = NetworkClient(config: config)
@@ -47,7 +47,8 @@ public final class NEXUSSignSDK {
 
     /// True when this device can confirm transactions from a QR code without network.
     public func isOfflineConfirmationAvailable() throws -> Bool {
-        try isRegistered() && keyManager.effectiveOfflineServerPublicKeyPEM != nil && keyManager.existingKey(.offline) != nil
+        try isRegistered() && (keyManager.effectiveOfflineKeyAgreement == "PER_AUTHORIZATION" || keyManager.effectiveOfflineServerPublicKeyPEM != nil)
+            && keyManager.existingKey(.offline) != nil
     }
 
     /// Enrols this device with a BOOTSTRAP token from the host app: generates
@@ -68,7 +69,7 @@ public final class NEXUSSignSDK {
                                                               attestation: attestation, bootstrapToken: bootstrapToken)
             },
             confirmed: { (credentialID: $0.credentialId, offlineServerPublicKeyPEM: $0.offlineServerPublicKeyPem,
-                          deviceSignatures: $0.requestAuthentication == "DEVICE_SIGNATURE") }
+                          offlineKeyAgreement: $0.offlineKeyAgreement, deviceSignatures: $0.requestAuthentication == "DEVICE_SIGNATURE") }
         )
         useDeviceAuthentication()
         return registration
@@ -168,7 +169,7 @@ public final class NEXUSSignSDK {
         let parameters = try await networkClient.recoveryParameters()
         let salt = try Self.validated(parameters)
         guard let nexusID = parameters.nexusId, parameters.credentialId == credentialID else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Recovery parameters are for another device")
+            throw NEXUSSignError.invalidServerResponse(detail: "recovery parameters are for another device")
         }
 
         let context = LAContext()
@@ -212,7 +213,7 @@ public final class NEXUSSignSDK {
               let recoveryPublicKeyPEM = session.recoveryPublicKeyPem,
               let recoverySPKI = RecoveryProtocol.spki(fromPEM: recoveryPublicKeyPEM),
               let wrapped = session.wrappedRecoveryKey.flatMap({ Data(base64Encoded: $0) }) else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Invalid recovery session")
+            throw NEXUSSignError.invalidRecoverySession(detail: "session ID, nonce, recovery key or wrapped key missing or malformed")
         }
         let salt = try Self.validated(session.parameters)
         var seed = try await offCooperativePool { RecoveryProtocol.seed(phrase: words, salt: salt, iterations: session.parameters.iterations) }
@@ -230,7 +231,7 @@ public final class NEXUSSignSDK {
             result = try await withReplacementKeys(
                 register: { keys in
                     guard let newSigningSPKI = RecoveryProtocol.spki(fromPEM: keys.signing) else {
-                        throw NEXUSSignError.serverError(statusCode: 0, message: "Invalid signing key")
+                        throw NEXUSSignError.cryptographicOperationFailed(detail: "the new signing key could not be encoded")
                     }
                     let proof = try RecoveryProtocol.sign(
                         RecoveryProtocol.proofSigningInput(sessionID: session.sessionId, nonceBase64: session.nonce,
@@ -239,7 +240,7 @@ public final class NEXUSSignSDK {
                     let attestation = await self.buildAttestationPayload(challenge: nonce, keys: keys)
                     return try await self.networkClient.recover(session: session, proof: proof, keys: keys, attestation: attestation)
                 },
-                confirmed: { (credentialID: $0.credentialId, offlineServerPublicKeyPEM: $0.offlineServerPublicKeyPem,
+                confirmed: { (credentialID: $0.credentialId, offlineServerPublicKeyPEM: $0.offlineServerPublicKeyPem, offlineKeyAgreement: $0.offlineKeyAgreement,
                               deviceSignatures: $0.requestAuthentication == "DEVICE_SIGNATURE") }
             )
         } catch NEXUSSignError.serverError(let statusCode, _) where statusCode == 401 {
@@ -266,7 +267,8 @@ public final class NEXUSSignSDK {
             throw NEXUSSignError.authorizationPayloadInvalid(reason: "wrong_device", detail: "the QR code is for another device")
         }
         guard let expiry = transaction.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
-        return NexusOfflineChallenge(transaction: transaction, canonicalPayload: bytes, requiresDeviceSignature: version == 2)
+        return NexusOfflineChallenge(transaction: transaction, canonicalPayload: bytes, requiresDeviceSignature: version >= 2,
+                                     serverPublicKeyPEM: try DeviceProtocol.qrServerPublicKeyPEM(qrPayload))
     }
 
     /// Asks for biometric confirmation showing the transaction and returns the
@@ -281,7 +283,20 @@ public final class NEXUSSignSDK {
     /// signature arrives.
     public func confirmOffline(_ challenge: NexusOfflineChallenge) async throws -> String {
         guard let credentialID = keyManager.effectiveCredentialID else { throw NEXUSSignError.notRegistered }
-        guard let serverKey = keyManager.effectiveOfflineServerPublicKeyPEM else { throw NEXUSSignError.offlineConfirmationUnavailable }
+        // Offline v3 (finding D-01): a device enrolled for a key per
+        // authorization takes the key from the QR code and never uses a
+        // static one; a device enrolled earlier keeps the static key.
+        let perAuthorization = keyManager.effectiveOfflineKeyAgreement == "PER_AUTHORIZATION"
+        let serverKey: String
+        if perAuthorization {
+            guard let key = challenge.serverPublicKeyPEM else { throw NEXUSSignError.offlineConfirmationUnavailable }
+            serverKey = key
+        } else {
+            guard challenge.serverPublicKeyPEM == nil, let key = keyManager.effectiveOfflineServerPublicKeyPEM else {
+                throw NEXUSSignError.offlineConfirmationUnavailable
+            }
+            serverKey = key
+        }
         guard let expiry = challenge.transaction.expiresAtDate, Date() < expiry else { throw NEXUSSignError.authorizationExpired }
 
         let context = LAContext()
@@ -316,7 +331,9 @@ public final class NEXUSSignSDK {
             try self.withBiometryCheck { try self.keyManager.offlineSharedSecret(serverPublicKeyPEM: serverKey, context: context) }
         }
         defer { shared.resetBytes(in: 0..<shared.count) }
-        let key = DeviceProtocol.deriveOfflineKey(sharedSecret: shared, credentialID: credentialID)
+        let key = perAuthorization
+            ? DeviceProtocol.deriveOfflineKeyPerAuthorization(sharedSecret: shared, credentialID: credentialID, authorizationID: challenge.transaction.authorizationId)
+            : DeviceProtocol.deriveOfflineKey(sharedSecret: shared, credentialID: credentialID)
         return DeviceProtocol.offlineCode(tag: DeviceProtocol.offlineTag(key: key, canonicalPayload: challenge.canonicalPayload))
     }
 
@@ -387,13 +404,13 @@ public final class NEXUSSignSDK {
             devicePublicKeyPEM: SubjectPublicKeyInfo.pem(fromRawECPoint: ephemeral.publicKey.x963Representation), keyID: nil)
         guard let serverPEM = response.serverPublicKeyPem,
               let serverKey = try? P256.KeyAgreement.PublicKey(pemRepresentation: serverPEM) else {
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Auth Core returned no push key agreement")
+            throw NEXUSSignError.invalidServerResponse(detail: "no push key agreement")
         }
         var shared = try ephemeral.sharedSecretFromKeyAgreement(with: serverKey).withUnsafeBytes { Data($0) }
         defer { shared.resetBytes(in: 0..<shared.count) }
         let key = PushProtocol.derivePushKey(sharedSecret: shared, credentialID: credentialID)
         guard PushProtocol.keyID(key) == response.keyId else {
-            throw NEXUSSignError.serverError(statusCode: 200, message: "Push key agreement did not match")
+            throw NEXUSSignError.invalidServerResponse(detail: "push key agreement did not match")
         }
         try store.save(key, credentialID: credentialID)
     }
@@ -453,13 +470,13 @@ public final class NEXUSSignSDK {
     /// The customer confirms the replacement: the new device can be enrolled
     /// now instead of after the hold. After enrolment this device is revoked.
     public func approveDeviceReplacement(replacementID: String) async throws -> NexusDeviceReplacement {
-        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.serverError(statusCode: 400, message: "Malformed replacement ID") }
+        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.invalidArgument(detail: "malformed replacement ID") }
         return try await networkClient.decideDeviceReplacement(replacementID: replacementID, approve: true)
     }
 
     /// The customer refuses the replacement ("it wasn't me"); it can never be used.
     public func cancelDeviceReplacement(replacementID: String) async throws -> NexusDeviceReplacement {
-        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.serverError(statusCode: 400, message: "Malformed replacement ID") }
+        guard UUID(uuidString: replacementID) != nil else { throw NEXUSSignError.invalidArgument(detail: "malformed replacement ID") }
         return try await networkClient.decideDeviceReplacement(replacementID: replacementID, approve: false)
     }
 
@@ -522,7 +539,7 @@ public final class NEXUSSignSDK {
               parameters.keyLength == RecoveryProtocol.keyLength,
               (100_000...5_000_000).contains(parameters.iterations),
               let salt = Data(base64Encoded: parameters.salt), salt.count >= 16 else {
-            throw NEXUSSignError.serverError(statusCode: 0, message: "Recovery parameters are outside the supported range")
+            throw NEXUSSignError.invalidServerResponse(detail: "recovery parameters are outside the supported range")
         }
         return salt
     }
@@ -540,7 +557,7 @@ public final class NEXUSSignSDK {
     /// `register` succeeds, discards them otherwise.
     private func withReplacementKeys<T>(
         register: (NetworkClient.EnrolmentKeys) async throws -> T,
-        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, deviceSignatures: Bool)
+        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, offlineKeyAgreement: String?, deviceSignatures: Bool)
     ) async throws -> T {
         // One attempt at a time per process: two attempts would share the
         // replacement tags, and the second would delete the first's keys.
@@ -559,7 +576,7 @@ public final class NEXUSSignSDK {
 
     private func replaceKeys<T>(
         register: (NetworkClient.EnrolmentKeys) async throws -> T,
-        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, deviceSignatures: Bool)
+        confirmed: (T) -> (credentialID: String, offlineServerPublicKeyPEM: String?, offlineKeyAgreement: String?, deviceSignatures: Bool)
     ) async throws -> T {
         let prepared = try keyManager.prepareReplacementKeys()
         let result: T
@@ -577,6 +594,7 @@ public final class NEXUSSignSDK {
         let registration = confirmed(result)
         keyManager.commitReplacementKeys(credentialID: registration.credentialID,
                                          offlineServerPublicKeyPEM: registration.offlineServerPublicKeyPEM,
+                                         offlineKeyAgreement: registration.offlineKeyAgreement,
                                          deviceSignatures: registration.deviceSignatures)
         return result
     }
@@ -647,7 +665,7 @@ private actor ReplacementGate {
 extension NEXUSSignSDK {
 
     private static func checkedID(_ value: String, _ what: String) throws -> String {
-        guard UUID(uuidString: value) != nil else { throw NEXUSSignError.serverError(statusCode: 400, message: "Malformed \(what)") }
+        guard UUID(uuidString: value) != nil else { throw NEXUSSignError.invalidArgument(detail: "malformed \(what)") }
         return value.lowercased()
     }
 

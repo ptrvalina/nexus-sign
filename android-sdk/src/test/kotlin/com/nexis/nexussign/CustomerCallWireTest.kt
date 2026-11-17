@@ -46,8 +46,9 @@ class CustomerCallWireTest {
     @Test fun `a malformed answer is refused`() {
         try {
             CallWire.decodeCustomerCallJoin(Json.parseToJsonElement("""{"iceServers":[]}""").jsonObject); fail("accepted")
-        } catch (e: NEXUSSignError.ServerError) {
-            assertEquals(200, e.statusCode)
+        } catch (e: NEXUSSignError.InvalidServerResponse) {
+            // A dedicated error, not a fake HTTP 200 (finding D-11).
+            assertEquals("unexpected response format", e.detail)
         }
     }
 }

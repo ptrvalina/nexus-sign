@@ -61,6 +61,8 @@ export interface CredentialRecord {
   offlineServerPublicKeyPem: string | null;
   offlineEnabled: boolean;
   offlinePublicKeyPem: string | null;
+  /** STATIC or PER_AUTHORIZATION (offline v3, finding D-01). */
+  offlineKeyAgreement: 'STATIC' | 'PER_AUTHORIZATION';
   /** The sealed CREDENTIAL_ENROLLED record the keys are checked against. */
   enrolmentEvidenceId: string | null;
 }
@@ -69,8 +71,9 @@ export interface CredentialRecord {
 const CREDENTIAL_COLUMNS = `credential_id, nexus_id, key_algorithm, public_key_pem, platform,
   security_level, attestation_status, state, key_version, created_at,
   activated_at, revoked_at, last_used_at,
-  auth_public_key_pem, offline_server_public_key_pem, offline_secret_encrypted IS NOT NULL AS offline_enabled,
-  offline_public_key_pem, enrolment_evidence_id`;
+  auth_public_key_pem, offline_server_public_key_pem,
+  (offline_secret_encrypted IS NOT NULL OR (offline_key_agreement = 'PER_AUTHORIZATION' AND offline_public_key_pem IS NOT NULL)) AS offline_enabled,
+  offline_public_key_pem, offline_key_agreement, enrolment_evidence_id`;
 
 export class CredentialNotFoundError extends Error {
   constructor(credentialId: string) {
@@ -136,11 +139,11 @@ export async function createCredential(input: CreateCredentialInput): Promise<Cr
       `INSERT INTO credentials (
         credential_id, nexus_id, key_algorithm, public_key_pem, platform,
         security_level, attestation_status, state, activated_at,
-        auth_public_key_pem, offline_public_key_pem, offline_server_public_key_pem, offline_secret_encrypted
-      ) VALUES ($1, $2, 'ES256', $3, $4, $5, $6, 'ACTIVE', now(), $7, $8, $9, $10)
+        auth_public_key_pem, offline_public_key_pem, offline_server_public_key_pem, offline_secret_encrypted, offline_key_agreement
+      ) VALUES ($1, $2, 'ES256', $3, $4, $5, $6, 'ACTIVE', now(), $7, $8, $9, $10, $11)
       RETURNING ${CREDENTIAL_COLUMNS}`,
       [credentialId, input.nexusId, publicKey.pem, input.platform, input.securityLevel, input.attestationStatus,
-        keys.authPublicKeyPem, keys.offlinePublicKeyPem, keys.offlineServerPublicKeyPem, keys.offlineSecretEncrypted],
+        keys.authPublicKeyPem, keys.offlinePublicKeyPem, keys.offlineServerPublicKeyPem, keys.offlineSecretEncrypted, keys.offlineKeyAgreement],
     );
     const enrolment = await sealCredentialEnrolment(client, input.hsm, {
       nexusId: input.nexusId,
@@ -260,7 +263,7 @@ interface CredentialRow {
   state: CredentialState; key_version: number; created_at: Date; activated_at: Date | null;
   revoked_at: Date | null; last_used_at: Date | null;
   auth_public_key_pem: string | null; offline_server_public_key_pem: string | null; offline_enabled: boolean;
-  offline_public_key_pem: string | null; enrolment_evidence_id: string | null;
+  offline_public_key_pem: string | null; offline_key_agreement: 'STATIC' | 'PER_AUTHORIZATION'; enrolment_evidence_id: string | null;
 }
 function mapCredential(row: CredentialRow): CredentialRecord {
   return {
@@ -272,6 +275,7 @@ function mapCredential(row: CredentialRow): CredentialRecord {
     authPublicKeyPem: row.auth_public_key_pem, offlineServerPublicKeyPem: row.offline_server_public_key_pem,
     offlineEnabled: row.offline_enabled,
     offlinePublicKeyPem: row.offline_public_key_pem,
+    offlineKeyAgreement: row.offline_key_agreement,
     enrolmentEvidenceId: row.enrolment_evidence_id,
   };
 }

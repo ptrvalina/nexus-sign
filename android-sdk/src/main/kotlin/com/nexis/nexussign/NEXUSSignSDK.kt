@@ -185,7 +185,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             throw e
         }
         return NEXUSVerificationOutcome.entries.firstOrNull { it.name == response.status }
-            ?: throw NEXUSSignError.ServerError(200, "Unexpected verification status")
+            ?: throw NEXUSSignError.InvalidServerResponse("unexpected verification status")
     }
 
     /**
@@ -201,7 +201,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         val salt = validated(parameters)
         val nexusId = parameters.nexusId
         if (nexusId == null || parameters.credentialId != credentialId) {
-            throw NEXUSSignError.ServerError(0, "Recovery parameters are for another device")
+            throw NEXUSSignError.InvalidServerResponse("recovery parameters are for another device")
         }
         requireBiometrics(activity)
         val phrase = RecoveryPhrase.generate(appContext)
@@ -246,14 +246,14 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         val words = RecoveryPhrase.normalized(recoveryPhrase)
         if (!RecoveryPhrase.isWellFormed(appContext, words)) throw NEXUSSignError.InvalidRecoveryPhrase
         // The session ID comes from the host app and becomes part of the path.
-        if (!UUID_PATTERN.matches(session.sessionId)) throw NEXUSSignError.ServerError(0, "Invalid recovery session")
+        if (!UUID_PATTERN.matches(session.sessionId)) throw NEXUSSignError.InvalidRecoverySession("session ID, nonce, recovery key or wrapped key missing or malformed")
         val nonce = runCatching { Base64.getDecoder().decode(session.nonce) }.getOrElse {
-            throw NEXUSSignError.ServerError(0, "Invalid recovery session")
+            throw NEXUSSignError.InvalidRecoverySession("session ID, nonce, recovery key or wrapped key missing or malformed")
         }
         val salt = validated(session.parameters)
         val recoveryPublicKeyPem = session.recoveryPublicKeyPem
         val wrapped = session.wrappedRecoveryKey?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
-        if (recoveryPublicKeyPem == null || wrapped == null) throw NEXUSSignError.ServerError(0, "Invalid recovery session")
+        if (recoveryPublicKeyPem == null || wrapped == null) throw NEXUSSignError.InvalidRecoverySession("session ID, nonce, recovery key or wrapped key missing or malformed")
 
         // A wrong phrase fails here, on the device, without using an attempt.
         val seed = RecoveryProtocol.seed(words, salt, session.parameters.iterations)
@@ -420,7 +420,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             generateKeyPair()
         }
         val response = networkClient.registerPush(fcmToken, keyManager.publicKeyPem(ephemeral.public), keyId = null)
-        val serverPem = response.serverPublicKeyPem ?: throw NEXUSSignError.ServerError(200, "Auth Core returned no push key agreement")
+        val serverPem = response.serverPublicKeyPem ?: throw NEXUSSignError.InvalidServerResponse("no push key agreement")
         val shared = try {
             val serverKey = KeyFactory.getInstance("EC").generatePublic(
                 X509EncodedKeySpec(Base64.getDecoder().decode(serverPem.lineSequence().filterNot { it.startsWith("-----") }.joinToString("").trim())),
@@ -440,7 +440,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         }
         if (PushProtocol.keyId(SecretKeySpec(key, "HmacSHA256")) != response.keyId) {
             key.fill(0)
-            throw NEXUSSignError.ServerError(200, "Push key agreement did not match")
+            throw NEXUSSignError.InvalidServerResponse("push key agreement did not match")
         }
         pushKeys.install(key, credentialId) // wipes `key`
     }
@@ -514,10 +514,10 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     private inline fun <reified T> parse(body: String): T = try {
         accountJson.decodeFromString<T>(body)
     } catch (e: Exception) {
-        throw NEXUSSignError.ServerError(200, "Unexpected response format")
+        throw NEXUSSignError.InvalidServerResponse("unexpected response format")
     }
     private fun requireId(id: String, what: String): String {
-        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.ServerError(400, "Malformed $what")
+        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.InvalidArgument("malformed $what")
         return id.lowercase()
     }
 
@@ -671,7 +671,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         parse(networkClient.deviceCall("POST", "/v1/mobile/conversations/${requireId(conversationId, "conversation ID")}/close"))
 
     private fun requireReplacementId(id: String): String {
-        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.ServerError(400, "Malformed replacement ID")
+        if (!UUID_PATTERN.matches(id)) throw NEXUSSignError.InvalidArgument("malformed replacement ID")
         return id
     }
 
@@ -761,7 +761,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
             parameters.iterations !in RecoveryProtocol.ITERATION_RANGE ||
             salt == null || salt.size < RecoveryProtocol.MIN_SALT_BYTES
         ) {
-            throw NEXUSSignError.ServerError(0, "Recovery parameters are outside the supported range")
+            throw NEXUSSignError.InvalidServerResponse("recovery parameters are outside the supported range")
         }
         return salt
     }

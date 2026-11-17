@@ -130,12 +130,17 @@ final class KeyManager {
     /// registration durably, then replace the active keys with the new set.
     /// The registration is applied together with the re-tag, so the device
     /// never signs with new keys under an old credential ID or the reverse.
-    func commitReplacementKeys(credentialID: String, offlineServerPublicKeyPEM: String?, deviceSignatures: Bool) {
-        state.pendingCredentialID = credentialID
-        state.pendingOfflineServerPublicKeyPEM = offlineServerPublicKeyPEM
-        state.pendingDeviceSignatures = deviceSignatures
-        state.biometryDomainState = Self.currentBiometryDomainState()
-        state.replacementCommitPending = true
+    func commitReplacementKeys(credentialID: String, offlineServerPublicKeyPEM: String?, offlineKeyAgreement: String?, deviceSignatures: Bool) {
+        // One atomic, durable write before any key is re-tagged (finding D-06).
+        let biometry = Self.currentBiometryDomainState()
+        state.update {
+            $0.pendingCredentialId = credentialID
+            $0.pendingOfflineServerPublicKey = offlineServerPublicKeyPEM
+            $0.pendingOfflineKeyAgreement = offlineKeyAgreement ?? (offlineServerPublicKeyPEM == nil ? nil : "STATIC")
+            $0.pendingDeviceSignatures = deviceSignatures
+            $0.biometryDomainState = biometry
+            $0.replacementCommitPending = true
+        }
         // Auth Core has already switched to the new keys. If the re-tag fails
         // now, the marker makes existingKey() use the replacement keys and
         // retry the promotion, and the effective* values below match them.
@@ -168,6 +173,11 @@ final class KeyManager {
         state.replacementCommitPending && state.pendingCredentialID != nil ? state.pendingOfflineServerPublicKeyPEM : state.offlineServerPublicKeyPEM
     }
 
+    /// `PER_AUTHORIZATION`, `STATIC` or `nil`, for the keys `existingKey` returns.
+    var effectiveOfflineKeyAgreement: String? {
+        state.replacementCommitPending && state.pendingCredentialID != nil ? state.pendingOfflineKeyAgreement : state.offlineKeyAgreement
+    }
+
     var effectiveDeviceSignatures: Bool {
         state.replacementCommitPending && state.pendingCredentialID != nil ? state.pendingDeviceSignatures : state.deviceSignatures
     }
@@ -185,13 +195,7 @@ final class KeyManager {
             SecItemDelete(keyQuery(tag: activeTag(kind)) as CFDictionary)
             if state.replacementCommitPending { SecItemDelete(keyQuery(tag: replacementTag(kind)) as CFDictionary) }
         }
-        state.registeredCredentialID = nil
-        state.offlineServerPublicKeyPEM = nil
-        state.deviceSignatures = false
-        state.pendingCredentialID = nil
-        state.pendingOfflineServerPublicKeyPEM = nil
-        state.replacementCommitPending = false
-        state.biometryDomainState = nil
+        state.update { $0 = SDKState.Snapshot() }
     }
 
     /// Step 2b (attempt failed): discard the new set.
@@ -219,14 +223,20 @@ final class KeyManager {
                 throw NEXUSSignError.keyOperationFailed(status: status)
             }
         }
-        if let credentialID = state.pendingCredentialID {
-            state.registeredCredentialID = credentialID
-            state.offlineServerPublicKeyPEM = state.pendingOfflineServerPublicKeyPEM
-            state.deviceSignatures = state.pendingDeviceSignatures
+        // The new registration and the end of the pending promotion in one
+        // atomic write (finding D-06).
+        state.update {
+            if let credentialID = $0.pendingCredentialId {
+                $0.credentialId = credentialID
+                $0.offlineServerPublicKey = $0.pendingOfflineServerPublicKey
+                $0.offlineKeyAgreement = $0.pendingOfflineKeyAgreement
+                $0.deviceSignatures = $0.pendingDeviceSignatures
+            }
+            $0.pendingCredentialId = nil
+            $0.pendingOfflineServerPublicKey = nil
+            $0.pendingOfflineKeyAgreement = nil
+            $0.replacementCommitPending = false
         }
-        state.pendingCredentialID = nil
-        state.pendingOfflineServerPublicKeyPEM = nil
-        state.replacementCommitPending = false
     }
 
     /// Generates a P-256 key in the Secure Enclave. `.biometryCurrentSet`
