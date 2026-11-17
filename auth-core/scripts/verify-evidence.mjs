@@ -4,7 +4,7 @@
 // (sealed enrolment), and the customer's device signature over the exact
 // transaction bytes.
 //
-//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>] [--reject-offline-code] [--allow-unchecked-head]
+//   node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<evidenceHash>] [--heads=<file>] [--expect-nexus-id=<id>] [--expect-authorization-id=<id>] [--reject-offline-code] [--allow-unchecked-head]
 //
 // <export.json> is the response of either
 //   GET /v1/authorizations/{id}/evidence        (one record with its enrolment)
@@ -24,13 +24,17 @@
 // --heads is a file of the heads the bank kept from `evidence.appended`
 // webhooks for this NEXUS ID (a JSON array, or one JSON object per line):
 // each must be HSM-sealed and present unchanged in the export.
+// --expect-nexus-id: every record must belong to this customer (a valid export
+// of another customer is otherwise valid too). --expect-authorization-id: the
+// export must contain the sealed confirmation of this authorization; a single
+// record must be it (finding B-10).
 import { readFileSync } from 'node:fs';
 import { describeSignedTransaction, legacyRecords, verifyEvidenceChain, verifyEvidenceRecord, verifyRetainedHeads } from './lib/evidence.mjs';
 
 const args = process.argv.slice(2);
 const file = args.find((a) => !a.startsWith('--'));
 if (!file) {
-  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>] [--reject-offline-code] [--allow-unchecked-head]');
+  console.error('usage: node scripts/verify-evidence.mjs <export.json> [--public-keys=<file.pem>] [--expect-head=<sequence>:<hash>] [--heads=<file>] [--expect-nexus-id=<id>] [--expect-authorization-id=<id>] [--reject-offline-code] [--allow-unchecked-head]');
   process.exit(2);
 }
 const option = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -72,6 +76,18 @@ const allowUncheckedHead = args.includes('--allow-unchecked-head');
 const problems = isChain ? verifyEvidenceChain(records, keys, { expectedHead, rejectOfflineCode }) : verifyEvidenceRecord(exported, keys, { standalone: true, rejectOfflineCode });
 if (heads.length > 0) problems.push(...verifyRetainedHeads(records, heads, keys));
 if (isChain) problems.push(...exportCompleteness(exported));
+const expectedNexusId = option('expect-nexus-id');
+if (expectedNexusId !== undefined) {
+  for (const record of records) {
+    if (record.sealedPayload?.nexusId !== expectedNexusId) problems.push(`record ${record.chainSequence ?? '?'} belongs to NEXUS ID ${record.sealedPayload?.nexusId}, not ${expectedNexusId}`);
+  }
+}
+const expectedAuthorizationId = option('expect-authorization-id');
+if (expectedAuthorizationId !== undefined) {
+  const confirmations = records.filter((r) => r.sealedPayload?.authorizationId === expectedAuthorizationId);
+  if (confirmations.length === 0) problems.push(`no sealed record of authorization ${expectedAuthorizationId} in the export`);
+  if (!isChain && exported.sealedPayload?.authorizationId !== expectedAuthorizationId) problems.push(`the record is of authorization ${exported.sealedPayload?.authorizationId}, not ${expectedAuthorizationId}`);
+}
 if (problems.length > 0) {
   for (const p of problems) console.error(`INVALID  ${p}`);
   process.exit(1);

@@ -241,6 +241,27 @@ test('the verifier trusts only keys passed out of band: exit 0 with --public-key
   assert.equal(verify(`--public-keys=${join(dir, 'other.pem')}`).status, 1, 'a key not used by the HSM makes the chain invalid');
 });
 
+test('the verifier binds an export to the expected customer and authorization (audit B-10)', async () => {
+  const hsm = new SoftwareHsmAdapter();
+  const records = await chainV3(hsm);
+  const key = await hsm.evidencePublicKeyPem();
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-verify-subject-'));
+  writeFileSync(join(dir, 'keys.pem'), key);
+  const file = join(dir, 'chain.json');
+  writeFileSync(file, JSON.stringify({ nexusId: '123456789', records, evidencePublicKeys: [key], head: { chainSequence: 3, evidenceHash: records[2].evidenceHash } }));
+  const run = (...extra) => spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/verify-evidence.mjs', import.meta.url)), file, `--public-keys=${join(dir, 'keys.pem')}`, '--allow-unchecked-head', ...extra], { encoding: 'utf8' });
+  const authorizationId = records.find((r) => r.sealedPayload.authorizationId)?.sealedPayload.authorizationId;
+  assert.ok(authorizationId, 'the test chain has a confirmation');
+  assert.equal(run('--expect-nexus-id=123456789').status, 0);
+  const otherCustomer = run('--expect-nexus-id=987654321');
+  assert.equal(otherCustomer.status, 1);
+  assert.match(otherCustomer.stderr, /belongs to NEXUS ID 123456789, not 987654321/);
+  assert.equal(run(`--expect-authorization-id=${authorizationId}`).status, 0);
+  const otherAuthorization = run('--expect-authorization-id=00000000-0000-4000-8000-000000000000');
+  assert.equal(otherAuthorization.status, 1);
+  assert.match(otherAuthorization.stderr, /no sealed record of authorization/);
+});
+
 test('the verifier does not call a chain valid when its end was not checked (audit B-05)', async () => {
   const hsm = new SoftwareHsmAdapter();
   const records = await chainV3(hsm);
