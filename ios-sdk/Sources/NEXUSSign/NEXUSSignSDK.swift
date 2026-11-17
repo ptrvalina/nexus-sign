@@ -144,9 +144,11 @@ public final class NEXUSSignSDK {
         context.localizedReason = signed.confirmationText(labels: config.promptLabels)
         // The key reference must be fetched with this context for the system
         // prompt to use it (and its localizedReason).
-        let signature = try withBiometryCheck {
-            guard let privateKey = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
-            return try keyManager.sign(payload: canonicalBytes, using: privateKey)
+        let signature = try await offCooperativePool {
+            try self.withBiometryCheck {
+                guard let privateKey = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                return try self.keyManager.sign(payload: canonicalBytes, using: privateKey)
+            }
         }
         do {
             return try await networkClient.signAuthorization(authorizationID: signed.authorizationId, signature: signature).status
@@ -175,22 +177,24 @@ public final class NEXUSSignSDK {
             throw Self.biometryError(policyError)
         }
         context.localizedReason = config.recoverySetupPromptText
-        let signingKey = try withBiometryCheck { () throws -> SecKey in
-            guard let key = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
-            return key
+        let signingKey = try await offCooperativePool {
+            try self.withBiometryCheck { () throws -> SecKey in
+                guard let key = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                return key
+            }
         }
 
         let phrase = try RecoveryPhrase.generate()
         let recoveryKey = P256.Signing.PrivateKey()
         let recoverySPKI = recoveryKey.publicKey.derRepresentation
-        var seed = RecoveryProtocol.seed(phrase: phrase, salt: salt, iterations: parameters.iterations)
+        var seed = try await offCooperativePool { RecoveryProtocol.seed(phrase: phrase, salt: salt, iterations: parameters.iterations) }
         defer { seed.resetBytes(in: 0..<seed.count) }
         let wrapKey = RecoveryProtocol.wrapKey(seed: seed, nexusID: nexusID)
         let wrapped = try RecoveryProtocol.wrap(recoveryKey, wrapKey: wrapKey,
                                                 associatedData: RecoveryProtocol.associatedData(nexusID: nexusID, recoveryPublicKeySPKI: recoverySPKI))
         let setupInput = RecoveryProtocol.setupSigningInput(nexusID: nexusID, credentialID: credentialID, saltBase64: parameters.salt,
                                                             recoveryPublicKeySPKI: recoverySPKI, wrapped: wrapped)
-        let signature = try withBiometryCheck { try keyManager.sign(payload: setupInput, using: signingKey) }
+        let signature = try await offCooperativePool { try self.withBiometryCheck { try self.keyManager.sign(payload: setupInput, using: signingKey) } }
         try await networkClient.configureRecovery(salt: parameters.salt, recoveryPublicKeyPEM: recoveryKey.publicKey.pemRepresentation,
                                                   wrappedRecoveryKey: wrapped, signature: signature)
         return phrase
@@ -211,7 +215,7 @@ public final class NEXUSSignSDK {
             throw NEXUSSignError.serverError(statusCode: 0, message: "Invalid recovery session")
         }
         let salt = try Self.validated(session.parameters)
-        var seed = RecoveryProtocol.seed(phrase: words, salt: salt, iterations: session.parameters.iterations)
+        var seed = try await offCooperativePool { RecoveryProtocol.seed(phrase: words, salt: salt, iterations: session.parameters.iterations) }
         defer { seed.resetBytes(in: 0..<seed.count) }
         let wrapKey = RecoveryProtocol.wrapKey(seed: seed, nexusID: session.nexusId)
         let recoveryKey = try RecoveryProtocol.unwrap(wrapped, wrapKey: wrapKey,
@@ -297,16 +301,20 @@ public final class NEXUSSignSDK {
             } catch {
                 throw NEXUSSignError.authenticationDenied
             }
-            let signature = try withBiometryCheck {
-                guard let privateKey = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
-                return try keyManager.sign(payload: challenge.canonicalPayload, using: privateKey)
+            let signature = try await offCooperativePool {
+                try self.withBiometryCheck {
+                    guard let privateKey = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                    return try self.keyManager.sign(payload: challenge.canonicalPayload, using: privateKey)
+                }
             }
             // Stored before the code exists: no code without its signature.
             try offlineSignatures.add(authorizationID: challenge.transaction.authorizationId, signature: signature)
         }
         // The key agreement itself shows the biometric prompt of `context`
         // (v1); in v2 the context is already evaluated.
-        var shared = try withBiometryCheck { try keyManager.offlineSharedSecret(serverPublicKeyPEM: serverKey, context: context) }
+        var shared = try await offCooperativePool {
+            try self.withBiometryCheck { try self.keyManager.offlineSharedSecret(serverPublicKeyPEM: serverKey, context: context) }
+        }
         defer { shared.resetBytes(in: 0..<shared.count) }
         let key = DeviceProtocol.deriveOfflineKey(sharedSecret: shared, credentialID: credentialID)
         return DeviceProtocol.offlineCode(tag: DeviceProtocol.offlineTag(key: key, canonicalPayload: challenge.canonicalPayload))
@@ -456,6 +464,28 @@ public final class NEXUSSignSDK {
     }
 
     // MARK: - Helpers
+
+    /// Work that blocks a thread for seconds: a Secure Enclave operation that
+    /// waits for the Face ID sheet, and PBKDF2 with up to 5,000,000
+    /// iterations. It runs on this queue rather than on a thread of Swift's
+    /// cooperative pool, so other tasks of the app keep running meanwhile
+    /// (finding D-12).
+    static let blockingWorkQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "com.nexussign.sdk.blocking-work", qos: .userInitiated, attributes: .concurrent)
+        queue.setSpecific(key: blockingWorkQueueKey, value: ())
+        return queue
+    }()
+    static let blockingWorkQueueKey = DispatchSpecificKey<Void>()
+
+    static func offCooperativePool<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            blockingWorkQueue.async { continuation.resume(with: Result { try work() }) }
+        }
+    }
+
+    private func offCooperativePool<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await Self.offCooperativePool(work)
+    }
 
     /// Runs a biometry-bound key operation; when it fails because the
     /// biometric enrolment changed since the device was enrolled, reports
@@ -719,9 +749,11 @@ extension NEXUSSignSDK {
         var policyError: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &policyError) else { throw Self.biometryError(policyError) }
         context.localizedReason = terms.confirmationText
-        let signature = try withBiometryCheck {
-            guard let privateKey = try keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
-            return try keyManager.sign(payload: bytes, using: privateKey)
+        let signature = try await offCooperativePool {
+            try self.withBiometryCheck {
+                guard let privateKey = try self.keyManager.existingKey(context: context) else { throw NEXUSSignError.notRegistered }
+                return try self.keyManager.sign(payload: bytes, using: privateKey)
+            }
         }
         return try await networkClient.deviceCall("POST", "/v1/mobile/mandates/\(mandate.mandateId)/signature",
                                                   body: ["signature": signature.base64EncodedString(), "signatureFormat": "der"])
