@@ -11,7 +11,7 @@ This is an **internal review**, not an external penetration test. No external te
 | Critical | 0 | 0 | 0 | — |
 | High | 5 | 5 | 0 | None open |
 | Medium | 19 | 18 | 1 (D-01) | Documented decision below |
-| Low | 46 | 30 | 16 (10 accepted, 6 planned before production, 3 of them partly fixed) | [Triage of the Low findings](#triage-of-the-low-findings); none blocks a pilot alone |
+| Low | 46 | 33 | 13 (10 accepted, 3 planned before production, one of them partly fixed) | [Triage of the Low findings](#triage-of-the-low-findings); none blocks a pilot alone |
 | Info | 20 | 0 | 20 | — |
 
 The third cycle closed D-02 and D-07 in code and recorded N-01 to N-06. The fourth cycle (this one) ran every check for real in CI for the first time and found N-07 to N-13 (below), and added the [threat model of ten scenarios](#threat-model-ten-scenarios). "Fixed" means fixed in code and covered by a test that passed in CI, unless the row says otherwise. Since the fourth cycle every test named as evidence in this document has passed in GitHub Actions on branch `engineering/production-readiness` (runs and jobs: [CI validation](CI_VALIDATION.md)); tests marked "(CI)" in earlier cycles' rows have now run.
@@ -108,7 +108,7 @@ Every Low finding of the area reports was rechecked against the code in the four
 | D-05 | iOS compares the response with the signed bytes by UTF-16 code units, not canonical equivalence | `3be0953` | `SignedTransactionTests` |
 | D-10 | Android splits recovery phrases on Unicode White_Space, like iOS | `3be0953` | `RecoveryPhraseTest`, `RecoveryProtocolTests` |
 
-After the fourth-cycle package, the planned Lows were worked through on the same branch. Thirteen more were fixed, each with a test that ran in CI, and three were fixed in part:
+After the fourth-cycle package, the planned Lows were worked through on the same branch. Sixteen more were fixed, each with a test that ran in CI, and one (D-14) in part:
 
 | ID | Fix | Commit | Test |
 |---|---|---|---|
@@ -123,24 +123,22 @@ After the fourth-cycle package, the planned Lows were worked through on the same
 | D-08 | The iOS push receipt goes through the session with the configured certificate pins | `95be0c4` | `SecurePushTests.testReceiptsUseThePinnedSession` |
 | D-12 | iOS: biometric signing, key agreement and PBKDF2 run on a dedicated queue behind `withCheckedThrowingContinuation`, not on the cooperative pool | `a0bd304` | `BlockingWorkTests` (4, incl. more blocked operations than pool threads while another task runs). Not measured on a device |
 | D-15 | iOS README: App Attest entitlement, capability and Auth Core settings for integrators | `fa9e837` | — (documentation) |
-| A2-08 (part) | Console route `POST /admin/api/webhook-deliveries/:id/redeliver` (operator role, bank-scoped, audited): a `FAILED` delivery returns to `PENDING` with the same event ID. **Remaining:** secret rotation overlap | `e44f415` | `admin console` (HTTP suite) |
-| B-10 (part) | The verifier binds an export to an expected identity and authorization (`--expect-nexus-id`, `--expect-authorization-id`). **Remaining:** a bank identifier inside the sealed payload | `b2bf43f` | `evidence` (unit) |
+| A2-08 | Console route `POST /admin/api/webhook-deliveries/:id/redeliver` (operator role, bank-scoped, audited): a `FAILED` delivery returns to `PENDING` with the same event ID. Secret rotation overlap: migration 034 keeps the replaced secret for `--webhook-overlap-hours` (default 24); deliveries carry `v1=<previous>,v1=<new>`; the reference receiver and the guide accept any matching entry | `e44f415`, `06e2d85` | `admin console` (HTTP suite), `webhook-secret-overlap` (new suite, 4), `low-findings` (unit) |
+| B-10 | The verifier binds an export to an expected identity, authorization and bank (`--expect-nexus-id`, `--expect-authorization-id`, `--expect-client-id`); every new record seals the bank's `clientId` | `b2bf43f`, `d950036` | `evidence` (unit), `evidence-outcomes` (integration) |
+| C-13 | A REVIEW is settled by two operator logins (request, then confirmation with the same outcome; the requester cannot confirm), kept in `bank.review_requests`; `createOperatorTools({ authCore })` reports the result to Auth Core | `24e0568` | `bank-db-authorization` (2), `bank-execution-processes` (Auth Core state after the resolution) |
 | D-14 (part) | Both SDKs end a call whose answer has no DTLS fingerprint (`a=fingerprint`, SHA-256/384/512, RFC 8122) and close the session. **Remaining:** relay-only ICE as a bank option; binary provenance (release blocker D-015) | `e3daad1` | `VerificationCallControllerTests`, `VerificationCallControllerTest` (2 new each); Auth Core conformance job |
 
-The 16 that remain (with the remaining parts of A2-08, B-10 and D-14), with the decision for each. **Accepted** means the behaviour is intended or the control belongs to the bank's infrastructure, and it is documented; **Planned** means a fix is needed before production but not before a controlled pilot.
+The 13 that remain (with the remaining part of D-14), with the decision for each. **Accepted** means the behaviour is intended or the control belongs to the bank's infrastructure, and it is documented; **Planned** means a fix is needed before production but not before a controlled pilot.
 
 | ID | Finding (short) | Decision | Reason or plan |
 |---|---|---|---|
 | A1-06 | Idempotent replay ignores `verificationPolicy`, `expiresInSeconds`, `correlationId`, `pushNotification` | Accepted | Documented in the bank backend guide: a replay returns the original plan, so it cannot weaken it |
 | A1-09 | Bank tokens carry no scope | Accepted for the pilot | Tokens are bound to the bank's mTLS certificate; per-endpoint scopes when a bank needs separated backends |
 | A1-10 | No rate limiting in Auth Core | Accepted | The bank's gateway rate-limits (deployment guide); per-authorization and login counters exist |
-| A2-08 | Webhooks: no secret overlap (redelivery after `FAILED` fixed above) | Planned | The bank polls authorization state as the source of truth (integration guide); add secret rotation overlap |
 | A2-09 | Provider and TURN secrets in plain environment variables | Accepted for the pilot | Kubernetes secrets; HSM wrapping covers the stored secrets; production posture check to be added |
-| B-10 | Sealed payload carries no bank identifier (`--expect-nexus-id` fixed above) | Planned | Bank identifier in the sealed payload (schema change of the evidence format) |
 | C-09 | Boundary role can push a kept head to the maximum (denial of service) | Accepted | The boundary role is the bank's own component; the effect is a refusal, never an execution |
 | C-10 | No row-level security; tenant isolation in the application | Accepted for the pilot | Every query is scoped by `client_id` (tested by `security invariants` and console suites); RLS is a defence-in-depth step for multi-bank hosting |
 | C-12 | Provider outcomes: no distinct "rejected"; reference provider unauthenticated | Accepted | Reference adapter only; the bank's adapter defines outcomes ([pilot execution pack](../integration/pilot-execution-pack.md)) |
-| C-13 | REVIEW settled by one operator; Auth Core not told | Planned | Four eyes for REVIEW and a commit result to Auth Core |
 | C-14 | Security state only in Redis (lockouts, sessions) | Accepted | Redis persistence is required in production (deployment guide); a flush logs everyone out and resets counters, it does not grant access |
 | D-06 | iOS registration state in `UserDefaults` (not atomic, backed up) | Planned | Move to the Keychain with `ThisDeviceOnly`; needs a device to test |
 | D-09 | Secure push has no replay or freshness check | Accepted | A push only invites the app to fetch the signed request; a replayed push shows nothing new |

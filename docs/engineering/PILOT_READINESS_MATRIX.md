@@ -7,8 +7,8 @@ The 20 conditions for READY FOR CONTROLLED BANK PILOT (section 22 of the readine
 | 1 | All 49 functions have a documented status | PASS | [Functional completeness matrix](FUNCTIONAL_COMPLETENESS_MATRIX.md): 44 software functions and 5 non-software items | — |
 | 2 | All mandatory pilot functions implemented | PASS, one exception | 43 of 44 implemented; F17 (Verification of Payee) is the bank's function | The bank's Verification of Payee |
 | 3 | No open Critical or High defects | PASS | [Security findings](SECURITY_FINDINGS.md): Critical 0, High 5 found, 5 fixed | External test may find more (18) |
-| 4 | All mandatory server tests passed | PASS | CI: unit 136/136 (Node 22 and 24), integration 354/354 (54 suites), end-to-end 80/80 checks, WebRTC media 6/6, sandbox 74, demo bank 7 | — |
-| 5 | iOS SDK built | PASS | Built and tested for the first time in this cycle: `swift test` 42/42 with warnings as errors on `macos-15`, demo app for `iphoneos`, call module against pinned WebRTC (run `43954659319`) | — |
+| 4 | All mandatory server tests passed | PASS | CI: unit 144/144 (Node 22 and 24), integration 370/370 (59 suites), end-to-end 80/80 checks, WebRTC media 6/6, sandbox 74, demo bank 7 | — |
+| 5 | iOS SDK built | PASS | Built and tested for the first time in this cycle: `swift test` 49/49 with warnings as errors on `macos-15`, demo app for `iphoneos`, call module against pinned WebRTC (run `44019252340`) | — |
 | 6 | Android SDK built | PASS | CI `android-sdk`: `testDebugUnitTest lintRelease assembleRelease` (real Gradle and Android SDK build, minSdk 28 checked by Lint); `android-sdk-calls` release build against the pinned WebRTC artifact; demo APK built; call conformance against a running Auth Core | — |
 | 7 | Both SDKs checked on real devices | BLOCKED | No devices | B1, B2 in [release blockers](RELEASE_BLOCKERS.md) |
 | 8 | D-01 and D-02 closed with evidence | PARTIAL | D-02 fixed in code; vectors pass in TypeScript, Kotlin (Android unit tests), Python and Swift (iOS unit tests in CI); D-01 open with the decision "pilot with offline confirmation off" | D-02 on a device; D-01 protocol change before production |

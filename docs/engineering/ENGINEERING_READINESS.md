@@ -2,7 +2,7 @@
 
 Directive: *Master Execution Directive, Cycle 4: Engineering Validation, Technical Debt Elimination & Production Readiness*. Repository `ptrvalina/nexus-sign`, branch `engineering/production-readiness`, base `2.0.0-rc.2`, draft pull request #22. Date of the results: 2026-11-16.
 
-What this cycle changed in kind: for the first time every check ran for real. CI had never run on the branch; the HSM suites had never run anywhere; the iOS SDK had never been compiled. Running them found and closed ten defects, among them an iOS SDK that did not compile, a gap in the iOS mandate checks, two high dependency advisories and a call-closure race. Everything that can be shown without phones, the bank's HSM, the bank's systems and an external tester now passes in CI. Final run: run `43954659319` (CI) / `43954659184` (Security), commit `20de8c0`, every job of both workflows green.
+What this cycle changed in kind: for the first time every check ran for real. CI had never run on the branch; the HSM suites had never run anywhere; the iOS SDK had never been compiled. Running them found and closed ten defects, among them an iOS SDK that did not compile, a gap in the iOS mandate checks, two high dependency advisories and a call-closure race. Everything that can be shown without phones, the bank's HSM, the bank's systems and an external tester now passes in CI. Final run: run `44019252340` (CI) / `44019252337` (Security), commit `d950036`, every job of both workflows green (after the package, 16 more Low findings were fixed with tests on the same branch; the earlier reference run was `43954659319` on `20de8c0`).
 
 **Final decision: READY FOR EXTERNAL VALIDATION.** Not ready for a controlled bank pilot: that needs the external validation listed in section K, which has not happened.
 
@@ -27,6 +27,7 @@ What this cycle changed in kind: for the first time every check ran for real. CI
 | 13 | iOS tests free of Swift 6 concurrency diagnostics; `swift test` with warnings as errors (TD-14) | `670dbf7` | `ios-sdk` 42/42, 0 warnings |
 | 14 | Android Lint on the call module, via the core SDK from Maven Local; the call module's POM names the core SDK version (TD-13) | `62523b3` | `android-sdk-calls` `lintRelease` |
 | 15 | Low findings A1-08, A2-04, A2-05, A2-07, B-07, B-12, C-11 (migration 031), D-05, D-10 | `adfe7e3`, `6226128`, `f37216a`, `b65b37b`, `2d705f6`, `a864ca7`, `cb77ab6`, `3be0953` | one test each, failing without the fix ([triage](SECURITY_FINDINGS.md#triage-of-the-low-findings)) |
+| 16 | After the package: Low findings A2-06, A2-08 (redelivery, secret overlap, migration 034), A2-10, A1-05/B-06, A1-07, B-08, B-09/C-08 (migration 033), B-10, B-11, C-07 (migration 032), C-13, D-08, D-12, D-15; D-14 in part | `8b0e845` … `d950036` | one test or suite each ([triage](SECURITY_FINDINGS.md#triage-of-the-low-findings)); run `44019252340` |
 
 ## B. Technical debt removed
 
@@ -34,7 +35,7 @@ What this cycle changed in kind: for the first time every check ran for real. CI
 
 ## C. 22 HTTP test suites
 
-**22/22 PASS**, job `133606360953` of the final run `43954659319` (commit `20de8c0`); first passed at `f8cbc11` (job `133541411998`). List with test counts: [CI validation](CI_VALIDATION.md#http-and-hsm-suites). They cover the API endpoints, registration and enrolment, authentication, credential lifecycle, NEXUS ID issuance, transaction binding, signature verification, replay protection, idempotency, expiry, cancellation, revocation, multi-device policy, bank isolation (`security invariants`, `bank certificate binding`), webhooks, evidence sealing, offline verification, error responses and authorization boundaries. Rate limiting is not in Auth Core by design (finding A1-10, the bank's gateway).
+**22/22 PASS**, job `133824854081` of the final run `44019252340` (commit `d950036`); first passed at `f8cbc11` (job `133541411998`). List with test counts: [CI validation](CI_VALIDATION.md#http-and-hsm-suites). They cover the API endpoints, registration and enrolment, authentication, credential lifecycle, NEXUS ID issuance, transaction binding, signature verification, replay protection, idempotency, expiry, cancellation, revocation, multi-device policy, bank isolation (`security invariants`, `bank certificate binding`), webhooks, evidence sealing, offline verification, error responses and authorization boundaries. Rate limiting is not in Auth Core by design (finding A1-10, the bank's gateway).
 
 ## D. 8 HSM test suites
 
@@ -46,15 +47,15 @@ What this cycle changed in kind: for the first time every check ran for real. CI
 
 ## F. iOS SDK build
 
-**PASS.** The iOS SDK was compiled for the first time in this cycle and failed (`operator` keyword, N-07, job `133528489071`); after the fix every iOS job passed. Final run `43954659319`: `swift test -Xswiftc -warnings-as-errors` on `macos-15`, 42 tests in 10 suites, 0 failures, 0 warnings, including the 20 mandate vectors of N-13 (job `133605905133`); the demo app built for `iphoneos` against the SDK (job `133612505638`); the WebRTC call module built (job `133612505551`). At `f8cbc11` the iOS jobs got no macOS runner and were cancelled twice; nothing was simulated, they ran in the next run. Not run on an iPhone (BLOCKED). [SDK validation](SDK_VALIDATION.md).
+**PASS.** The iOS SDK was compiled for the first time in this cycle and failed (`operator` keyword, N-07, job `133528489071`); after the fix every iOS job passed. Final run `44019252340`: `swift test -Xswiftc -warnings-as-errors` on `macos-15`, 49 tests, 0 failures, 0 warnings, including the 20 mandate vectors of N-13 and the new tests of D-08, D-12 and D-14 (job `133824525142`); the demo app built for `iphoneos` against the SDK (job `133824865051`); the WebRTC call module built (job `133824865002`). At `f8cbc11` the iOS jobs got no macOS runner and were cancelled twice; nothing was simulated, they ran in the next run. Not run on an iPhone (BLOCKED). [SDK validation](SDK_VALIDATION.md).
 
 ## G. CI
 
-Final run: `CI` `43954659319` and `Security` `43954659184` on `20de8c0`: every job of both workflows passed. GitHub sometimes assigns no macOS runner (iOS jobs cancelled after 15 minutes at `f8cbc11`, `1f5f81b`, `3be0953`); each time the next run passed, and nothing was simulated. Directive items 1–16 with job IDs and results: [CI validation](CI_VALIDATION.md). Ten failures found by CI in this cycle, each with root cause, fix and regression test: same document.
+Final run: `CI` `44019252340` and `Security` `44019252337` on `d950036`: every job of both workflows passed. GitHub sometimes assigns no macOS runner (iOS jobs cancelled after 15 minutes at `f8cbc11`, `1f5f81b`, `3be0953`); each time the next run passed, and nothing was simulated. Directive items 1–16 with job IDs and results: [CI validation](CI_VALIDATION.md). Ten failures found by CI in this cycle, each with root cause, fix and regression test: same document.
 
 ## H. Security audit
 
-[Security findings](SECURITY_FINDINGS.md). Critical 0; High 5 found, 5 fixed (new this cycle: N-09 dependencies); Medium 19 found, 18 fixed, 1 open (D-01, accepted for a pilot with offline confirmation off, not for production); new this cycle N-07 to N-13. Low: all 44 rechecked; 6 found already fixed, 9 fixed in this cycle with tests, then 13 more fixed after the package (A2-06, A2-10, A1-05/B-06, C-07, A1-07, B-11, B-09/C-08, B-08, D-08, D-12, D-15) and 3 in part (A2-08, B-10, D-14), each with a test that ran in CI; 16 remain with a decision each (10 accepted by design, 6 planned before production). Re-audit of injection, XSS, CSRF, SSRF, randomness, secret comparison and logging, `SECURITY DEFINER`, Redis TTLs: no new finding beyond those listed. Threat model of the ten scenarios with residual risk: same document. Highest residual risks: the customer approving a genuine fraudulent payee (business, bank's Verification of Payee), a compromised HSM (high impact, low likelihood; cannot cause an execution), insider with database ownership (detected by the bank's chain checkpoints). This is an internal review; **no external penetration test has been done.**
+[Security findings](SECURITY_FINDINGS.md). Critical 0; High 5 found, 5 fixed (new this cycle: N-09 dependencies); Medium 19 found, 18 fixed, 1 open (D-01, accepted for a pilot with offline confirmation off, not for production); new this cycle N-07 to N-13. Low: all 44 rechecked; 6 found already fixed, 9 fixed in this cycle with tests, then 16 more fixed after the package (A2-06, A2-08, A2-10, A1-05/B-06, A1-07, B-08, B-09/C-08, B-10, B-11, C-07, C-13, D-08, D-12, D-15) and D-14 in part, each with a test that ran in CI; 13 remain with a decision each (10 accepted by design, 3 planned before production: D-06, D-11, the rest of D-14). Re-audit of injection, XSS, CSRF, SSRF, randomness, secret comparison and logging, `SECURITY DEFINER`, Redis TTLs: no new finding beyond those listed. Threat model of the ten scenarios with residual risk: same document. Highest residual risks: the customer approving a genuine fraudulent payee (business, bank's Verification of Payee), a compromised HSM (high impact, low likelihood; cannot cause an execution), insider with database ownership (detected by the bank's chain checkpoints). This is an internal review; **no external penetration test has been done.**
 
 ## I. The 49 functions
 
@@ -96,7 +97,8 @@ Documents: new `docs/engineering/{ENGINEERING_READINESS,CI_VALIDATION,SDK_VALIDA
 | `4b3e84d` | Actions on Node 24 releases | (pushed with the next) | |
 | `670dbf7` | iOS warnings as errors | `43950832164` / `43950832199` | Linux jobs pass; superseded by the next push |
 | `62523b3` … `3be0953` | Lint on the call module; Low findings A2-05, A1-08, C-11, A2-07, D-05, D-10 | `43951724813` / `43951724930` | All pass except iOS (no runner); integration 353/353, call-module Lint pass |
-| `6226128`, `a864ca7`, `2d705f6`, `20de8c0` | A2-04, B-12, B-07; Low triage and documents | `43954659319` / `43954659184` | **All jobs pass** — final run (unit 136, integration 354 in 54 suites, iOS 42) |
+| `6226128`, `a864ca7`, `2d705f6`, `20de8c0` | A2-04, B-12, B-07; Low triage and documents | `43954659319` / `43954659184` | **All jobs pass** — reference run of the package (unit 136, integration 354 in 54 suites, iOS 42) |
+| `8b0e845` … `d950036` | Low findings after the package (A2-06, A2-10, B-10, A1-05/B-06, C-07, A1-07, B-11, B-09/C-08, B-08, D-08, A2-08, D-15, D-12, D-14 part, C-13) | `44015361246`, `44016351029`, `44017238945`, `44018225807` (two failures, see CI validation), `44019252340` / `44019252337` | **All jobs pass** — final run (unit 144, integration 370 in 59 suites, iOS 49) |
 | later | Final updates of these documents | runs of those commits on pull request #22 | Same code |
 
 ## N. Reproduction
@@ -114,7 +116,7 @@ Documents: new `docs/engineering/{ENGINEERING_READINESS,CI_VALIDATION,SDK_VALIDA
 
 ## O. Objective assessment
 
-What is shown: the server (Auth Core), the bank database rules and the reference bank execution boundary behave as designed under every test the repository has — 136 unit tests, 354 integration tests in 54 suites against real PostgreSQL 16, Redis 7 and SoftHSM 2.7.0, 80 end-to-end checks, 6 real WebRTC calls in Chromium — and the central security property holds in those tests: a fully compromised Auth Core cannot make the bank execute a payment. Both SDKs compile for their platforms and pass their unit and shared-vector tests; dependency, secret, container and code scans are clean. No Critical or High finding is open.
+What is shown: the server (Auth Core), the bank database rules and the reference bank execution boundary behave as designed under every test the repository has — 144 unit tests, 370 integration tests in 59 suites against real PostgreSQL 16, Redis 7 and SoftHSM 2.7.0, 80 end-to-end checks, 6 real WebRTC calls in Chromium — and the central security property holds in those tests: a fully compromised Auth Core cannot make the bank execute a payment. Both SDKs compile for their platforms and pass their unit and shared-vector tests; dependency, secret, container and code scans are clean. No Critical or High finding is open.
 
 What is not shown: anything on a real iPhone or Android phone (hardware keys, biometrics, prompts, push, calls), anything on the bank's HSM or in the bank's infrastructure (failover, load, the core banking adapter), and any external assessment. These are not engineering gaps that this team can close; they are the external validation the product now needs. One Medium finding (D-01) stays open by decision and must be closed before production.
 
