@@ -437,10 +437,37 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     assert.equal(rec.outcome, 'RECONCILE');
     assert.equal(await store.markReview(p.paymentId, rec.attemptId, 'not found; not idempotent'), true);
     await assert.rejects(db.pools.boundary.query(`SELECT bank.resolve_review($1, 'succeeded', 'n')`, [p.paymentId]), /permission denied/);
-    assert.equal(await operator.resolveReview(p.paymentId, 'failed', 'provider statement: no such operation'), true);
+    assert.equal(await operator.resolveReview(p.paymentId, 'failed', 'provider statement: no such operation'), 'REQUESTED');
+    // Four eyes (finding C-13): the requester cannot confirm; a second
+    // operator must, with the same outcome.
+    await assert.rejects(operator.resolveReview(p.paymentId, 'failed', 'again'), /another operator must confirm/);
+    const second = lib.createOperatorTools(db.pools.operator2);
+    await assert.rejects(second.resolveReview(p.paymentId, 'succeeded', 'I think it went through'), /differs from the one .* requested/);
+    assert.equal(await state(p.paymentId), 'REVIEW');
+    assert.equal(await second.resolveReview(p.paymentId, 'failed', 'statement checked'), 'RESOLVED');
     assert.equal(await state(p.paymentId), 'PROVIDER_FAILED');
+    assert.equal(await second.resolveReview(p.paymentId, 'failed', 'late'), 'NOT_IN_REVIEW');
     const row = (await db.owner.query(`SELECT resolved_by FROM bank.executions WHERE payment_id = $1`, [p.paymentId])).rows[0];
-    assert.equal(row.resolved_by, db.roles.operator, 'the database records who it was, not what the caller says');
+    assert.equal(row.resolved_by, db.operator2Role, 'the database records who it was, not what the caller says');
+    const request = (await db.owner.query(`SELECT requested_by, confirmed_by FROM bank.review_requests WHERE payment_id = $1`, [p.paymentId])).rows[0];
+    assert.deepEqual(request, { requested_by: db.roles.operator, confirmed_by: db.operator2Role });
+    await assert.rejects(db.pools.operator.query(`UPDATE bank.review_requests SET confirmed_by = 'x' WHERE payment_id = $1`, [p.paymentId]), /permission denied/);
+  });
+
+  test('the requester of a REVIEW resolution may change the outcome but not confirm it (finding C-13)', async () => {
+    const p = await claimed();
+    assert.equal((await store.approveExecution(p.paymentId, p.attemptId, p.evidence, 30_000)).ok, true);
+    const provider = providerDouble(); provider.modes.push('drop');
+    const { gateway } = gatewayWith(provider);
+    assert.equal((await gateway.submit(p.paymentId, p.attemptId)).outcome, 'unknown');
+    const rec = await store.claim(p.paymentId, 30_000);
+    assert.equal(await store.markReview(p.paymentId, rec.attemptId, 'not found; not idempotent'), true);
+    assert.equal(await operator.resolveReview(p.paymentId, 'failed', 'first reading'), 'REQUESTED');
+    assert.equal(await operator.resolveReview(p.paymentId, 'succeeded', 'provider confirmed later', { providerReference: 'PRV-7' }), 'REQUESTED');
+    assert.equal(await lib.createOperatorTools(db.pools.operator2).resolveReview(p.paymentId, 'succeeded', 'confirmed with the provider'), 'RESOLVED');
+    const execution = await store.execution(p.paymentId);
+    assert.equal(execution.state, 'EXECUTED');
+    assert.equal(execution.providerReference ?? (await db.owner.query(`SELECT provider_reference FROM bank.executions WHERE payment_id = $1`, [p.paymentId])).rows[0].provider_reference, 'PRV-7');
   });
 
   test('a role that inherits the boundary role gets its functions and nothing more; nobody inherits the owner', async () => {

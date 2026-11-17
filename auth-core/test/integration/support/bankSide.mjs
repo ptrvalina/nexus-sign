@@ -29,7 +29,8 @@ const ADMIN_DB_URL = process.env.INTEGRATION_DATABASE_URL;
 export async function bankDatabase(lib, { bankTrustKeys = [], executionWindowSeconds } = {}) {
   const db = await createDatabase({ schema: false });
   const suffix = randomBytes(4).toString('hex');
-  const kinds = ['owner', 'boundary', 'gateway', 'registry', 'operator', 'member'];
+  // `operator2` is a second person with the operator role (four eyes, finding C-13).
+  const kinds = ['owner', 'boundary', 'gateway', 'registry', 'operator', 'member', 'operator2'];
   const names = Object.fromEntries(kinds.map((k) => [k, `bank_${k}_${suffix}`]));
   const passwords = Object.fromEntries(kinds.map((k) => [k, randomBytes(12).toString('hex')]));
   const admin = new pg.Client({ connectionString: db.url });
@@ -42,6 +43,7 @@ export async function bankDatabase(lib, { bankTrustKeys = [], executionWindowSec
     }
     await admin.query(`GRANT CREATE ON DATABASE ${db.name} TO ${names.owner}`);
     await admin.query(`GRANT ${names.boundary} TO ${names.member}`);
+    await admin.query(`GRANT ${names.operator} TO ${names.operator2}`);
     await admin.query(lib.DATABASE_HARDENING(db.name));
   } finally { await admin.end(); }
   const urlFor = (k) => { const u = new URL(db.url); u.username = names[k]; u.password = passwords[k]; return u.toString(); };
@@ -49,8 +51,9 @@ export async function bankDatabase(lib, { bankTrustKeys = [], executionWindowSec
   const roles = { boundary: names.boundary, gateway: names.gateway, registry: names.registry, operator: names.operator };
   await lib.installSchema(owner, roles, { bankTrustKeys, executionWindowSeconds });
   const pools = Object.fromEntries(Object.keys(roles).map((k) => [k, new pg.Pool({ connectionString: urlFor(k), max: 6 })]));
+  pools.operator2 = new pg.Pool({ connectionString: urlFor('operator2'), max: 2 });
   return {
-    owner, ownerRole: names.owner, pools, roles, memberRole: names.member,
+    owner, ownerRole: names.owner, pools, roles, memberRole: names.member, operator2Role: names.operator2,
     urls: Object.fromEntries(['boundary', 'gateway', 'registry', 'operator', 'member'].map((k) => [k, urlFor(k)])),
     /** A statement as the PostgreSQL administrator (superuser): for set-ups no application role could make. */
     async adminQuery(sql, args) {

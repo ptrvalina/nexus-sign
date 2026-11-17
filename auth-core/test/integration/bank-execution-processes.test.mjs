@@ -322,9 +322,13 @@ describe('execution boundary across processes (SoftHSM, PostgreSQL, mutual TLS)'
     assert.equal(provider.calls.length, calls, 'not sent again');
     assert.equal((await boundary({ capabilities: noResubmit }).execute(p.paymentId)).status, 'REVIEW', 'stays for a person');
     await assert.rejects(operator.resolveReview(p.paymentId, 'succeeded'), /needs a note/);
-    assert.equal(await operator.resolveReview(p.paymentId, 'failed', 'provider statement 2026-10-19: no such operation'), true);
+    assert.equal(await operator.resolveReview(p.paymentId, 'failed', 'provider statement 2026-10-19: no such operation'), 'REQUESTED');
+    assert.equal(await state(p.paymentId), 'REVIEW', 'one person does not settle it');
+    assert.equal(await lib.createOperatorTools(bankDb.pools.operator2, { authCore: authCoreClient() }).resolveReview(p.paymentId, 'failed', 'checked the statement'), 'RESOLVED');
     assert.equal(await state(p.paymentId), 'PROVIDER_FAILED');
-    assert.equal((await store.execution(p.paymentId)).resolvedBy, bankDb.roles.operator, 'the operator\'s database login, not a name the caller gives');
+    // Auth Core is told the result of the resolution (finding C-13).
+    assert.equal((await bank.call('GET', `/v1/authorizations/${p.authorizationId}/bank-transaction`)).json.bankTransactionState, 'FAILED');
+    assert.equal((await store.execution(p.paymentId)).resolvedBy, bankDb.operator2Role, 'the confirming operator\'s database login, not a name the caller gives');
     // The contract declares an idempotent submission: resubmitted with the same operation id, once.
     p = await payment(device);
     provider.modes.push('drop');

@@ -48,11 +48,33 @@ export function createRegistry(pool, { bankTrustKeys } = {}) {
   };
 }
 
-/** Operator tools: settling a REVIEW. The database records the operator's login. */
-export function createOperatorTools(pool) {
+/**
+ * Operator tools: settling a REVIEW, with four eyes (finding C-13). The
+ * database records each operator's login. The first operator's call returns
+ * 'REQUESTED'; a second operator, with their own login and the same outcome,
+ * gets 'RESOLVED'. 'NOT_IN_REVIEW' when the payment is not in REVIEW.
+ *
+ * With `authCore` (createAuthCoreClient), a resolution is reported to Auth
+ * Core as the commit result (COMMITTED or FAILED). If that report fails the
+ * resolution still stands in the bank's database, and the error says so
+ * (`error.resolved === true`); report it again with `authCore.commitResult`.
+ */
+export function createOperatorTools(pool, { authCore = null } = {}) {
   return {
     async resolveReview(paymentId, outcome, note, { providerReference = null } = {}) {
-      return (await pool.query(`SELECT bank.resolve_review($1, $2, $3, $4) AS ok`, [paymentId, outcome, note ?? null, providerReference])).rows[0].ok;
+      const result = (await pool.query(`SELECT bank.resolve_review($1, $2, $3, $4) AS result`, [paymentId, outcome, note ?? null, providerReference])).rows[0].result;
+      if (result !== 'RESOLVED' || !authCore) return result;
+      const authorizationId = (await pool.query(`SELECT authorization_id FROM bank.payments WHERE payment_id = $1`, [paymentId])).rows[0]?.authorization_id;
+      if (!authorizationId) return result; // a mandate debit: no authorization to report
+      try {
+        const answer = outcome === 'succeeded'
+          ? await authCore.commitResult(authorizationId, 'COMMITTED')
+          : await authCore.commitResult(authorizationId, 'FAILED', `settled by two operators: ${note}`.slice(0, 256));
+        if (answer.status >= 300) throw new Error(`HTTP ${answer.status} ${answer.json?.code ?? ''}`.trim());
+      } catch (error) {
+        throw Object.assign(new Error(`resolved in the bank's database; Auth Core was not told: ${error.message}`), { resolved: true });
+      }
+      return result;
     },
   };
 }

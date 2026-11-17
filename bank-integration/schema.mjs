@@ -59,7 +59,7 @@ export const TRANSITIONS = Object.freeze([
   ['REVIEW', 'EXECUTED', 'resolve_review'], ['REVIEW', 'PROVIDER_FAILED', 'resolve_review'],
 ]);
 
-const TABLES = ['payments', 'executions', 'execution_transitions', 'trust_statements', 'verified_statements', 'credential_trust', 'chain_heads', 'reconciliation_findings', 'allowed_transitions', 'trust_keys', 'settings', 'restore_marks'];
+const TABLES = ['payments', 'executions', 'execution_transitions', 'trust_statements', 'verified_statements', 'credential_trust', 'chain_heads', 'reconciliation_findings', 'allowed_transitions', 'trust_keys', 'settings', 'restore_marks', 'review_requests'];
 
 /** Default for bank.settings.execution_window_seconds: how long after the signed expires_at a payment may still be approved or submitted. */
 export const DEFAULT_EXECUTION_WINDOW_SECONDS = 3600;
@@ -85,7 +85,7 @@ export const READS = Object.freeze({
   boundary: ['payments', 'executions', 'execution_transitions', 'trust_statements', 'chain_heads', 'reconciliation_findings'],
   gateway: [],
   registry: [],
-  operator: ['payments', 'executions', 'execution_transitions', 'reconciliation_findings'],
+  operator: ['payments', 'executions', 'execution_transitions', 'reconciliation_findings', 'review_requests'],
 });
 export const ROLE_KINDS = Object.freeze(['boundary', 'gateway', 'registry', 'operator']);
 
@@ -205,6 +205,20 @@ CREATE TABLE IF NOT EXISTS bank.restore_marks (
   marked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   cleared_at TIMESTAMPTZ,
   cleared_by TEXT
+);
+-- Four eyes for a REVIEW (finding C-13): one operator requests the
+-- resolution, a different login confirms it. Kept after the resolution.
+CREATE TABLE IF NOT EXISTS bank.review_requests (
+  payment_id UUID PRIMARY KEY REFERENCES bank.executions (payment_id),
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+  note TEXT NOT NULL,
+  provider_reference TEXT,
+  requested_by TEXT NOT NULL,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  confirmed_by TEXT,
+  confirmation_note TEXT,
+  confirmed_at TIMESTAMPTZ,
+  CHECK (confirmed_by IS NULL OR confirmed_by <> requested_by)
 );
 CREATE TABLE IF NOT EXISTS bank.execution_transitions (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -965,21 +979,43 @@ END $$;
 
 -- ===== operator =====
 
--- A person settled a REVIEW with the provider. Who: the database login, not an argument.
-CREATE OR REPLACE FUNCTION bank.resolve_review(p_payment UUID, p_outcome TEXT, p_note TEXT, p_provider_reference TEXT DEFAULT NULL) RETURNS BOOLEAN
+-- A person settled a REVIEW with the provider, confirmed by a second person
+-- (finding C-13). Who: the database login, not an argument. The first call
+-- records the request ('REQUESTED'); a call by another login with the same
+-- outcome resolves it ('RESOLVED'). The requester may replace their request
+-- with another outcome but cannot confirm it. 'NOT_IN_REVIEW' otherwise.
+DROP FUNCTION IF EXISTS bank.resolve_review(uuid, text, text, text);
+CREATE FUNCTION bank.resolve_review(p_payment UUID, p_outcome TEXT, p_note TEXT, p_provider_reference TEXT DEFAULT NULL) RETURNS TEXT
 LANGUAGE plpgsql ${DEFINER} AS $$
-DECLARE target TEXT; n INTEGER;
+DECLARE target TEXT; req bank.review_requests%ROWTYPE;
 BEGIN
   IF coalesce(btrim(p_note), '') = '' THEN RAISE EXCEPTION 'a resolution needs a note' USING ERRCODE = 'invalid_parameter_value'; END IF;
   target := CASE p_outcome WHEN 'succeeded' THEN 'EXECUTED' WHEN 'failed' THEN 'PROVIDER_FAILED' END;
   IF target IS NULL THEN RAISE EXCEPTION 'a review is resolved as succeeded or failed' USING ERRCODE = 'invalid_parameter_value'; END IF;
+  PERFORM 1 FROM bank.executions e WHERE e.payment_id = p_payment AND e.state = 'REVIEW' FOR UPDATE;
+  IF NOT FOUND THEN RETURN 'NOT_IN_REVIEW'; END IF;
+  SELECT * INTO req FROM bank.review_requests r WHERE r.payment_id = p_payment;
+  IF NOT FOUND OR (req.requested_by = session_user AND req.outcome <> p_outcome) THEN
+    INSERT INTO bank.review_requests (payment_id, outcome, note, provider_reference, requested_by)
+    VALUES (p_payment, p_outcome, p_note, p_provider_reference, session_user)
+    ON CONFLICT (payment_id) DO UPDATE SET outcome = EXCLUDED.outcome, note = EXCLUDED.note,
+      provider_reference = EXCLUDED.provider_reference, requested_at = now();
+    RETURN 'REQUESTED';
+  END IF;
+  IF req.requested_by = session_user THEN
+    RAISE EXCEPTION 'another operator must confirm this resolution' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  IF req.outcome <> p_outcome THEN
+    RAISE EXCEPTION 'the outcome differs from the one % requested', req.requested_by USING ERRCODE = 'invalid_parameter_value';
+  END IF;
   PERFORM bank.via('resolve_review');
-  UPDATE bank.executions e SET state = target, resolved_by = session_user, provider_reference = coalesce(p_provider_reference, e.provider_reference),
-         problems = coalesce(e.problems, '[]'::jsonb) || jsonb_build_array(p_note), updated_at = now()
+  UPDATE bank.executions e SET state = target, resolved_by = session_user,
+         provider_reference = coalesce(p_provider_reference, req.provider_reference, e.provider_reference),
+         problems = coalesce(e.problems, '[]'::jsonb) || jsonb_build_array(req.note, p_note), updated_at = now()
    WHERE e.payment_id = p_payment AND e.state = 'REVIEW';
-  GET DIAGNOSTICS n = ROW_COUNT;
   PERFORM bank.via('');
-  RETURN n = 1;
+  UPDATE bank.review_requests SET confirmed_by = session_user, confirmation_note = p_note, confirmed_at = now() WHERE payment_id = p_payment;
+  RETURN 'RESOLVED';
 END $$;
 `;
 

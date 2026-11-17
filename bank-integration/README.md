@@ -23,7 +23,7 @@ The bank's database is in its own schema `bank`. **No application role has `INSE
 | Execution boundary (`executionBoundary.mjs`, `trustStore.mjs`) | the bank's backend, database role *boundary* | read payments, executions, the log, statements, heads, findings; call `create_payment`, `attach_authorization`, `claim`, `approve`, `refuse`, `hold`, `mark_unknown`, `mark_review`, `keep_head`, `add_finding` | write any table; approve without `bank.approve` and its checks; choose the credential or the order hash of an approval; submit; record a provider's answer; change the registry; resolve a review |
 | Payment gateway (`paymentGateway.mjs`) | its own process, database role *gateway*, HTTPS with mutual TLS | call `submit_basis`, `submit`, `resubmit`, `gateway_refuse`, `report`, `operation_for_lookup`; check the approval again (pinned evidence keys, bank trust keys, stored evidence, registry as at the approval); send the **stored** order; record the provider's answers | read any table; send an order nobody approved, for another attempt, twice, with other terms or on forged evidence; change the registry or trust |
 | Registry service (`registry.mjs`, `createRegistry`) | database role *registry* | verify the bank's signature on a statement, then call `approve_credential`, `revoke_credential` | touch payments or executions; read tables |
-| Operator tools (`createOperatorTools`) | database role *operator*, one login per person | read payments, executions, the log, findings; call `resolve_review` | anything else; name someone else as the resolver |
+| Operator tools (`createOperatorTools`) | database role *operator* (a group role), one login per person as its member | read payments, executions, the log, findings, review requests; call `resolve_review` | anything else; name someone else as the resolver; settle a review alone (a second login must confirm) |
 | Schema owner (`schema.mjs`, `installSchema`) | migrations only | owns the schema, the tables, the triggers and the functions | not used by any running service; see the residual risk below |
 | Auth Core | outside the bank | answers about authorizations and evidence; sends webhooks | everything above: it holds no bank database credentials and no client certificate for the gateway |
 
@@ -54,7 +54,7 @@ import { installSchema, DATABASE_HARDENING, privilegeMatrix, intendedPrivileges,
 // database administrator, once: no temporary objects, nothing in public
 await adminClient.query(DATABASE_HARDENING('bankdb'));
 // migration, as the schema owner (not a superuser); revokes everything first, then grants each role its part
-await installSchema(ownerPool, { boundary: 'bank_boundary', gateway: 'bank_gateway', registry: 'bank_registry', operator: 'bank_ops_anna' },
+await installSchema(ownerPool, { boundary: 'bank_boundary', gateway: 'bank_gateway', registry: 'bank_registry', operator: 'bank_ops' },
   { bankTrustKeys: [bankStatementKeyPem], executionWindowSeconds: 3600 });   // keys from the key ceremony
 // after restoring the database from a backup, before any service starts, as the owner:
 await ownerPool.query('SELECT bank.after_restore()');
@@ -81,8 +81,11 @@ await boundary.execute(paymentId);   // EXECUTED | PROVIDER_FAILED | PENDING_PRO
 await boundary.reconcileDue();       // job: every open or stopped payment
 await boundary.audit(paymentId);     // compares a final state with the provider; a disagreement is a finding
 
-// operator tools, with the operator's own login
-await createOperatorTools(operatorPool).resolveReview(paymentId, 'succeeded' | 'failed', note);
+// operator tools, each person with their own login (members of bank_ops):
+// four eyes (finding C-13). The first call records the request, a second
+// person with the same outcome resolves it and Auth Core is told the result.
+await createOperatorTools(annaPool).resolveReview(paymentId, 'failed', note);              // 'REQUESTED'
+await createOperatorTools(piotrPool, { authCore }).resolveReview(paymentId, 'failed', note); // 'RESOLVED'
 ```
 
 ## Provider contract the gateway expects
