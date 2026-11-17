@@ -41,6 +41,7 @@ Run migrations as the table owner. After `scripts/db/roles.sql` has been applied
 | `029_customer_conversations.sql` | Tables `conversations` (state machine `WITH_BOT` → `WAITING_FOR_AGENT` → `WITH_AGENT` → `CLOSED`, owner immutable) and `conversation_messages` (append-only, hash-chained per conversation; only the delivery and read marks are set, once) |
 | `030_customer_calls.sql` | `bank_clients.customer_call_channels` (the channels the bank staffs, default none) and table `customer_calls` (state machine `WAITING` → `CONNECTED` → `ENDED`, or `WAITING` → `CANCELLED` / `MISSED`; one open call per NEXUS ID; caller, device and channel immutable; rows never deleted) |
 | `031_device_nonce_delete_guard.sql` | Trigger `device_request_nonces_expired_only`: a device request nonce is deleted only after it expires, for every role (finding C-11; the application role keeps `DELETE` for the expiry sweep) |
+| `032_audit_field_immutability.sql` | Triggers `authorization_audit_fields` (`consumed_at` set once on verification; `bank_commit_at`/`bank_commit_error` set once with the final bank transaction state) and `audit_logs_server_time` (audit rows carry the database's time, except for the table owner) (finding C-07) |
 
 ## Notes on 009
 
