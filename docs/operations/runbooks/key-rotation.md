@@ -155,7 +155,7 @@ The same procedure for each of the three keys; `<NAME>` is the key being rotated
 4. Re-encrypt: `node dist/cli/rotateSecretKeys.js <webhook|device|admin|all>`. The tool first checks that every stored value decrypts with the configured keys and stops without writing anything if one does not. Then it re-encrypts in batches of 200, checks each new value decrypts to the same secret, writes it only if the row was not changed meanwhile, and records `master_key_rotated` in the audit log with the counts and key IDs. It can be run again; a second run reports 0 to re-encrypt.
 5. Deploy without `<NAME>_PREVIOUS`. Destroy the old key according to the bank's key management policy.
 
-For `DEVICE_SECRET_ENCRYPTION_KEY` the credential trigger normally forbids any change of `offline_secret_encrypted`. Migration 020 lets the tool replace the ciphertext within its own transaction (`nexus.secret_rewrap`); presence of the offline key and every other credential field stay immutable.
+For `DEVICE_SECRET_ENCRYPTION_KEY` the credential trigger normally forbids any change of `offline_secret_encrypted`. Migration 020 lets the tool replace the ciphertext within its own transaction (`nexus.secret_rewrap`); presence of the offline key and every other credential field stay immutable. Since migration 033 that setting is honoured only for a session that is not `nexus_app`, or that also holds `nexus_secret_rotator`: run the tool as a named operator login (`GRANT nexus_app, nexus_secret_rotator TO <operator>`), not with the service's own `DATABASE_URL` user, and revoke the grant afterwards.
 
 ### Master key compromise
 

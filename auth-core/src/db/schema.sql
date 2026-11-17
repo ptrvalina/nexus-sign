@@ -3,7 +3,7 @@
 -- to apply again. Existing databases are upgraded with migrations/.
 -- Install and upgrade with `npm run migrate` (src/cli/migrate.ts), which keeps
 -- the migration ledger. This file contains every migration up to:
--- schema-version: 032
+-- schema-version: 033
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -519,9 +519,18 @@ CREATE TRIGGER authorization_lifecycle BEFORE UPDATE ON authorization_requests
 -- cli/rotateSecretKeys.js): the ciphertext of the offline key may change, its
 -- presence may not. The tool sets nexus.secret_rewrap for its own transaction
 -- and checks that the new ciphertext decrypts to the same key.
-CREATE OR REPLACE FUNCTION secret_rewrap_allowed() RETURNS boolean AS $$
-  SELECT coalesce(current_setting('nexus.secret_rewrap', true), '') = 'on';
-$$ LANGUAGE sql STABLE;
+-- Allowed only to a session that is not the application role, or that also
+-- holds nexus_secret_rotator (migration 033, findings B-09, C-08).
+CREATE OR REPLACE FUNCTION secret_rewrap_allowed() RETURNS boolean
+LANGUAGE plpgsql STABLE SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  IF coalesce(current_setting('nexus.secret_rewrap', true), '') <> 'on' THEN RETURN false; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_app') THEN RETURN true; END IF;
+  IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN RETURN true; END IF;
+  IF NOT pg_has_role(current_user, 'nexus_app', 'MEMBER') THEN RETURN true; END IF;
+  RETURN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_secret_rotator')
+     AND pg_has_role(current_user, 'nexus_secret_rotator', 'MEMBER');
+END $$;
 
 -- Credential lifecycle: ACTIVE -> REVOKED (final). The keys of a credential never change, and its sealed enrolment
 -- record is attached once.

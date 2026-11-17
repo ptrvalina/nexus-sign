@@ -16,6 +16,10 @@
 --                        no TRUNCATE anywhere.
 --   nexus_audit_reader   read-only access to evidence and audit records, for
 --                        export and archival.
+--   nexus_secret_rotator no privileges of its own: a login that holds it next to
+--                        nexus_app may re-encrypt stored secrets with
+--                        rotateSecretKeys.js (migration 033); nexus_app alone
+--                        may not.
 --
 -- Passwords are not set here: create the login with the provider's tooling or
 --   ALTER ROLE nexus_app WITH LOGIN PASSWORD '<from the secrets manager>';
@@ -28,6 +32,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_owner') THEN CREATE ROLE nexus_owner NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_app') THEN CREATE ROLE nexus_app NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_audit_reader') THEN CREATE ROLE nexus_audit_reader NOLOGIN; END IF;
+  -- Membership lets a session of the application role re-encrypt stored
+  -- secrets (rotateSecretKeys.js); grant it to the operator who runs the tool.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_secret_rotator') THEN CREATE ROLE nexus_secret_rotator NOLOGIN; END IF;
 END $$;
 
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
