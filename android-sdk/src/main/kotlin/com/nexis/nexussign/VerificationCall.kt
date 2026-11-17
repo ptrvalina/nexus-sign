@@ -467,14 +467,12 @@ class VerificationCallController(
  * needs (finding D-14).
  */
 internal fun hasDtlsFingerprint(sdp: String): Boolean {
+    // The line the call code is computed from (CallCode.fingerprint).
     val lengths = mapOf("sha-256" to 32, "sha-384" to 48, "sha-512" to 64)
-    return sdp.split('\n', '\r').map { it.trim() }.any { line ->
-        if (!line.startsWith("a=fingerprint:", ignoreCase = true)) return@any false
-        val parts = line.substring("a=fingerprint:".length).trim().split(' ').filter { it.isNotEmpty() }
-        val expected = parts.takeIf { it.size == 2 }?.let { lengths[it[0].lowercase()] } ?: return@any false
-        val bytes = parts[1].split(':')
-        bytes.size == expected && bytes.all { b -> b.length == 2 && b.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' } }
-    }
+    val parts = CallCode.fingerprint(sdp)?.split(' ') ?: return false
+    val expected = lengths[parts[0]] ?: return false
+    val bytes = parts[1].split(':')
+    return bytes.size == expected && bytes.all { it.length == 2 }
 }
 
 /**

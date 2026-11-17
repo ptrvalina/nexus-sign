@@ -147,9 +147,6 @@ export function masterKeyMaterial(purpose: MasterKeyPurpose): MasterKeyMaterial 
   return envMaterial(purpose);
 }
 
-/** For tests and for tools that load keys in-process. */
-export function setMasterKeysForTests(material: Map<MasterKeyPurpose, MasterKeyMaterial> | null): void { loaded = material; }
-
 // --- PKCS#11 key-encryption key ----------------------------------------
 
 /**

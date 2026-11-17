@@ -490,17 +490,14 @@ public actor VerificationCallController {
     /// True when the SDP carries an `a=fingerprint` line with a SHA-256,
     /// SHA-384 or SHA-512 certificate hash of the right length (RFC 8122),
     /// which DTLS-SRTP needs.
+    /// Uses the line the call code is computed from (`CallCode.fingerprint`).
     static func hasDtlsFingerprint(_ sdp: String) -> Bool {
         let lengths = ["sha-256": 32, "sha-384": 48, "sha-512": 64]
-        for rawLine in sdp.split(whereSeparator: { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.lowercased().hasPrefix("a=fingerprint:") else { continue }
-            let parts = line.dropFirst("a=fingerprint:".count).split(separator: " ", omittingEmptySubsequences: true)
-            guard parts.count == 2, let expected = lengths[parts[0].lowercased()] else { continue }
-            let bytes = parts[1].split(separator: ":", omittingEmptySubsequences: false)
-            if bytes.count == expected && bytes.allSatisfy({ $0.count == 2 && $0.allSatisfy(\.isHexDigit) }) { return true }
-        }
-        return false
+        guard let value = CallCode.fingerprint(sdp) else { return false }
+        let parts = value.split(separator: " ")
+        guard parts.count == 2, let expected = lengths[String(parts[0])] else { return false }
+        let bytes = parts[1].split(separator: ":", omittingEmptySubsequences: false)
+        return bytes.count == expected && bytes.allSatisfy { $0.count == 2 }
     }
 
     static func closedOrFailed(_ error: Error) -> CallEndReason {
