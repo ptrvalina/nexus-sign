@@ -20,7 +20,16 @@ export interface RegisterClientInput {
   /** SHA-256 fingerprints (hex) of the bank's client certificates; omitted
    * keeps the registered ones when credentials are rotated. */
   mtlsCertSha256?: string[];
+  /** When the client already has a webhook secret and a new one is given,
+   * the previous secret still signs deliveries for this many seconds
+   * (finding A2-08); 0 ends it at once. */
+  webhookSecretOverlapSeconds?: number;
 }
+
+/** Default overlap of the previous webhook secret after a rotation. */
+export const DEFAULT_WEBHOOK_SECRET_OVERLAP_SECONDS = 86_400;
+/** Longest overlap accepted (7 days). */
+export const MAX_WEBHOOK_SECRET_OVERLAP_SECONDS = 604_800;
 
 export type PushMode = 'BANK' | 'NEXUS';
 
@@ -32,18 +41,28 @@ export type PushMode = 'BANK' | 'NEXUS';
 export async function registerBankClient(input: RegisterClientInput): Promise<void> {
   const clientSecretHash = await hashPassword(input.clientSecret, 'secret');
   const webhookSecretEncrypted = input.webhookSecret ? encryptSecret(input.webhookSecret, 'webhook', input.clientId) : null;
+  const overlap = input.webhookSecretOverlapSeconds ?? DEFAULT_WEBHOOK_SECRET_OVERLAP_SECONDS;
+  if (!Number.isInteger(overlap) || overlap < 0 || overlap > MAX_WEBHOOK_SECRET_OVERLAP_SECONDS) {
+    throw new Error(`webhookSecretOverlapSeconds must be an integer from 0 to ${MAX_WEBHOOK_SECRET_OVERLAP_SECONDS}`);
+  }
 
+  // On a rotation the secret being replaced becomes the previous one for the
+  // overlap (finding A2-08); a secret older than that is dropped.
   await pool.query(
     `INSERT INTO bank_clients (client_id, client_secret_hash, webhook_url, webhook_secret_encrypted, push_mode, mtls_cert_sha256)
      VALUES ($1, $2, $3, $4, $5, COALESCE($6::text[], '{}'))
      ON CONFLICT (client_id) DO UPDATE
        SET client_secret_hash = EXCLUDED.client_secret_hash,
            webhook_url = EXCLUDED.webhook_url,
+           webhook_secret_previous_encrypted = CASE WHEN $7::integer > 0 AND bank_clients.webhook_secret_encrypted IS NOT NULL
+             AND EXCLUDED.webhook_secret_encrypted IS NOT NULL THEN bank_clients.webhook_secret_encrypted END,
+           webhook_secret_previous_until = CASE WHEN $7::integer > 0 AND bank_clients.webhook_secret_encrypted IS NOT NULL
+             AND EXCLUDED.webhook_secret_encrypted IS NOT NULL THEN now() + make_interval(secs => $7::integer) END,
            webhook_secret_encrypted = EXCLUDED.webhook_secret_encrypted,
            push_mode = EXCLUDED.push_mode,
            mtls_cert_sha256 = COALESCE($6::text[], bank_clients.mtls_cert_sha256),
            updated_at = now()`,
-    [input.clientId, clientSecretHash, input.webhookUrl ?? null, webhookSecretEncrypted, input.pushMode ?? 'BANK', input.mtlsCertSha256 ?? null],
+    [input.clientId, clientSecretHash, input.webhookUrl ?? null, webhookSecretEncrypted, input.pushMode ?? 'BANK', input.mtlsCertSha256 ?? null, overlap],
   );
 }
 
@@ -69,20 +88,28 @@ export async function verifyClientCredentials(clientId: string, clientSecret: st
 export interface WebhookDestination {
   webhookUrl: string;
   webhookSecret: string;
+  /** The secret before the last rotation, while its overlap lasts (A2-08). */
+  previousWebhookSecret?: string;
 }
 
 /** Returns the bank's webhook URL and the decrypted signing secret, or `null`
  * if the client has no webhook configured (a valid state, not an error). */
 export async function getWebhookDestination(clientId: string): Promise<WebhookDestination | null> {
-  const result = await pool.query<{ webhook_url: string | null; webhook_secret_encrypted: string | null }>(
-    `SELECT webhook_url, webhook_secret_encrypted FROM bank_clients WHERE client_id = $1 AND status = 'ACTIVE'`,
+  const result = await pool.query<{ webhook_url: string | null; webhook_secret_encrypted: string | null; previous: string | null }>(
+    `SELECT webhook_url, webhook_secret_encrypted,
+            CASE WHEN webhook_secret_previous_until > now() THEN webhook_secret_previous_encrypted END AS previous
+       FROM bank_clients WHERE client_id = $1 AND status = 'ACTIVE'`,
     [clientId],
   );
   const row = result.rows[0];
   if (!row || !row.webhook_url || !row.webhook_secret_encrypted) {
     return null;
   }
-  return { webhookUrl: row.webhook_url, webhookSecret: decryptSecret(row.webhook_secret_encrypted, 'webhook', clientId) };
+  return {
+    webhookUrl: row.webhook_url,
+    webhookSecret: decryptSecret(row.webhook_secret_encrypted, 'webhook', clientId),
+    ...(row.previous ? { previousWebhookSecret: decryptSecret(row.previous, 'webhook', clientId) } : {}),
+  };
 }
 
 /** True when the client has a webhook configured. Does not decrypt the

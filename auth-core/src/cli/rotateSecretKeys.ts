@@ -29,6 +29,7 @@ interface Column { purpose: SecretPurpose; table: string; key: string; column: s
 
 const COLUMNS: Column[] = [
   { purpose: 'webhook', table: 'bank_clients', key: 'client_id', column: 'webhook_secret_encrypted', owner: (r) => r.client_id },
+  { purpose: 'webhook', table: 'bank_clients', key: 'client_id', column: 'webhook_secret_previous_encrypted', owner: (r) => r.client_id },
   { purpose: 'device', table: 'credentials', key: 'credential_id', column: 'offline_secret_encrypted', owner: (r) => r.credential_id },
   { purpose: 'device', table: 'push_registrations', key: 'credential_id', column: 'push_key_encrypted', owner: (r) => `push:${r.credential_id}` },
   { purpose: 'admin', table: 'admin_users', key: 'username', column: 'totp_secret_encrypted', owner: (r) => r.username },

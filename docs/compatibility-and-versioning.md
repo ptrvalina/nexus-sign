@@ -12,7 +12,7 @@
 | Recovery protocol | `protocol: 2`; `NEXUS-SIGN/RECOVERY-WRAP/v2` (HKDF salt), `NEXUS-SIGN/RECOVERY-KEY/v2` (associated data), `NEXUS-SIGN/RECOVERY-SETUP/v2`, `NEXUS-SIGN/RECOVERY-PROOF/v2` (signing inputs) | [recovery protocol 2](protocol/recovery-protocol-v2.md), `auth-core/test-vectors/recovery-v2.json` |
 | Android key attestation challenge | `NEXUS-SIGN/KEY-ATTESTATION/v1` | [attestation](security/attestation.md#android-key-attestation), `key_attestation` in `auth-core/test-vectors/device-protocols-v1.json` |
 | Secure push | `NEXUS-SIGN/PUSH/v1`, `NEXUS-SIGN/PUSH-RECEIPT/v1`, envelope `v: 1` | [secure push](protocol/secure-push.md), `auth-core/test-vectors/secure-push-v1.json` |
-| Webhook signature | `v1=` prefix of `X-NEXUS-SIGN-Signature` | [bank backend guide](integration/bank-backend-guide.md#webhooks) |
+| Webhook signature | `v1=` prefix of each comma-separated entry of `X-NEXUS-SIGN-Signature` (two entries during a secret rotation overlap) | [bank backend guide](integration/bank-backend-guide.md#webhooks) |
 | Database schema | Numbered migrations (`002` to `022`) | `auth-core/migrations/`, `auth-core/src/db/schema.sql` |
 
 Auth Core, the iOS SDK, the Android SDK and the sandbox are released together under the repository version. The Swift package and the Android library declare no version of their own; a host app takes both SDKs from the same repository release.

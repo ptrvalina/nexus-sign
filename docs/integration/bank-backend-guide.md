@@ -297,11 +297,11 @@ Headers:
 |---|---|
 | `X-NEXUS-SIGN-Event-Id` | Event ID, equal to `eventId` in the body |
 | `X-NEXUS-SIGN-Timestamp` | Unix time in seconds of this delivery attempt |
-| `X-NEXUS-SIGN-Signature` | `v1=` followed by the hex HMAC-SHA256 of `<timestamp>.<raw body>` with the webhook secret as key |
+| `X-NEXUS-SIGN-Signature` | `v1=` followed by the hex HMAC-SHA256 of `<timestamp>.<raw body>` with the webhook secret as key. After a rotation of the webhook secret, for the overlap (default 24 hours), two comma-separated entries: the previous secret's first, then the new one's |
 
-Events are written in the same database transaction as the state change. A 2xx answer within 10 seconds counts as delivered. Otherwise Auth Core retries after 1 s, 5 s, 30 s, 5 min and 30 min, then marks the delivery `FAILED`. Redirects are not followed. The receiver deduplicates on `eventId`, because a delivery can arrive more than once.
+Events are written in the same database transaction as the state change. A 2xx answer within 10 seconds counts as delivered. Otherwise Auth Core retries after 1 s, 5 s, 30 s, 5 min and 30 min, then marks the delivery `FAILED`; an operator of the bank can send a `FAILED` delivery again from the console (`POST /admin/api/webhook-deliveries/{id}/redeliver`, same `eventId`). Redirects are not followed. The receiver deduplicates on `eventId`, because a delivery can arrive more than once.
 
-The receiver verifies the signature over the exact bytes received, compares in constant time and rejects timestamps outside a window set by the bank. The secret is the `webhook_secret` string printed by `register-client`, used as printed (UTF-8), not base64-decoded.
+The receiver verifies the signature over the exact bytes received, compares in constant time and rejects timestamps outside a window set by the bank. It accepts the request when **any** `v1=` entry matches, so that it keeps working with either secret during a rotation (finding A2-08). The secret is the `webhook_secret` string printed by `register-client`, used as printed (UTF-8), not base64-decoded.
 
 ```js
 const crypto = require('node:crypto');
@@ -312,13 +312,17 @@ const TOLERANCE_SECONDS = 300; // set by the bank
 
 function verifyNexusSignWebhook(rawBody, timestamp, signatureHeader) {
   if (!/^\d{1,12}$/.test(timestamp ?? '')) return false;
-  if (typeof signatureHeader !== 'string' || !signatureHeader.startsWith('v1=')) return false;
+  if (typeof signatureHeader !== 'string') return false;
   if (Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > TOLERANCE_SECONDS) return false;
   const expected = crypto.createHmac('sha256', WEBHOOK_SECRET)
     .update(Buffer.concat([Buffer.from(`${timestamp}.`, 'utf8'), rawBody]))
     .digest();
-  const given = Buffer.from(signatureHeader.slice(3), 'hex');
-  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  // One entry, or two during a rotation of the webhook secret: accept any match.
+  return signatureHeader.split(',').slice(0, 4).some((entry) => {
+    const value = entry.trim();
+    if (!/^v1=[0-9a-f]{64}$/.test(value)) return false;
+    return crypto.timingSafeEqual(Buffer.from(value.slice(3), 'hex'), expected);
+  });
 }
 
 const app = express();

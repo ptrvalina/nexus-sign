@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { registerBankClient, type PushMode } from '../services/clientService';
+import { DEFAULT_WEBHOOK_SECRET_OVERLAP_SECONDS, MAX_WEBHOOK_SECRET_OVERLAP_SECONDS, registerBankClient, type PushMode } from '../services/clientService';
 import { pool } from '../db/pool';
 import { redis } from '../db/redis';
 import { revokeClientTokens } from '../services/tokenService';
@@ -12,7 +12,7 @@ import { loadMasterKeys } from '../crypto/masterKeyVault';
  * use the API to onboard another; run it where an operator has database access.
  *
  * Usage (from the built image or a build):
- *   node dist/cli/registerClient.js <clientId> [webhookUrl] [--push-mode=BANK|NEXUS] [--mtls-cert-sha256=<hex>[,<hex>]]
+ *   node dist/cli/registerClient.js <clientId> [webhookUrl] [--push-mode=BANK|NEXUS] [--mtls-cert-sha256=<hex>[,<hex>]] [--webhook-overlap-hours=<0-168>]
  *
  * --push-mode=NEXUS lets Auth Core deliver authorization requests and the
  * bank's messages through secure push (the bank has no push system of its
@@ -23,6 +23,11 @@ import { loadMasterKeys } from '../crypto/masterKeyVault';
  * certificates (several during a certificate rollover). With
  * REQUIRE_MTLS_HEADER (production) tokens are issued and accepted only over a
  * gateway connection with one of them. Omitted, the registered list is kept.
+ *
+ * --webhook-overlap-hours: when the client already had a webhook secret, the
+ * previous secret keeps signing deliveries (a second `v1=` entry) for this
+ * many hours, default 24, so the bank can switch its verifier meanwhile
+ * (finding A2-08). 0 ends the previous secret at once.
  *
  * Prints the generated client_secret (and the webhook signing secret, if a
  * webhook URL is given) once; neither is shown again. If a secret is lost,
@@ -37,9 +42,12 @@ async function main(): Promise<void> {
   const pushMode = (modeOption?.slice('--push-mode='.length) ?? 'BANK') as PushMode;
   const certOption = options.find((arg) => arg.startsWith('--mtls-cert-sha256='));
   const certificates = certOption?.slice('--mtls-cert-sha256='.length).split(',').map((v) => normalizeFingerprint(v));
-  const unknown = options.filter((arg) => arg !== modeOption && arg !== certOption);
-  if (!clientId || unknown.length > 0 || !['BANK', 'NEXUS'].includes(pushMode) || certificates?.some((c) => c === null)) {
-    console.error('Usage: registerClient.js <clientId> [webhookUrl] [--push-mode=BANK|NEXUS] [--mtls-cert-sha256=<64 hex>[,<64 hex>]]');
+  const overlapOption = options.find((arg) => arg.startsWith('--webhook-overlap-hours='));
+  const overlapHours = overlapOption ? Number(overlapOption.slice('--webhook-overlap-hours='.length)) : DEFAULT_WEBHOOK_SECRET_OVERLAP_SECONDS / 3600;
+  const unknown = options.filter((arg) => arg !== modeOption && arg !== certOption && arg !== overlapOption);
+  if (!clientId || unknown.length > 0 || !['BANK', 'NEXUS'].includes(pushMode) || certificates?.some((c) => c === null)
+      || !Number.isInteger(overlapHours) || overlapHours < 0 || overlapHours * 3600 > MAX_WEBHOOK_SECRET_OVERLAP_SECONDS) {
+    console.error('Usage: registerClient.js <clientId> [webhookUrl] [--push-mode=BANK|NEXUS] [--mtls-cert-sha256=<64 hex>[,<64 hex>]] [--webhook-overlap-hours=<0-168>]');
     process.exitCode = 1;
     return;
   }
@@ -47,7 +55,8 @@ async function main(): Promise<void> {
   const clientSecret = randomBytes(32).toString('base64url');
   const webhookSecret = webhookUrl ? randomBytes(32).toString('base64url') : undefined;
 
-  await registerBankClient({ clientId, clientSecret, webhookUrl, webhookSecret, pushMode, mtlsCertSha256: certificates as string[] | undefined });
+  await registerBankClient({ clientId, clientSecret, webhookUrl, webhookSecret, pushMode, mtlsCertSha256: certificates as string[] | undefined,
+    webhookSecretOverlapSeconds: overlapHours * 3600 });
   // Rotating the secret also ends every session issued under the old one.
   const revoked = await revokeClientTokens(clientId);
 
@@ -58,6 +67,7 @@ async function main(): Promise<void> {
   if (webhookSecret) {
     console.log(`  webhook_secret: ${webhookSecret}`);
     console.log(`  (used by the bank to verify the X-NEXUS-SIGN-Signature header on incoming webhooks)`);
+    if (overlapHours > 0) console.log(`  (if a webhook secret existed, it also signs deliveries for ${overlapHours} h: switch the bank's verifier before then)`);
   }
   console.log('');
   console.log('Save these now — this is the only time they are printed.');

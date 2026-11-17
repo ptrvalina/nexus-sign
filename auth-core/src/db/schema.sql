@@ -3,7 +3,7 @@
 -- to apply again. Existing databases are upgraded with migrations/.
 -- Install and upgrade with `npm run migrate` (src/cli/migrate.ts), which keeps
 -- the migration ledger. This file contains every migration up to:
--- schema-version: 033
+-- schema-version: 034
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -1333,3 +1333,13 @@ END $$;
 DROP TRIGGER IF EXISTS audit_logs_server_time ON audit_logs;
 CREATE TRIGGER audit_logs_server_time BEFORE INSERT ON audit_logs
   FOR EACH ROW EXECUTE FUNCTION audit_logs_server_time();
+
+-- Webhook secret rotation with an overlap (audit finding A2-08). When a
+-- bank's webhook secret is rotated, the previous one stays until
+-- webhook_secret_previous_until, and every delivery carries a signature with
+-- each secret, so the bank can switch its verifier at any time in between.
+ALTER TABLE bank_clients ADD COLUMN IF NOT EXISTS webhook_secret_previous_encrypted TEXT;
+ALTER TABLE bank_clients ADD COLUMN IF NOT EXISTS webhook_secret_previous_until TIMESTAMPTZ;
+ALTER TABLE bank_clients DROP CONSTRAINT IF EXISTS bank_clients_webhook_previous_check;
+ALTER TABLE bank_clients ADD CONSTRAINT bank_clients_webhook_previous_check
+  CHECK ((webhook_secret_previous_encrypted IS NULL) = (webhook_secret_previous_until IS NULL));

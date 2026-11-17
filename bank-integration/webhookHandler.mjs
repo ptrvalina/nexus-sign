@@ -7,13 +7,32 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 const TRIGGERS = new Set(['authorization.verified', 'authorization.bank_transaction.commit_requested']);
 
+/**
+ * True when one `v1=` entry of the signature header is the HMAC of
+ * `<timestamp>.<raw body>` under one of `secrets`. After a rotation of the
+ * webhook secret Auth Core sends one entry per secret, the previous first
+ * (finding A2-08), so a receiver holding either secret accepts the request.
+ */
+export function webhookSignatureMatches(header, timestamp, rawBody, secrets) {
+  const entries = String(header ?? '').split(',').map((e) => e.trim()).filter((e) => e.startsWith('v1=')).slice(0, 4);
+  let ok = false;
+  for (const secret of secrets) {
+    const expected = Buffer.from(`v1=${createHmac('sha256', secret).update(`${timestamp}.${rawBody}`, 'utf8').digest('hex')}`);
+    for (const entry of entries) {
+      const given = Buffer.from(entry);
+      if (given.length === expected.length && timingSafeEqual(given, expected)) ok = true;
+    }
+  }
+  return ok;
+}
+
+/** `secret` is the webhook secret, or a list of them while the bank switches to a new one. */
 export function createAuthCoreWebhookHandler({ secret, store, boundary, toleranceSeconds = 300, now = () => Date.now() }) {
+  const secrets = Array.isArray(secret) ? secret : [secret];
   return async function handle({ headers, rawBody }) {
     const h = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), String(v)]));
     const timestamp = h['x-nexus-sign-timestamp'];
-    const given = h['x-nexus-sign-signature'] ?? '';
-    const expected = `v1=${createHmac('sha256', secret).update(`${timestamp}.${rawBody}`, 'utf8').digest('hex')}`;
-    if (!timestamp || given.length !== expected.length || !timingSafeEqual(Buffer.from(given), Buffer.from(expected))) return { status: 401 };
+    if (!timestamp || !webhookSignatureMatches(h['x-nexus-sign-signature'], timestamp, rawBody, secrets)) return { status: 401 };
     if (Math.abs(now() / 1000 - Number(timestamp)) > toleranceSeconds) return { status: 401 };
     let event;
     try { event = JSON.parse(rawBody); } catch { return { status: 400 }; }

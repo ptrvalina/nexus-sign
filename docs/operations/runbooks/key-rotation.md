@@ -36,7 +36,7 @@ Every schema 3 record names the key that sealed it in `sealKeyId` (SHA-256 of th
 
 - `registerClient` generates a new client secret and revokes the client's access tokens at once. With a webhook URL it also generates a new webhook secret.
 - It sets the webhook URL and the push mode to the values given: omitting the URL removes the webhook, omitting `--push-mode` sets `BANK`. Registered certificate fingerprints are kept unless `--mtls-cert-sha256` is given.
-- Every delivery attempt after the change, including retries of events queued earlier, is signed with the new webhook secret.
+- Every delivery attempt after the change, including retries of events queued earlier, is signed with the new webhook secret. For 24 hours (`--webhook-overlap-hours`, 0 to 168) it is also signed with the previous secret: `X-NEXUS-SIGN-Signature` carries two `v1=` entries, the previous one first (finding A2-08). A receiver that checks every entry accepts the delivery with either secret, so the bank can deploy the new secret at any time in that window. `--webhook-overlap-hours=0` ends the previous secret at once (use it when the old secret may have leaked).
 
 ### WEBHOOK_SECRET_ENCRYPTION_KEY change
 
@@ -129,10 +129,10 @@ Follow the bank's key ceremony and [HSM and key management](../../security/hsm-k
 Run with the production configuration (`DATABASE_URL`, `REDIS_URL`, `WEBHOOK_SECRET_ENCRYPTION_KEY`), giving the client's current webhook URL and push mode:
 
 ```sh
-node dist/cli/registerClient.js <clientId> <webhookUrl> --push-mode=<BANK|NEXUS> [--mtls-cert-sha256=<hex>[,<hex>]]
+node dist/cli/registerClient.js <clientId> <webhookUrl> --push-mode=<BANK|NEXUS> [--mtls-cert-sha256=<hex>[,<hex>]] [--webhook-overlap-hours=<0-168>]
 ```
 
-(`npm run register-client -- ...` runs the same command.) The tool prints the new `client_secret` and `webhook_secret` once. The bank backend switches to both new secrets when the tool runs; a webhook receiver that accepts the old and the new secret for a short window does not reject deliveries made in between.
+(`npm run register-client -- ...` runs the same command.) The tool prints the new `client_secret` and `webhook_secret` once. The bank backend must switch to the new client secret at once (the old tokens are revoked). For the webhook secret it has the overlap (default 24 hours): until then deliveries carry a signature with the old and the new secret, and the bank's receiver accepts them with either.
 
 For a certificate rollover use `setClientCertificates`, which replaces only the fingerprints and leaves the secrets and access tokens alone:
 

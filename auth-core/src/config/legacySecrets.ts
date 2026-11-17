@@ -10,8 +10,10 @@ import type { Pool } from 'pg';
 export async function countUnboundWebhookSecrets(db: Pick<Pool, 'query'>): Promise<number> {
   const result = await db.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM bank_clients
-     WHERE webhook_secret_encrypted IS NOT NULL
-       AND webhook_secret_encrypted NOT LIKE 'k1$%' AND webhook_secret_encrypted NOT LIKE 'v2$%'`);
+     WHERE (webhook_secret_encrypted IS NOT NULL
+            AND webhook_secret_encrypted NOT LIKE 'k1$%' AND webhook_secret_encrypted NOT LIKE 'v2$%')
+        OR (webhook_secret_previous_encrypted IS NOT NULL
+            AND webhook_secret_previous_encrypted NOT LIKE 'k1$%' AND webhook_secret_previous_encrypted NOT LIKE 'v2$%')`);
   return result.rows[0]?.n ?? 0;
 }
 

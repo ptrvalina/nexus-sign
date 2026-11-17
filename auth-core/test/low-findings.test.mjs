@@ -105,3 +105,26 @@ test('pre-2.0 unbound webhook secrets stop a production start and warn elsewhere
   assert.equal(count, 3);
   assert.match(sql, /NOT LIKE 'k1\$%' AND webhook_secret_encrypted NOT LIKE 'v2\$%'/);
 });
+
+test('A webhook signed during a secret overlap verifies with either secret (finding A2-08)', async () => {
+  const { createHmac } = await import('node:crypto');
+  const { webhookSignatureHeader } = loadTs('services/webhookService.ts', { stubs: { '../db/pool': { pool: {} }, '../observability/metrics': { webhookDeliveryOutcomes: { inc() {} } } } });
+  const { webhookSignatureMatches, createAuthCoreWebhookHandler } = await import('../../bank-integration/webhookHandler.mjs');
+  const hmac = (secret, ts, body) => `v1=${createHmac('sha256', secret).update(`${ts}.${body}`, 'utf8').digest('hex')}`;
+  const ts = '1763300000'; const body = '{"eventType":"identity.created"}';
+  // Without a previous secret: one entry, as before.
+  assert.equal(webhookSignatureHeader(ts, body, 'new-secret'), hmac('new-secret', ts, body));
+  // During the overlap: the previous secret's entry first, then the new one.
+  const header = webhookSignatureHeader(ts, body, 'new-secret', 'old-secret');
+  assert.equal(header, `${hmac('old-secret', ts, body)},${hmac('new-secret', ts, body)}`);
+  assert.equal(webhookSignatureMatches(header, ts, body, ['old-secret']), true, 'a bank that has not switched yet');
+  assert.equal(webhookSignatureMatches(header, ts, body, ['new-secret']), true, 'a bank that has switched');
+  assert.equal(webhookSignatureMatches(header, ts, body, ['other']), false);
+  assert.equal(webhookSignatureMatches(header, ts, `${body} `, ['new-secret']), false, 'another body');
+  assert.equal(webhookSignatureMatches(`${hmac('other', ts, body)},v1=00`, ts, body, ['new-secret']), false);
+  // The reference handler accepts the overlap header with either secret, or both.
+  const handlerFor = (secret) => createAuthCoreWebhookHandler({ secret, store: { paymentForAuthorization: async () => null }, boundary: {}, now: () => Number(ts) * 1000 });
+  const request = { headers: { 'X-NEXUS-SIGN-Timestamp': ts, 'X-NEXUS-SIGN-Signature': header }, rawBody: body };
+  for (const secret of ['old-secret', 'new-secret', ['new-secret', 'old-secret']]) assert.equal((await handlerFor(secret)(request)).status, 204, String(secret));
+  assert.equal((await handlerFor('other')(request)).status, 401);
+});

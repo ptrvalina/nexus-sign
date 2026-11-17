@@ -8,4 +8,4 @@ export {
   DATABASE_HARDENING, EXECUTION_STATES, FINAL_STATES, FUNCTIONS, installSchema, intendedPrivileges, LEASE_LIMITS_MS, privilegeMatrix, READS, ROLE_KINDS, SCHEMA, TRANSITIONS,
 } from './schema.mjs';
 export { createAuthCoreClient, TrustUnavailableError, withTimeouts } from './authCoreClient.mjs';
-export { createAuthCoreWebhookHandler } from './webhookHandler.mjs';
+export { createAuthCoreWebhookHandler, webhookSignatureMatches } from './webhookHandler.mjs';
