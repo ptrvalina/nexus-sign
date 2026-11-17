@@ -38,6 +38,9 @@ BEGIN
 END $$;
 
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+-- No temporary objects for the application (finding C-15): nothing a session
+-- creates can shadow what the triggers use. Auth Core uses no temporary tables.
+DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database()); END $$;
 GRANT USAGE ON SCHEMA public TO nexus_app, nexus_audit_reader;
 GRANT CREATE ON SCHEMA public TO nexus_owner;
 

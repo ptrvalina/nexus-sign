@@ -76,7 +76,6 @@ export async function confirmAuthorizationOffline(
   return confirmAuthorization(hsmAdapter, id, clientId, { kind: 'OFFLINE_CODE', code }, auditContext);
 }
 
-/** QR content for offline confirmation of a pending authorization. */
 /**
  * Offline codes are symmetric, so their reach is capped per currency
  * by the deployment (OFFLINE_CONFIRMATION_MAX_AMOUNT). Returns why the
@@ -96,6 +95,7 @@ export function deferredSignatureMode(): boolean {
   return env.OFFLINE_CONFIRMATION_MODE === 'deferred_signature';
 }
 
+/** QR content for offline confirmation of a pending authorization (v1/v2, or v3 with a key per authorization). */
 export async function getOfflineChallenge(id: string, clientId: string): Promise<{ authorizationId: string; qrPayload: string; codeDigits: number; expiresAt: string }> {
   if (!env.OFFLINE_CONFIRMATION_ENABLED) throw new ConflictError('Offline confirmation is not enabled on this deployment');
   const auth = await getAuthorizationForClient(id, clientId);
@@ -343,7 +343,8 @@ interface VerifiedDetails {
 
 type Transition = { ok: true; evidence?: ChainPosition } | { ok: false; reason: string };
 
-async function transitionTerminal(id: string, clientId: string, state: 'VERIFIED' | 'EXPIRED' | 'REJECTED', auditContext: AuditContext, verified?: VerifiedDetails): Promise<Transition> {
+async function transitionTerminal(id: string, clientId: string, state: 'VERIFIED' | 'EXPIRED', auditContext: AuditContext, verified?: VerifiedDetails): Promise<Transition> {
+  if (state === 'VERIFIED' && !verified) throw new Error('A verification needs its details');
   return withTransaction(async (tx) => {
     // Lock order: verification plan, then authorization.
     const planGap = state === 'VERIFIED' ? await settlePlanForConfirmation(tx, id, clientId) : null;
@@ -353,18 +354,12 @@ async function transitionTerminal(id: string, clientId: string, state: 'VERIFIED
     // Only an open authorization moves on here; OFFLINE_PROVISIONAL is
     // finalized by the deferred signature alone.
     if (!auth || !OPEN_STATES.includes(auth.state)) return { ok: false, reason: 'Authorization was finalized concurrently' };
-    const context: AuditContext = { ...auditContext, nexusId: auth.nexus_id };
 
     if (state === 'EXPIRED') {
       await markExpired(tx, auth, auditContext);
       return { ok: true };
     }
-    if (state !== 'VERIFIED' || !verified) {
-      await tx.query(`UPDATE authorization_requests SET state = $2 WHERE authorization_id = $1`, [id, state]);
-      await recordAuditEvent('authorization_rejected', context, { authorizationId: id, reason: state }, tx);
-      await enqueueWebhook(clientId, 'authorization.rejected', { authorizationId: id, nexusId: auth.nexus_id, transactionReference: auth.transaction_reference, reason: state }, tx);
-      return { ok: true };
-    }
+    if (!verified) throw new Error('A verification needs its details');
     if (planGap) return { ok: false, reason: planGap };
     const gap = await recheckUnderLock(tx, auth, verified, auditContext);
     if (gap) return { ok: false, reason: gap };

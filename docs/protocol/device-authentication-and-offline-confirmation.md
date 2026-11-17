@@ -102,6 +102,36 @@ Because the code covers the hash of the exact bytes the phone displayed, a QR co
 
 An offline code proves that the enrolled device, after a biometric check, confirmed the transaction it displayed. Unlike a device signature, it is computed with a key that Auth Core also holds, so it is not independently verifiable by a third party. The evidence record says so (`confirmationMethod`, `signatureFormat: hmac`), and `scripts/verify-evidence.mjs` reports such records separately. Banks that need non-repudiation for a payment type should require online confirmation for it.
 
+### Offline v3: a key of Auth Core's per authorization (iOS)
+
+On iOS the Secure Enclave performs the ECDH but returns the shared secret `Z` to the app process. With one key agreed at enrolment, `Z` and `K` would be the same for every transaction, so code inside the app that captured them once could compute codes for any later QR code (finding D-01). Android is not affected: it imports `K` into the Keystore once and never sees it again.
+
+A device therefore declares at enrolment (`POST /v1/mobile/bootstrap`, recovery completion) how it agrees offline keys:
+
+| `offlineKeyAgreement` | At enrolment | For each confirmation | Used by |
+|---|---|---|---|
+| `STATIC` (default) | Auth Core agrees `K` as above and returns `offlineServerPublicKeyPem` | `K` | Android SDK |
+| `PER_AUTHORIZATION` | Nothing is agreed or stored; `offlineServerPublicKeyPem` is `null` | Auth Core's key for this authorization, in the QR code | iOS SDK |
+
+The value is stored with the credential and cannot be changed afterwards (migration 035).
+
+For a `PER_AUTHORIZATION` device, `GET /v1/authorizations/{id}/offline-challenge` creates, on its first call, a fresh P-256 key pair for that authorization. The private key is stored encrypted with `DEVICE_SECRET_ENCRYPTION_KEY` (bound to the authorization ID) in `offline_challenges`, written once; later calls return the same QR code:
+
+```text
+NXS3.<base64url of the canonical authorization bytes>.<base64url of the DER SubjectPublicKeyInfo of Auth Core's key>
+```
+
+The phone computes `Z` with its Secure Enclave offline key and that public key, inside the biometric prompt, and
+
+```text
+K   = HKDF-SHA256(IKM = Z, salt = "NEXUS-SIGN/OFFLINE/v3", info = credential ID || 0x00 || authorization ID, L = 32)
+tag = HMAC-SHA256(K, "NEXUS-SIGN/OFFLINE-CODE/v1" || 0x00 || SHA-256(canonical bytes))
+```
+
+and the code as in v1. Like `NXS2.`, an `NXS3.` confirmation also signs the bytes with the signing key and uploads the signature later ([offline confirmation v2](offline-confirmation-v2-deferred-signature.md)). Auth Core computes `Z` from the stored private key and the credential's offline public key. A code for an authorization whose QR code was never requested is refused.
+
+A secret captured in the app process now serves one authorization only, whose code the customer was confirming anyway. The iOS SDK refuses `NXS1.`/`NXS2.` QR codes for a `PER_AUTHORIZATION` enrolment, and an `NXS3.` QR code for an enrolment without it. Vectors: `offline_v3` in `device-protocols-v1.json`.
+
 ## Limits
 
 - Without network the phone cannot learn that its credential was revoked. Auth Core rejects codes for a revoked credential or a suspended NEXUS ID, so revocation still takes effect at the moment of confirmation.

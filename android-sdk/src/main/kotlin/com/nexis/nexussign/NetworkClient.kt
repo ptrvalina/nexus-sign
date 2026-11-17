@@ -60,7 +60,6 @@ internal class NetworkClient(private val config: NEXUSSignConfig) {
 
     private class Reply(val code: Int, val body: String)
 
-    /** Public keys of one enrolment, as PEM. */
     /** PEM public keys of a new key set, and the Keystore attestation chains
      * (base64 DER, leaf first) of the signing and authentication keys. */
     class EnrolmentKeys(

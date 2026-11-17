@@ -50,8 +50,12 @@ import kotlin.coroutines.resumeWithException
  *
  * Video codecs are limited to VP8 and VP9 (no H.264/H.265), see
  * docs/engineering/THIRD_PARTY_MEDIA.md.
+ *
+ * [relayOnly]: media only through Auth Core's TURN server (finding D-14); the
+ * customer's local and public addresses are not offered to the operator
+ * side. The call fails when Auth Core supplies no TURN server.
  */
-class WebRtcCallEngine(context: Context, val eglBase: EglBase = EglBase.create()) : CallMediaEngine {
+class WebRtcCallEngine(context: Context, val eglBase: EglBase = EglBase.create(), val relayOnly: Boolean = false) : CallMediaEngine {
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var factory: PeerConnectionFactory? = null
@@ -89,7 +93,8 @@ class WebRtcCallEngine(context: Context, val eglBase: EglBase = EglBase.create()
         audioDevice.release() // the factory holds its own reference
         factory = f
 
-        val configuration = PeerConnection.RTCConfiguration(iceServers.map { server ->
+        val servers = if (relayOnly) IceServer.relayOnly(iceServers) else iceServers
+        val configuration = PeerConnection.RTCConfiguration(servers.map { server ->
             PeerConnection.IceServer.builder(server.urls)
                 .apply {
                     server.username?.let { setUsername(it) }
@@ -101,6 +106,7 @@ class WebRtcCallEngine(context: Context, val eglBase: EglBase = EglBase.create()
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            if (relayOnly) iceTransportsType = PeerConnection.IceTransportsType.RELAY
         }
         val pc = f.createPeerConnection(configuration, observer) ?: error("libwebrtc could not create a peer connection")
         peer = pc

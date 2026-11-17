@@ -29,7 +29,24 @@ import java.util.UUID
 /** Verification channels that are calls. */
 enum class VerificationChannel { AUDIO, VIDEO }
 
-data class IceServer(val urls: List<String>, val username: String? = null, val credential: String? = null)
+data class IceServer(val urls: List<String>, val username: String? = null, val credential: String? = null) {
+    companion object {
+        /**
+         * For a relay-only call (finding D-14): the TURN URLs only (`turn:` or
+         * `turns:`), so neither the customer's local nor public address reaches
+         * the operator side. Throws when Auth Core supplied no TURN server: the
+         * call is refused rather than made with direct candidates.
+         */
+        fun relayOnly(servers: List<IceServer>): List<IceServer> {
+            val relays = servers.mapNotNull { server ->
+                val urls = server.urls.filter { it.lowercase().startsWith("turn:") || it.lowercase().startsWith("turns:") }
+                if (urls.isEmpty()) null else server.copy(urls = urls)
+            }
+            if (relays.isEmpty()) throw NEXUSSignError.InvalidArgument("relay-only call without a TURN server")
+            return relays
+        }
+    }
+}
 
 /** An open verification session of one authorization, as returned by Auth Core. */
 data class VerificationSession(val sessionId: String, val authorizationId: String, val channel: VerificationChannel, val expiresAt: Instant)

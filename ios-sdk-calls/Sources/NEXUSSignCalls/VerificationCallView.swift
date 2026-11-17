@@ -33,13 +33,15 @@ public final class VerificationCallModel: ObservableObject {
     public let session: VerificationSession
     /// The terms from the signed bytes (`confirmationText`), the same the operator sees.
     public let terms: String
-    public let engine = WebRTCCallEngine()
+    public let engine: WebRTCCallEngine
     public let controller: VerificationCallController
     private var stoppedForBackground = false
 
-    public init(sdk: NEXUSSignSDK, session: VerificationSession, terms: String, options: VerificationCallController.Options = .init()) throws {
+    /// `relayOnly`: media only through Auth Core's TURN server (finding D-14).
+    public init(sdk: NEXUSSignSDK, session: VerificationSession, terms: String, options: VerificationCallController.Options = .init(), relayOnly: Bool = false) throws {
         self.session = session
         self.terms = terms
+        self.engine = WebRTCCallEngine(relayOnly: relayOnly)
         controller = VerificationCallController(signalling: try sdk.callSignalling(for: session), engine: engine, options: options)
     }
 

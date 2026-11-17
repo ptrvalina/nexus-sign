@@ -21,6 +21,19 @@ public struct IceServer: Equatable, Sendable {
     public init(urls: [String], username: String? = nil, credential: String? = nil) {
         self.urls = urls; self.username = username; self.credential = credential
     }
+
+    /// For a relay-only call (finding D-14): the TURN URLs only (`turn:` or
+    /// `turns:`), so neither the customer's local nor public address reaches
+    /// the operator side. Throws when Auth Core supplied no TURN server: the
+    /// call is refused rather than made with direct candidates.
+    public static func relayOnly(_ servers: [IceServer]) throws -> [IceServer] {
+        let relays = servers.compactMap { server -> IceServer? in
+            let urls = server.urls.filter { $0.lowercased().hasPrefix("turn:") || $0.lowercased().hasPrefix("turns:") }
+            return urls.isEmpty ? nil : IceServer(urls: urls, username: server.username, credential: server.credential)
+        }
+        guard !relays.isEmpty else { throw NEXUSSignError.invalidArgument(detail: "relay-only call without a TURN server") }
+        return relays
+    }
 }
 
 /// An open verification session of one authorization.

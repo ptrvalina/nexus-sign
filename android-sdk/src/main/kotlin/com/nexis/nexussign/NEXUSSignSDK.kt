@@ -53,7 +53,6 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
      */
     fun isRegistered(): Boolean = state.registeredCredentialId() != null && keyManager.hasExistingKey()
 
-    /** True when this device can confirm transactions from a QR code without network. */
     /**
      * Fingerprint of this device's signing key: hex SHA-256 of its DER
      * SubjectPublicKeyInfo, computed here from the key in the Keystore, not
@@ -65,6 +64,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     fun signingKeyFingerprint(): String? =
         if (!isRegistered()) null else keyManager.activeSigningPublicKeyInfo()?.let(DeviceProtocol::signingKeyFingerprint)
 
+    /** True when this device can confirm transactions from a QR code without network. */
     fun isOfflineConfirmationAvailable(): Boolean = isRegistered() && keyManager.hasOfflineKey()
 
     /** The credential ID confirmed by Auth Core, if the device is registered. */
@@ -118,11 +118,6 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
     fun signedTransaction(authorization: NexusAuthorization): NexusSignedTransaction = authorization.signedTransaction()
 
     /**
-     * Shows the biometric prompt with the signed transaction text, signs the
-     * canonical bytes and submits the signature. Call from the main thread's
-     * lifecycle scope of [activity].
-     */
-    /**
      * Opens an audio or video verification session for [authorization], when
      * the bank's verification plan asks for one (ADR 0017). The signed bytes
      * are verified first, so the terms shown during the call
@@ -151,6 +146,11 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         return DeviceCallSignalling(session.sessionId, networkClient)
     }
 
+    /**
+     * Shows the biometric prompt with the signed transaction text, signs the
+     * canonical bytes and submits the signature. Call from the main thread's
+     * lifecycle scope of [activity].
+     */
     suspend fun approve(authorization: NexusAuthorization, activity: FragmentActivity): NEXUSVerificationOutcome {
         // Expiry, prompt text and the signed bytes all come from the one
         // verified canonical payload, never from the JSON convenience fields.
@@ -783,7 +783,7 @@ class NEXUSSignSDK(context: Context, private val config: NEXUSSignConfig) {
         val zero = byteArrayOf(0)
         val binding = challenge + zero + keys.signing.toByteArray(Charsets.UTF_8) +
             zero + keys.authentication.toByteArray(Charsets.UTF_8) +
-            zero + (keys.offline ?: "").toByteArray(Charsets.UTF_8)
+            zero + keys.offline.toByteArray(Charsets.UTF_8)
         val token = try {
             attestationProvider.requestToken(binding)
         } catch (e: CancellationException) {

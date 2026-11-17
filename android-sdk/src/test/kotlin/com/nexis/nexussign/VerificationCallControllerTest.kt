@@ -348,6 +348,19 @@ class VerificationCallControllerTest {
         assertEquals(1, engine.releases)
     }
 
+    @Test fun `relay-only keeps only TURN URLs and refuses a call without one (finding D-14)`() {
+        val servers = listOf(
+            IceServer(listOf("stun:stun.bank.example:3478")),
+            IceServer(listOf("turn:turn.bank.example:3478?transport=udp", "stun:turn.bank.example:3478", "TURNS:turn.bank.example:5349"), "u", "c"),
+        )
+        assertEquals(listOf(IceServer(listOf("turn:turn.bank.example:3478?transport=udp", "TURNS:turn.bank.example:5349"), "u", "c")), IceServer.relayOnly(servers))
+        try {
+            IceServer.relayOnly(listOf(IceServer(listOf("stun:stun.bank.example:3478")))); org.junit.Assert.fail("accepted")
+        } catch (e: NEXUSSignError.InvalidArgument) {
+            assertEquals("relay-only call without a TURN server", e.detail)
+        }
+    }
+
     @Test fun `DTLS fingerprint check`() {
         fun hash(n: Int) = List(n) { "0f" }.joinToString(":")
         assertTrue(hasDtlsFingerprint("v=0\r\na=fingerprint:sha-256 ${hash(32)}\r\n"))

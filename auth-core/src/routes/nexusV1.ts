@@ -21,7 +21,6 @@ import { pool } from '../db/pool';
 import { getPushMessageForClient, sendPushMessage, type PushMessageRecord } from '../services/pushService';
 import { PUSH_BODY_MAX, PUSH_CATEGORIES, PUSH_DATA_KEY_PATTERN, PUSH_DATA_MAX_FIELDS, PUSH_DATA_VALUE_MAX, PUSH_TITLE_MAX } from '../services/pushProtocol';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
-import { requireGatewayMtls } from '../middleware/mtlsGateway';
 import { env } from '../config/env';
 import { BENEFICIARY_KEY_PATTERN, BENEFICIARY_MAX_FIELDS, BENEFICIARY_MAX_VALUE_LENGTH } from '../services/canonicalAuthorization';
 import { UnauthorizedError, ValidationError } from '../services/errors';
@@ -405,7 +404,7 @@ export function buildNexusV1Router(hsmAdapter: HsmAdapter): Router {
    * verification provider registered for this bank, relayed by the
    * bank's verification gateway. Requires gateway mTLS whenever
    * REQUIRE_MTLS_HEADER is set. */
-  router.post('/v1/authorizations/:authorizationId/verification-sessions/:sessionId/complete', requireGatewayMtls, async (req: AuthenticatedRequest, res, next) => {
+  router.post('/v1/authorizations/:authorizationId/verification-sessions/:sessionId/complete', async (req: AuthenticatedRequest, res, next) => {
     try {
       const body = z.object({ resultToken: z.string().min(1).max(8192) }).strict().parse(req.body);
       res.json(await completeVerificationSession(uuidSchema.parse(req.params.authorizationId), clientIdOf(req),

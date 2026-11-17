@@ -644,11 +644,6 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
     } catch (e) { next(e); }
   });
 
-  /** Offline confirmation v2: the device's signature over the bytes
-   * it confirmed offline, uploaded once it has a connection. Only from the
-   * credential the authorization names. 200 VERIFIED or ALREADY_RECORDED,
-   * 202 RECEIVED (the code has not arrived yet), 409 NOT_AWAITING_SIGNATURE,
-   * 422 INVALID_DEFERRED_SIGNATURE. */
   /** The customer declines the payment on the enrolled device ("it wasn't me"). */
   router.post('/v1/mobile/authorizations/:authorizationId/decline', async (req: MobileAuthenticatedRequest, res, next) => {
     try {
@@ -660,6 +655,11 @@ export function buildMobileV1Router(hsmAdapter: HsmAdapter): Router {
     } catch (e) { next(e); }
   });
 
+  /** Offline confirmation v2: the device's signature over the bytes
+   * it confirmed offline, uploaded once it has a connection. Only from the
+   * credential the authorization names. 200 VERIFIED or ALREADY_RECORDED,
+   * 202 RECEIVED (the code has not arrived yet), 409 NOT_AWAITING_SIGNATURE,
+   * 422 INVALID_DEFERRED_SIGNATURE. */
   router.post('/v1/mobile/authorizations/:authorizationId/deferred-signature', async (req: MobileAuthenticatedRequest, res, next) => {
     try {
       const device = await deviceInScope(req);

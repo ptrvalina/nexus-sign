@@ -95,8 +95,6 @@ public final class NEXUSSignSDK {
         return authorization
     }
 
-    /// Asks for biometric confirmation showing the signed transaction, signs
-    /// the canonical bytes and submits the signature.
     /// Opens an audio or video verification session for `authorization` when
     /// the bank's verification plan asks for one (ADR 0017). The signed bytes
     /// are verified first, so the terms shown during the call
@@ -124,6 +122,8 @@ public final class NEXUSSignSDK {
         return DeviceCallSignalling(sessionID: session.sessionID, network: networkClient)
     }
 
+    /// Asks for biometric confirmation showing the signed transaction, signs
+    /// the canonical bytes and submits the signature.
     public func approve(authorization: NexusAuthorization) async throws -> NEXUSVerificationOutcome {
         // Expiry, prompt text and the signed bytes all come from the one
         // verified canonical payload, never from the JSON convenience fields.

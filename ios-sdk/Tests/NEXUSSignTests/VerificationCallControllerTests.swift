@@ -236,6 +236,20 @@ final class VerificationCallControllerTests: XCTestCase {
         XCTAssertEqual(engine.releases, 1)
     }
 
+    /// Finding D-14: a relay-only call keeps only TURN URLs, and is refused
+    /// when Auth Core supplied none.
+    func testRelayOnlyKeepsOnlyTurnServers() throws {
+        let servers = [
+            IceServer(urls: ["stun:stun.bank.example:3478"]),
+            IceServer(urls: ["turn:turn.bank.example:3478?transport=udp", "stun:turn.bank.example:3478", "TURNS:turn.bank.example:5349"], username: "u", credential: "c"),
+        ]
+        XCTAssertEqual(try IceServer.relayOnly(servers),
+                       [IceServer(urls: ["turn:turn.bank.example:3478?transport=udp", "TURNS:turn.bank.example:5349"], username: "u", credential: "c")])
+        XCTAssertThrowsError(try IceServer.relayOnly([IceServer(urls: ["stun:stun.bank.example:3478"])])) { error in
+            guard case NEXUSSignError.invalidArgument = error else { return XCTFail("got \(error)") }
+        }
+    }
+
     func testDtlsFingerprintCheck() {
         let hash = { (n: Int) in Array(repeating: "0f", count: n).joined(separator: ":") }
         XCTAssertTrue(VerificationCallController.hasDtlsFingerprint("v=0\r\na=fingerprint:sha-256 \(hash(32))\r\n"))

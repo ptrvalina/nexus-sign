@@ -91,11 +91,12 @@ class VerificationCallSession private constructor(
             authorization: NexusAuthorization,
             channel: VerificationChannel,
             options: VerificationCallController.Options = VerificationCallController.Options(),
+            relayOnly: Boolean = false,
         ): VerificationCallSession {
             val missing = CallPermissions.missing(context, channel)
             require(missing.isEmpty()) { "Permissions not granted: $missing" }
             val session = sdk.openVerificationCall(authorization, channel)
-            val engine = WebRtcCallEngine(context)
+            val engine = WebRtcCallEngine(context, relayOnly = relayOnly)
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
             val controller = VerificationCallController(sdk.callSignalling(session), engine, scope, options)
             return VerificationCallSession(session, engine, controller, scope)

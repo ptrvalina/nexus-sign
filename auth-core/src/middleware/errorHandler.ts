@@ -46,7 +46,10 @@ export function errorHandler(logger: Logger) {
     const mapped = STATUS_BY_ERROR.find(([type]) => error instanceof type);
     if (mapped && error instanceof Error) {
       const code = error instanceof ConflictError || error instanceof UnprocessableError ? error.code : undefined;
-      res.status(mapped[1]).json({ error: error.message, ...(code ? { code } : {}) });
+      // Which integrity check failed is audited, not told to the caller: it
+      // would tell someone who altered the database what was noticed (A1-14).
+      const message = error instanceof CredentialIntegrityError ? 'Credential integrity check failed' : error.message;
+      res.status(mapped[1]).json({ error: message, ...(code ? { code } : {}) });
       return;
     }
 

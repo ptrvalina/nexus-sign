@@ -87,8 +87,7 @@ export interface AuthorizationEvidenceInput {
   correlationId: string | null;
 }
 
-/** Why a credential was enrolled. */
-/** Reasons sealed by this version. Chains written by 1.x and 2.0.0-rc.1 can
+/** Why a credential was enrolled. Reasons sealed by this version. Chains written by 1.x and 2.0.0-rc.1 can
  * also hold `ROTATION` and `BANK_PROVISIONED`, from the removed bank-side
  * provisioning endpoints; verifiers accept any reason string. */
 export type EnrolmentReason = 'ENROLMENT' | 'REPLACEMENT' | 'ADDITION' | 'RECOVERY' | 'BASELINE';

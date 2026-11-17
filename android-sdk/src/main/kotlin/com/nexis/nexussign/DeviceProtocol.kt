@@ -62,8 +62,7 @@ internal object DeviceProtocol {
         return (binary % 100_000_000).toString().padStart(CODE_DIGITS, '0')
     }
 
-    /** The canonical authorization bytes carried by an offline QR code. */
-    /** 1 for `NXS1.`, 2 for `NXS2.`; anything else is refused. */
+    /** The version of an offline QR code: 1 for `NXS1.`, 2 for `NXS2.`; anything else is refused. */
     fun qrPayloadVersion(qrPayload: String): Int {
         val text = qrPayload.trim()
         return when {

@@ -35,12 +35,22 @@ public final class WebRTCCallEngine: NSObject, CallMediaEngine, @unchecked Senda
         didSet { if let old = oldValue { remoteVideoTrack?.remove(old) }; if let new = remoteRenderer { remoteVideoTrack?.add(new) } }
     }
 
-    public override init() { super.init() }
+    /// Media only through the TURN relay (finding D-14): the customer's local
+    /// and public addresses are not offered to the operator side. A bank
+    /// option; the call fails when Auth Core supplies no TURN server.
+    public let relayOnly: Bool
+
+    public init(relayOnly: Bool = false) {
+        self.relayOnly = relayOnly
+        super.init()
+    }
 
     public func prepare(iceServers: [IceServer], video: Bool, events: MediaEvents) async throws {
         self.events = events
         let configuration = RTCConfiguration()
-        configuration.iceServers = iceServers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
+        let servers = relayOnly ? try IceServer.relayOnly(iceServers) : iceServers
+        configuration.iceServers = servers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
+        if relayOnly { configuration.iceTransportPolicy = .relay }
         configuration.sdpSemantics = .unifiedPlan
         configuration.continualGatheringPolicy = .gatherContinually
         configuration.bundlePolicy = .maxBundle

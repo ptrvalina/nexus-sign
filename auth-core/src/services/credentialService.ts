@@ -282,7 +282,7 @@ function mapCredential(row: CredentialRow): CredentialRecord {
 
 
 /** An ACTIVE credential of an ACTIVE bank client, for mobile request
- * request authentication (device signatures). */
+ * authentication (device signatures). */
 export async function getActiveDeviceCredential(credentialId: string): Promise<(CredentialRecord & { clientId: string }) | null> {
   const result = await pool.query<CredentialRow & { client_id: string }>(
     `SELECT ${CREDENTIAL_COLUMNS},
