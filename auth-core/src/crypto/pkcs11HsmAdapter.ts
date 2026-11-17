@@ -90,6 +90,8 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   private stuckCalls = 0;
   /** Increments when the module is initialised again; older sessions are dead. */
   private generation = 0;
+  /** Set while the module is being re-initialised; new calls wait for it. */
+  private reinitializing: Promise<void> | null = null;
   private evidencePublicKey: { pem: string; keyId: string } | null = null;
   private closed = false;
 
@@ -216,7 +218,7 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
         // or in an unknown state: it is not reused.
         this.retire(session);
         const message = messageOf(error);
-        if (isModuleLost(message)) this.reinitialize();
+        if (isModuleLost(message)) await this.reinitialize();
         if ((isSessionLost(message) || isModuleLost(message)) && attempt < 2) continue;
         throw error;
       } finally {
@@ -226,6 +228,7 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
   }
 
   private async acquire(): Promise<PooledSession> {
+    if (this.reinitializing) await this.reinitializing;
     if (this.closed) throw new Error('HSM adapter closed');
     // Every timed-out call still holds a libuv worker thread (shared with
     // DNS, file and scrypt work) until the HSM answers. Once as many calls as
@@ -301,14 +304,33 @@ export class Pkcs11HsmAdapter implements HsmAdapter {
     try { this.pkcs11.C_CloseSession(session.handle); } catch { /* already gone */ }
   }
 
-  private reinitialize(): void {
+  /**
+   * Finalises and initialises the module again after it reported itself lost.
+   * C_Finalize while other threads are inside the module is undefined
+   * behaviour (PKCS#11 v2.40 §5.4; vendor modules can crash the process), so
+   * new calls wait and the calls in flight are drained first (finding B-08).
+   * If they do not return within the operation timeout, the module is not
+   * finalised: the call fails, and the readiness check reports the HSM.
+   */
+  private reinitialize(): Promise<void> {
+    if (this.reinitializing) return this.reinitializing;
     this.generation += 1;
     // Idle sessions die with the module; sessions in use are retired when
     // they come back (generation check in release()).
     this.openSessions -= this.idle.length;
     this.idle.splice(0);
-    try { this.pkcs11.C_Finalize(); } catch { /* not initialised */ }
-    this.initialize();
+    this.reinitializing = (async () => {
+      const deadline = Date.now() + this.options.operationTimeoutMs;
+      while (this.openSessions > 0 || this.stuckCalls > 0) {
+        if (Date.now() >= deadline) {
+          throw new HsmTimeoutError('module re-initialisation (calls still in the module)', this.options.operationTimeoutMs);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      try { this.pkcs11.C_Finalize(); } catch { /* not initialised */ }
+      this.initialize();
+    })().finally(() => { this.reinitializing = null; });
+    return this.reinitializing;
   }
 
   private openSession(): PooledSession {

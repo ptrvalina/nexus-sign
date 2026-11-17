@@ -73,3 +73,56 @@ test('an evidence key imported into the HSM is refused', async () => {
   await assert.rejects(hsm.healthCheck(), /generated in the HSM \(CKA_LOCAL\)/);
   await hsm.close();
 });
+
+test('the module is finalised only after the calls in flight returned (finding B-08)', async () => {
+  const module = moduleDouble();
+  const hsm = new Pkcs11HsmAdapter(options({ operationTimeoutMs: 2000 }), module);
+  await hsm.healthCheck();
+  const events = [];
+  const realSign = module.C_SignAsync;
+  let lost = true;
+  module.C_SignAsync = async (session, data, out) => {
+    if (data[0] === 1) {
+      // A slow call that is inside the module when another call loses it.
+      events.push('slow call started');
+      await new Promise((r) => setTimeout(r, 150));
+      events.push('slow call returned');
+      return realSign(session, data, out);
+    }
+    if (data[0] === 2 && lost) {
+      lost = false;
+      await new Promise((r) => setTimeout(r, 20));
+      throw new Error('CKR_CRYPTOKI_NOT_INITIALIZED');
+    }
+    return realSign(session, data, out);
+  };
+  module.C_Finalize = () => { events.push('C_Finalize'); };
+  module.C_Initialize = () => { events.push('C_Initialize'); };
+  const [slow, retried] = await Promise.all([hsm.signEvidence(Buffer.alloc(32, 1)), hsm.signEvidence(Buffer.alloc(32, 2))]);
+  assert.ok(slow.signature.length > 0 && retried.signature.length > 0, 'both calls succeed (the second after re-initialisation)');
+  assert.deepEqual(events, ['slow call started', 'slow call returned', 'C_Finalize', 'C_Initialize']);
+  module.C_Finalize = () => {};
+  await hsm.close();
+});
+
+test('if a call does not leave the module, it is not finalised and the caller gets a timeout', async () => {
+  const module = moduleDouble();
+  const hsm = new Pkcs11HsmAdapter(options({ operationTimeoutMs: 120, poolSize: 3 }), module);
+  await hsm.healthCheck();
+  let finalised = 0;
+  const realSign = module.C_SignAsync;
+  module.C_SignAsync = async (session, data, out) => {
+    if (data[0] === 1) { await new Promise((r) => setTimeout(r, 600)); return realSign(session, data, out); }
+    if (data[0] === 2) throw new Error('CKR_DEVICE_REMOVED');
+    return realSign(session, data, out);
+  };
+  module.C_Finalize = () => { finalised += 1; };
+  const hung = hsm.signEvidence(Buffer.alloc(32, 1)).catch((e) => e);
+  await new Promise((r) => setTimeout(r, 10));
+  await assert.rejects(hsm.signEvidence(Buffer.alloc(32, 2)), (error) => error instanceof HsmTimeoutError);
+  assert.equal(finalised, 0, 'C_Finalize never ran with a call inside the module');
+  assert.ok((await hung) instanceof HsmTimeoutError);
+  await new Promise((r) => setTimeout(r, 650));
+  module.C_Finalize = () => {};
+  await hsm.close();
+});
