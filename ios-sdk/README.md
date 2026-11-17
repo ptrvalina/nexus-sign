@@ -98,7 +98,8 @@ When the bank uses NEXUS-SIGN secure push, Auth Core sends authorization request
 
    ```swift
    final class NotificationService: UNNotificationServiceExtension {
-       private let reader = NEXUSSignPushReader(bankID: "mybank", keychainAccessGroup: "TEAMID.com.mybank.shared")
+       // certificatePins: the same pins as NEXUSSignConfig.certificatePins, if the app sets any.
+       private let reader = NEXUSSignPushReader(bankID: "mybank", keychainAccessGroup: "TEAMID.com.mybank.shared", certificatePins: [])
 
        override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
            let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()

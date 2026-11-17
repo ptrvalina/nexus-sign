@@ -79,4 +79,18 @@ final class SecurePushTests: XCTestCase {
         XCTAssertNil(NexusPushEnvelope(userInfo: ["aps": ["alert": "Hello"]]))
         XCTAssertNil(NexusPushEnvelope(userInfo: ["nexus": "not an object"]))
     }
+
+    /// Finding D-08: receipts go through a session that enforces the
+    /// configured pins, not URLSession.shared.
+    func testReceiptsUseThePinnedSession() {
+        let pins: Set<String> = ["sha256/" + Data(repeating: 1, count: 32).base64EncodedString(),
+                                 "sha256/" + Data(repeating: 2, count: 32).base64EncodedString()]
+        let pinned = NEXUSSignPushReader(bankID: "pin-test", certificatePins: pins)
+        let session = pinned.receiptSession(nil)
+        XCTAssertFalse(session === URLSession.shared)
+        XCTAssertTrue(session.delegate is CertificatePinning.Delegate)
+        XCTAssertTrue(NEXUSSignPushReader(bankID: "pin-test").receiptSession(nil) === URLSession.shared, "without pins: system trust only")
+        let own = URLSession(configuration: .ephemeral)
+        XCTAssertTrue(pinned.receiptSession(own) === own, "a session the app passes is used as given")
+    }
 }

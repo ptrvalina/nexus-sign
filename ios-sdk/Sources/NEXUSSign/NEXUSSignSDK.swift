@@ -421,7 +421,7 @@ public final class NEXUSSignSDK {
     /// receives push.delivered. The notification extension can send the same
     /// receipt with `NEXUSSignPushReader.sendReceipt`.
     public func confirmPushReceipt(_ message: NexusPushMessage) async throws {
-        try await NEXUSSignPushReader(bankID: config.bankID, keychainAccessGroup: config.pushKeychainAccessGroup)
+        try await NEXUSSignPushReader(bankID: config.bankID, keychainAccessGroup: config.pushKeychainAccessGroup, certificatePins: config.certificatePins)
             .sendReceipt(for: message, baseURL: config.baseURL, timeout: config.requestTimeout)
     }
 
