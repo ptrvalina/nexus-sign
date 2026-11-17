@@ -10,6 +10,16 @@ import pg from 'pg';
 import { createDatabase, skipWithoutServices, startAuthCore, startExpectingFailure } from './support/harness.mjs';
 import { bankSession, call, deviceSignature, offlineCode, signDer, submitSignature } from './support/actors.mjs';
 import { verifyDeviceSignature, verifyEvidenceRecord } from '../../scripts/lib/evidence.mjs';
+import { loadTs } from '../support/load-ts.mjs';
+
+const { derToRaw, normalizeLowS, rawToDer } = loadTs('crypto/ecdsaSignatureFormat.ts');
+const P256_ORDER = BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551');
+/** The other valid encoding of the same signature: (r, n - s). */
+const otherS = (derB64) => {
+  const raw = derToRaw(Buffer.from(derB64, 'base64'));
+  const s = BigInt(`0x${raw.subarray(32).toString('hex')}`);
+  return rawToDer(Buffer.concat([raw.subarray(0, 32), Buffer.from((P256_ORDER - s).toString(16).padStart(64, '0'), 'hex')])).toString('base64');
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -89,7 +99,7 @@ describe('offline confirmation v2: deferred device signature', { skip: skipWitho
     const evidence = await bank.call('GET', `/v1/authorizations/${phone.id}/evidence`);
     const payload = evidence.json.sealedPayload;
     assert.equal(payload.confirmationMethod, 'OFFLINE_SIGNED');
-    assert.equal(payload.signature, phone.signature);
+    assert.equal(payload.signature, normalizeLowS(phone.signature, 'der'), 'the signature is stored in its low-S form');
     assert.equal(payload.signatureFormat, 'der');
     assert.equal(Buffer.from(payload.offlineCodeTag, 'base64').length, 32);
     assert.ok(payload.offlineCodeAcceptedAt && payload.deferredSignatureReceivedAt);
@@ -98,6 +108,11 @@ describe('offline confirmation v2: deferred device signature', { skip: skipWitho
     const repeat = await upload(device, phone.id, phone.signature);
     assert.equal(repeat.status, 200, repeat.text);
     assert.equal(repeat.json.status, 'ALREADY_RECORDED');
+    // The same signature with s replaced by n - s (as a re-encoding proxy could
+    // send it) is the same signature, not a conflict (findings A1-05, B-06).
+    const malleated = await upload(device, phone.id, otherS(phone.signature));
+    assert.equal(malleated.status, 200, malleated.text);
+    assert.equal(malleated.json.status, 'ALREADY_RECORDED');
     assert.equal(await evidenceCount(phone.id), 1);
   });
 

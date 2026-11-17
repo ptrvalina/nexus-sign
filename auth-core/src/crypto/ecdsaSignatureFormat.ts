@@ -97,3 +97,30 @@ function toFixedWidth(value: Buffer): Buffer {
   }
   return Buffer.concat([Buffer.alloc(P256_COORDINATE_LENGTH - trimmed.length, 0), trimmed]);
 }
+
+/** Order n of the P-256 group. */
+const P256_ORDER = BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551');
+
+/**
+ * Returns the signature with s replaced by n − s when s > n/2 ("low-S"), in
+ * the same encoding. (r, s) and (r, n − s) verify alike; the Secure Enclave
+ * and Android Keystore produce either, so Auth Core keeps one form: the
+ * stored and sealed bytes, and the comparison of a resubmitted deferred
+ * signature, do not depend on which one a device or proxy sent (A1-05, B-06).
+ * Input that is not a well-formed signature is returned unchanged for the
+ * verifier to refuse.
+ */
+export function normalizeLowS(signatureB64: string, format: 'der' | 'raw'): string {
+  let raw: Buffer;
+  try {
+    raw = format === 'der' ? derToRaw(Buffer.from(signatureB64, 'base64')) : Buffer.from(signatureB64, 'base64');
+  } catch {
+    return signatureB64;
+  }
+  if (raw.length !== P256_COORDINATE_LENGTH * 2) return signatureB64;
+  const s = BigInt(`0x${raw.subarray(P256_COORDINATE_LENGTH).toString('hex')}`);
+  if (s <= P256_ORDER / 2n) return signatureB64;
+  const low = Buffer.from((P256_ORDER - s).toString(16).padStart(P256_COORDINATE_LENGTH * 2, '0'), 'hex');
+  const normalized = Buffer.concat([raw.subarray(0, P256_COORDINATE_LENGTH), low]);
+  return (format === 'der' ? rawToDer(normalized) : normalized).toString('base64');
+}

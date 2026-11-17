@@ -61,6 +61,8 @@ ECDSA over P-256 with SHA-256, computed over the canonical bytes (not over the h
 - `der`: ASN.1 `ECDSA-Sig-Value` in its canonical (minimal) encoding, as produced by Android Keystore and iOS `SecKeyCreateSignature`. Other encodings of the same values are refused.
 - `raw`: `r || s`, 64 bytes, as produced by WebCrypto and some HSMs.
 
+Devices produce `s` in either of its two valid forms (`s` or `n − s`). Auth Core accepts both and stores, seals and compares the signature in its low-S form (`s ≤ n/2`), so the evidence and the comparison of a repeated deferred signature do not depend on which form was sent. A verifier checks the stored low-S signature with any ECDSA implementation.
+
 Auth Core allows 5 signature attempts per authorization. The default lifetime is 120 seconds; the bank may set it between 30 and 900 seconds. A verified authorization is consumed atomically and cannot be used again.
 
 ## Device-side verification ("what you see is what you sign")

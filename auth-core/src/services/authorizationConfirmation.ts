@@ -9,6 +9,7 @@ import { canonicalizeAuthorization, hashCanonicalAuthorization } from './canonic
 import { sealAuthorizationEvidence, type ChainPosition } from './evidenceService';
 import { assertCredentialIntegrity, CredentialIntegrityError } from './credentialIntegrity';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
+import { normalizeLowS } from '../crypto/ecdsaSignatureFormat';
 import { decryptSecretBytes } from '../crypto/secretBox';
 import { parseOfflineLimits } from '../config/productionPosture';
 import { env } from '../config/env';
@@ -58,7 +59,7 @@ export async function verifyAuthorization(
   signatureFormat: 'der' | 'raw',
   auditContext: AuditContext = {},
 ): Promise<VerificationResult> {
-  return confirmAuthorization(hsmAdapter, id, clientId, { kind: 'DEVICE_SIGNATURE', signatureB64, signatureFormat }, auditContext);
+  return confirmAuthorization(hsmAdapter, id, clientId, { kind: 'DEVICE_SIGNATURE', signatureB64: normalizeLowS(signatureB64, signatureFormat), signatureFormat }, auditContext);
 }
 
 /**
@@ -512,6 +513,7 @@ export async function submitDeferredSignature(
   signatureFormat: 'der' | 'raw',
   auditContext: AuditContext = {},
 ): Promise<DeferredSignatureResult> {
+  signatureB64 = normalizeLowS(signatureB64, signatureFormat);
   const auth = await getAuthorizationForClient(id, clientId);
   if (!auth.credentialId || auth.credentialId !== requestCredentialId) throw new ForbiddenError('The authorization is bound to another device');
   const credential = await getCredentialForClient(auth.credentialId, clientId);

@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { pool, withTransaction } from '../db/pool';
 import type { HsmAdapter } from '../crypto/hsmAdapter';
+import { normalizeLowS } from '../crypto/ecdsaSignatureFormat';
 import { assertValidBeneficiary, canonicalJson, displayTextViolation, type AuthorizationBeneficiary } from './canonicalAuthorization';
 import { assertCredentialIntegrity, CredentialIntegrityError } from './credentialIntegrity';
 import { getCredentialForClient } from './credentialService';
@@ -234,6 +235,7 @@ function decodeSignature(value: string): Buffer | null {
 /** The addressed device signs the terms it showed. */
 export async function signMandate(hsm: HsmAdapter, device: { clientId: string; nexusId: string; credentialId: string }, mandateId: string,
   signatureB64: string, signatureFormat: 'der' | 'raw'): Promise<Mandate> {
+  signatureB64 = normalizeLowS(signatureB64, signatureFormat);
   return withTransaction(async (tx) => {
     const m = await lockMandate(tx, mandateId, { nexusId: device.nexusId });
     if (m.state !== 'PENDING_SIGNATURE') throw new ConflictError(`Mandate is ${m.state}`, 'MANDATE_NOT_PENDING');
