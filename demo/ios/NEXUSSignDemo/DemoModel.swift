@@ -17,6 +17,9 @@ final class DemoModel: ObservableObject {
     @Published private(set) var requiredCall: VerificationChannel?
     @Published private(set) var callVerified = false
     @Published var call: VerificationCallModel?
+    /// Offline confirmation: the QR content fetched while online, and the code shown after Face ID / Touch ID.
+    @Published private(set) var offlineQR: String?
+    @Published private(set) var offlineCode: String?
     @Published private(set) var status = "Введите адрес сервера (https://IP-компьютера:8443) и код сопряжения со страницы демо-банка, затем нажмите «Подключиться»."
 
     private static let addressKey = "serverAddress"
@@ -137,6 +140,44 @@ final class DemoModel: ObservableObject {
         }
     }
 
+    /// Step 1, online: the QR content of the waiting payment.
+    func fetchOfflineQR() {
+        guard let bank else { return }
+        Task {
+            busy = true
+            defer { busy = false }
+            do {
+                offlineQR = try await bank.offlineChallenge()
+                offlineCode = nil
+                status = "QR получен. Включите авиарежим, затем нажмите «Показать офлайн-код»."
+            } catch {
+                show(error)
+            }
+        }
+    }
+
+    /// Step 2, without network: the SDK checks the QR, asks for Face ID / Touch
+    /// ID with the transaction and returns the 8-digit code; the signature waits
+    /// in the SDK until the phone is online again.
+    func showOfflineCode() {
+        guard let sdk, let qr = offlineQR else { return }
+        Task {
+            busy = true
+            defer { busy = false }
+            do {
+                let challenge = try sdk.readOfflineChallenge(qrPayload: qr)
+                let code = try await sdk.confirmOffline(challenge)
+                offlineCode = "\(code.prefix(4)) \(code.suffix(4))"
+                offlineQR = nil
+                authorization = nil
+                payment = nil
+                status = "Введите код \(offlineCode ?? "") на странице демо-банка. Затем выключите авиарежим: приложение отправит подпись, и банк увидит платёж подтверждённым."
+            } catch {
+                show(error)
+            }
+        }
+    }
+
     func createRecoveryPhrase() {
         guard let sdk else { return }
         Task {
@@ -165,7 +206,14 @@ final class DemoModel: ObservableObject {
     /// Asks the demo bank whether a payment is waiting and loads it through the SDK,
     /// which checks every displayed field against the exact bytes it will sign.
     private func poll() async {
-        guard let sdk, let bank, !busy, authorization == nil, registered else { return }
+        guard let sdk, let bank, !busy, registered else { return }
+        // Offline confirmations: signatures made without network go out as soon as there is one.
+        let delivery = await sdk.submitPendingOfflineSignatures()
+        if delivery.delivered > 0 {
+            offlineCode = nil
+            status = "Подпись офлайн-подтверждения отправлена (\(delivery.delivered)). Банк видит платёж подтверждённым."
+        }
+        guard authorization == nil else { return }
         guard let pending = try? await bank.pending() else { return }
         do {
             let loaded = try await sdk.fetchAuthorization(authorizationID: pending.authorizationID)

@@ -36,6 +36,17 @@ struct ContentView: View {
                         }
                         Button("Подтвердить Face ID / Touch ID") { model.approve() }
                             .disabled(model.busy || (model.requiredCall != nil && !model.callVerified))
+                        if model.requiredCall == nil {
+                            Button("Офлайн: получить QR") { model.fetchOfflineQR() }
+                                .disabled(model.busy)
+                            Button("Показать офлайн-код (без сети)") { model.showOfflineCode() }
+                                .disabled(model.busy || model.offlineQR == nil)
+                        }
+                    }
+                }
+                if let code = model.offlineCode {
+                    Section("Офлайн-код") {
+                        Text(code).font(.largeTitle.monospacedDigit().bold())
                     }
                 }
                 Section {

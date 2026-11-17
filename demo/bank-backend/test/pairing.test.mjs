@@ -79,3 +79,8 @@ test('ten wrong codes replace the pairing code', async () => {
   assert.notEqual(code(), before);
   assert.equal((await ask({ 'X-Demo-Pairing-Code': before })).status, 401, 'the old code no longer works');
 });
+
+test('the offline QR is handed only with the pairing code', async () => {
+  const response = await fetch(`http://127.0.0.1:${devicePort}/app/offline-challenge`);
+  assert.equal(response.status, 401);
+});

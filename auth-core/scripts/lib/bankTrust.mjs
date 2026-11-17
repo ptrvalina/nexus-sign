@@ -116,7 +116,9 @@ function termsProblems(payload, expected) {
   ];
   const problems = [];
   for (const [field, want] of pairs) {
-    if (want === undefined) { if (field !== 'operation_type') problems.push(`expected ${field} not given`); continue; }
+    // Every field, operation_type included: the signed operation type is a
+    // term the customer saw (finding C-17).
+    if (want === undefined) { problems.push(`expected ${field} not given`); continue; }
     const same = typeof want === 'object' ? canonicalJson(want).equals(canonicalJson(signed[field] ?? null)) : String(signed[field]) === String(want);
     if (!same) problems.push(`the signed ${field} (${JSON.stringify(signed[field])}) is not what the bank asked for (${JSON.stringify(want)})`);
   }
@@ -130,7 +132,7 @@ function termsProblems(payload, expected) {
  *   evidenceKeys  evidence public keys the bank pinned (PEM list), never the export's
  *   bankTrustKeys the bank's own statement-signing public keys (PEM list)
  *   registry      the bank's signed approvals and revocations
- *   expected      { authorizationId, nexusId, transactionReference, amountMinor, currency, beneficiary, operationType? }
+ *   expected      { authorizationId, nexusId, transactionReference, amountMinor, currency, beneficiary, operationType }
  *   chain         optional GET /v1/nexus-identities/{nexusId}/evidence; with it every
  *                 enrolment in the chain must be approved, and kept heads are checked
  *   expectedHead, heads   chain heads the bank kept (need `chain`)

@@ -34,5 +34,7 @@ export async function selectHsmAdapter(config: Pick<typeof env, 'HSM_ADAPTER' | 
   if (config.NODE_ENV === 'production' || !config.ALLOW_INSECURE_DEVELOPMENT) {
     throw new Error('HSM_ADAPTER=software keeps the evidence key in memory and is refused here: set HSM_ADAPTER=pkcs11, or ALLOW_INSECURE_DEVELOPMENT=true outside production');
   }
+  // Every restart makes the evidence sealed so far unverifiable (finding B-16).
+  process.stderr.write(`${JSON.stringify({ level: 40, time: Date.now(), msg: 'HSM_ADAPTER=software: a new in-memory evidence key for this process; evidence sealed before this start cannot be verified with it' })}\n`);
   return new SoftwareHsmAdapter();
 }

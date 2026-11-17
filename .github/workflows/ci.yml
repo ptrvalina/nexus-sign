@@ -47,6 +47,7 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends python3-yaml python3-jsonschema
           python3 scripts/validate-openapi.py openapi.yaml
+          python3 scripts/validate-openapi.py admin-openapi.yaml
           python3 scripts/validate-openapi.py ../sandbox/openapi.yaml
       - name: Kubernetes manifests follow Auth Core (production posture, probes, user)
         run: python3 ../deploy/kubernetes/check-manifests.py

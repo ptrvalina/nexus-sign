@@ -54,6 +54,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var approveButton: Button
     private lateinit var callButton: Button
     private lateinit var recoveryButton: Button
+    private lateinit var offlineQrButton: Button
+    private lateinit var offlineCodeButton: Button
+    private lateinit var offlineCodeView: TextView
+    // Offline confirmation: the QR content fetched while online.
+    private var offlineQr: String? = null
     private lateinit var statusView: TextView
 
     private var current: NexusAuthorization? = null
@@ -99,7 +104,14 @@ class MainActivity : AppCompatActivity() {
 
     /** Asks the demo bank whether a payment is waiting, and loads it through the SDK. */
     private suspend fun poll() {
-        if (busy || current != null || !sdk.isRegistered()) return
+        if (busy || !sdk.isRegistered()) return
+        // Offline confirmations: signatures made without network go out as soon as there is one.
+        val delivery = runCatching { sdk.submitPendingOfflineSignatures() }.getOrNull()
+        if (delivery != null && delivery.delivered > 0) {
+            offlineCodeView.visibility = View.GONE
+            setStatus("Подпись офлайн-подтверждения отправлена (${delivery.delivered}). Банк видит платёж подтверждённым.")
+        }
+        if (current != null) return
         val pending = runCatching { bank.pending() }.getOrNull() ?: return
         try {
             // The SDK checks that every displayed field matches the exact bytes it will sign.
@@ -206,6 +218,51 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Step 1, online: the QR content of the waiting payment. */
+    private fun fetchOfflineQr() {
+        lifecycleScope.launch {
+            busy = true
+            render()
+            try {
+                offlineQr = bank.offlineChallenge()
+                offlineCodeView.visibility = View.GONE
+                setStatus("QR получен. Отключите сеть (авиарежим и отсоедините USB-кабель), затем нажмите «Показать офлайн-код».")
+            } catch (e: Exception) {
+                show(e)
+            } finally {
+                busy = false
+                render()
+            }
+        }
+    }
+
+    /**
+     * Step 2, without network: the SDK checks the QR, asks for the biometric
+     * with the transaction and returns the 8-digit code; the signature waits in
+     * the SDK until the phone is online again.
+     */
+    private fun showOfflineCode() {
+        val qr = offlineQr ?: return
+        lifecycleScope.launch {
+            busy = true
+            render()
+            try {
+                val challenge = sdk.readOfflineChallenge(qr)
+                val code = sdk.confirmOffline(challenge, this@MainActivity)
+                offlineQr = null
+                current = null
+                offlineCodeView.text = "${code.take(4)} ${code.takeLast(4)}"
+                offlineCodeView.visibility = View.VISIBLE
+                setStatus("Введите этот код на странице демо-банка. Затем верните сеть (и кабель с adb reverse): приложение отправит подпись.")
+            } catch (e: Exception) {
+                show(e)
+            } finally {
+                busy = false
+                render()
+            }
+        }
+    }
+
     private fun createRecoveryPhrase() {
         lifecycleScope.launch {
             busy = true
@@ -244,6 +301,10 @@ class MainActivity : AppCompatActivity() {
         callButton.text = if (requiredCall == VerificationChannel.VIDEO) "Видеозвонок с сотрудником банка" else "Аудиозвонок с сотрудником банка"
         callButton.isEnabled = !busy && callNeeded
         approveButton.isEnabled = !busy && !callNeeded
+        offlineQrButton.visibility = if (requiredCall == null) View.VISIBLE else View.GONE
+        offlineCodeButton.visibility = offlineQrButton.visibility
+        offlineQrButton.isEnabled = !busy
+        offlineCodeButton.isEnabled = !busy && offlineQr != null
         paymentCard.visibility = View.VISIBLE
     }
 
@@ -332,6 +393,22 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { approve() }
         }
         paymentCard.addView(approveButton)
+        offlineQrButton = Button(this).apply {
+            text = "Офлайн: получить QR"
+            setOnClickListener { fetchOfflineQr() }
+        }
+        paymentCard.addView(offlineQrButton)
+        offlineCodeButton = Button(this).apply {
+            text = "Показать офлайн-код (без сети)"
+            setOnClickListener { showOfflineCode() }
+        }
+        paymentCard.addView(offlineCodeButton)
+        offlineCodeView = TextView(this).apply {
+            textSize = 34f
+            setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+            visibility = View.GONE
+        }
+        root.addView(offlineCodeView)
         root.addView(paymentCard, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = pad })

@@ -16,6 +16,12 @@ test('the software HSM adapter is refused in production and without ALLOW_INSECU
 });
 
 test('the software HSM adapter is available for development with ALLOW_INSECURE_DEVELOPMENT', async () => {
-  const hsm = await selectHsmAdapter({ HSM_ADAPTER: 'software', NODE_ENV: 'development', ALLOW_INSECURE_DEVELOPMENT: true });
+  const written = [];
+  const write = process.stderr.write;
+  process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return true; };
+  let hsm;
+  try { hsm = await selectHsmAdapter({ HSM_ADAPTER: 'software', NODE_ENV: 'development', ALLOW_INSECURE_DEVELOPMENT: true }); } finally { process.stderr.write = write; }
   assert.match(await hsm.evidencePublicKeyPem(), /BEGIN PUBLIC KEY/);
+  // Says that seals of earlier starts cannot be verified (finding B-16).
+  assert.ok(written.some((line) => /cannot be verified/.test(line)), written.join(''));
 });

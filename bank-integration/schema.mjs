@@ -294,7 +294,7 @@ BEGIN
      OR signed->>'credential_id' IS DISTINCT FROM sealed->>'credentialId' OR signed->>'transaction_reference' IS DISTINCT FROM pay.terms->>'transactionReference'
      OR signed->>'amount_minor' IS DISTINCT FROM pay.terms->>'amountMinor' OR signed->>'currency' IS DISTINCT FROM pay.terms->>'currency'
      OR signed->'beneficiary' IS DISTINCT FROM pay.terms->'beneficiary'
-     OR (pay.terms ? 'operationType' AND signed->>'operation_type' IS DISTINCT FROM pay.terms->>'operationType') THEN
+     OR signed->>'operation_type' IS DISTINCT FROM pay.terms->>'operationType' THEN
     RETURN 'the signed terms are not the terms of this payment';
   END IF;
   IF coalesce(signed->>'expires_at', '') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$' THEN
@@ -572,8 +572,9 @@ BEGIN
   IF p_payment IS NULL OR coalesce(p_reference, '') = '' OR jsonb_typeof(p_terms) IS DISTINCT FROM 'object'
      OR coalesce(p_terms->>'nexusId', '') !~ '^[0-9]{9}$' OR coalesce(p_terms->>'amountMinor', '') !~ '^[0-9]{1,18}$'
      OR coalesce(p_terms->>'currency', '') !~ '^[A-Z]{3}$' OR coalesce(p_terms->>'transactionReference', '') = ''
+     OR coalesce(p_terms->>'operationType', '') = ''
      OR jsonb_typeof(p_terms->'beneficiary') IS DISTINCT FROM 'object' THEN
-    RAISE EXCEPTION 'not a payment: identifier, reference and terms (nexusId, transactionReference, amountMinor, currency, beneficiary) are required'
+    RAISE EXCEPTION 'not a payment: identifier, reference and terms (nexusId, transactionReference, operationType, amountMinor, currency, beneficiary) are required'
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
   INSERT INTO bank.payments (payment_id, status, authorization_id, bank_transaction_reference, terms)

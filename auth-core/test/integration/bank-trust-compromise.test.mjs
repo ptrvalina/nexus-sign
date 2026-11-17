@@ -77,7 +77,7 @@ describe('a compromised Auth Core cannot make the bank execute (SoftHSM)', { ski
   /** What the bank asked for when it created the authorization. */
   const expectedOf = (auth, device) => ({
     authorizationId: auth.authorizationId, nexusId: device.nexusId, transactionReference: auth.transactionReference,
-    amountMinor: '125000', currency: 'PLN', beneficiary: { name: 'Anna Nowak', iban: 'PL61109010140000071219812874' },
+    amountMinor: '125000', currency: 'PLN', beneficiary: { name: 'Anna Nowak', iban: 'PL61109010140000071219812874' }, operationType: 'TRANSFER',
   });
 
   /** Everything Auth Core says, all of it positive in these cases. */
@@ -107,6 +107,12 @@ describe('a compromised Auth Core cannot make the bank execute (SoftHSM)', { ski
     const decision = await decide(evidence, expectedOf(auth, device), { chain: await chainOf(device.nexusId) });
     assert.deepEqual(decision.problems, []);
     assert.equal(decision.allowed, true);
+    // The signed operation type is a term too (finding C-17): another one, or none, is refused.
+    const otherType = await decide(evidence, { ...expectedOf(auth, device), operationType: 'CASH_WITHDRAWAL' });
+    assert.ok(otherType.problems.some((p) => /signed operation_type/.test(p)), otherType.problems.join('; '));
+    const { operationType, ...withoutType } = expectedOf(auth, device);
+    assert.equal(operationType, 'TRANSFER');
+    assert.ok((await decide(evidence, withoutType)).problems.includes('expected operation_type not given'));
   });
 
   test('2. a credential enrolled by Auth Core alone (no bank token, invented replacement, claimed attestation)', async () => {

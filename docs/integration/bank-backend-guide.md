@@ -211,6 +211,8 @@ A bank that receives the signature from the app over its own channel can submit 
 { "status": "VERIFIED", "evidence": { "evidenceId": "...", "chainSequence": 7, "evidenceHash": "3f9a...e1" } }
 ```
 
+**HTTP status is not the result (finding A1-11).** `POST .../signature` and `POST .../offline-confirmation` answer **HTTP 200 for a refused signature or code too**, with `{"status": "FAILED", "reason": ..., "attempts": ...}`: the request was processed, the confirmation was not accepted. Read `status`; only `VERIFIED` (or `PROVISIONAL` for an offline v2 code) is a confirmation. An expired authorization answers 410; the deferred device signature answers 422 or 409 for a refused signature. Kept as is for compatibility with integrations of 1.x.
+
 `FAILED` with `reason: credential_integrity` means that the credential's keys in the database differ from its sealed enrolment; Auth Core refused to use them and recorded `integrity_violation`. Treat it as a security incident, not as a customer error.
 
 In push mode `BANK`, `verificationPolicy.pushTimeoutSeconds` is informational. When the bank's push service sees no delivery or no answer in time, the bank backend escalates with `PUSH_NOT_DELIVERED` or `PUSH_TIMEOUT` (step 11).

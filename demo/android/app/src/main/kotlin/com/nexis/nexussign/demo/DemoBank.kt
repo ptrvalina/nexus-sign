@@ -36,6 +36,13 @@ class DemoBank(
         return Pending(id, body.optString("call").takeIf { it == "AUDIO" || it == "VIDEO" })
     }
 
+    /**
+     * The content of the offline QR code for the waiting payment. In a branch
+     * the bank's screen shows it; the demo hands it to the app while online.
+     */
+    suspend fun offlineChallenge(): String =
+        JSONObject(request("GET", "/app/offline-challenge", null)).getString("qrPayload")
+
     private suspend fun request(method: String, path: String, body: String?): String = withContext(Dispatchers.IO) {
         val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method

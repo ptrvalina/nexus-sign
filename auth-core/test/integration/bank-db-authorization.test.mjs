@@ -427,6 +427,24 @@ describe('bank database authorization (PostgreSQL)', { skip: skipWithoutServices
     await assert.rejects(db.pools.operator.query(`SELECT * FROM bank.approve_credential('{}')`), /permission denied/);
   });
 
+  test('a payment without an operation type is refused; the signed operation type is compared (finding C-17)', async () => {
+    const nexusId = nexus();
+    const terms = { nexusId, transactionReference: 'tx-c17', amountMinor: '100', currency: 'PLN', beneficiary: { name: 'Anna Nowak', iban: 'PL61109010140000071219812874' } };
+    await assert.rejects(store.createPayment({ paymentId: randomUUID(), bankTransactionReference: 'CORE-c17', terms }), /operationType/);
+    // Signed TRANSFER, recorded by the bank as another operation type: not approved.
+    const device = maker.device(nexusId);
+    await approveDevice(device);
+    const paymentId = randomUUID(); const authorizationId = randomUUID();
+    const recorded = { ...terms, transactionReference: 'tx-c17b', operationType: 'CASH_WITHDRAWAL' };
+    await store.createPayment({ paymentId, bankTransactionReference: 'CORE-c17b', terms: recorded });
+    await store.attachAuthorization(paymentId, authorizationId);
+    const claim = await store.claim(paymentId, 30_000);
+    const evidence = maker.confirm(device, { authorizationId, terms: { ...recorded, operationType: 'TRANSFER' } });
+    const approval = await store.approveExecution(paymentId, claim.attemptId, evidence, 30_000);
+    assert.equal(approval.ok, false);
+    assert.match(JSON.stringify(approval), /not the terms of this payment/);
+  });
+
   test('a person settles a REVIEW under their own database identity', async () => {
     const p = await claimed();
     assert.equal((await store.approveExecution(p.paymentId, p.attemptId, p.evidence, 30_000)).ok, true);

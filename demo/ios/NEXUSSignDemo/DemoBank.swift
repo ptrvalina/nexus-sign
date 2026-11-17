@@ -35,6 +35,14 @@ struct DemoBank {
         return (id, (body["call"] as? String).flatMap(VerificationChannel.init(rawValue:)))
     }
 
+    /// The content of the offline QR code for the waiting payment. In a branch
+    /// the bank's screen shows it; the demo hands it to the app while online.
+    func offlineChallenge() async throws -> String {
+        let body = try await request("GET", "app/offline-challenge", body: nil)
+        guard let qr = body["qrPayload"] as? String else { throw Failure(message: "the demo bank sent no QR content") }
+        return qr
+    }
+
     private func request(_ method: String, _ path: String, body: Data?) async throws -> [String: Any] {
         var request = URLRequest(url: baseURL.appendingPathComponent(path), timeoutInterval: 10)
         request.httpMethod = method

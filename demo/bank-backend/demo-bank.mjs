@@ -188,7 +188,7 @@ async function paymentRows() {
   const rows = [];
   for (const payment of [...payments].reverse()) {
     const current = await authCore('GET', `/v1/authorizations/${payment.authorizationId}`);
-    rows.push({ ...payment, status: paymentStatus(current.json, current.status), confirmationMethod: current.json?.confirmationMethod ?? null });
+    rows.push({ ...payment, state: current.json?.state ?? null, status: paymentStatus(current.json, current.status), confirmationMethod: current.json?.confirmationMethod ?? null });
   }
   return rows;
 }
@@ -198,7 +198,7 @@ const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&':
 async function page(message = '') {
   const rows = await paymentRows();
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Демо-банк</title>
-<meta http-equiv="refresh" content="5; url=/">
+<script>setInterval(() => { const a = document.activeElement; if (!a || !['INPUT', 'SELECT'].includes(a.tagName)) location.replace('/'); }, 5000);</script>
 <style>body{font-family:system-ui,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#1d2b3f}
 h1{font-size:22px}fieldset{border:1px solid #cdd8e6;border-radius:8px;padding:12px 16px;margin:16px 0}
 label{display:inline-block;margin:6px 12px 6px 0}input{padding:6px 8px;border:1px solid #b9c7d8;border-radius:6px}
@@ -218,11 +218,11 @@ ${message ? `<p class="msg">${escape(message)}</p>` : ''}
 <label>Проверка <select name="call"><option value="">только подпись</option><option value="VIDEO">видеозвонок с сотрудником</option><option value="AUDIO">аудиозвонок с сотрудником</option></select></label>
 <button type="submit">Отправить на подтверждение</button></fieldset></form>
 <table><tr><th>Создан</th><th>Референс</th><th>Сумма</th><th>Получатель</th><th>Статус</th></tr>
-${rows.map((r) => `<tr><td>${r.createdAt.toLocaleTimeString('ru-RU')}</td><td><code>${escape(r.reference)}</code></td><td>${(r.amountMinor / 100).toFixed(2)} ${escape(r.currency)}</td><td>${escape(r.beneficiary.name)}<br><small>${escape(r.beneficiary.iban)}</small></td><td class="${r.status.css}">${escape(r.status.label)}${r.confirmationMethod ? `<br><small>${escape(r.confirmationMethod)}</small>` : ''}</td></tr>`).join('') || '<tr><td colspan="5">Платежей пока нет.</td></tr>'}
+${rows.map((r) => `<tr><td>${r.createdAt.toLocaleTimeString('ru-RU')}</td><td><code>${escape(r.reference)}</code></td><td>${(r.amountMinor / 100).toFixed(2)} ${escape(r.currency)}</td><td>${escape(r.beneficiary.name)}<br><small>${escape(r.beneficiary.iban)}</small></td><td class="${r.status.css}">${escape(r.status.label)}${r.confirmationMethod ? `<br><small>${escape(r.confirmationMethod)}</small>` : ''}${r.state === 'PENDING_USER' ? `<form method="post" action="/ops/offline-code" style="margin-top:4px"><input type="hidden" name="authorizationId" value="${escape(r.authorizationId)}"><input name="code" placeholder="офлайн-код" size="10" inputmode="numeric"> <button type="submit" style="padding:4px 10px">Ввести</button></form>` : ''}</td></tr>`).join('') || '<tr><td colspan="5">Платежей пока нет.</td></tr>'}
 </table>
 <p><small>Статус — это ответ Auth Core, а не основание для исполнения. Демо-банк ничего не исполняет; настоящий банк исполняет платёж только через свою границу исполнения (<code>bank-integration/</code>) с собственной проверкой доверия.</small></p>
 ${customer.nexusId ? `<p><a href="/ops/evidence">Цепочка доказательств клиента (JSON)</a></p>` : ''}
-<p><small>Страница обновляется каждые 5 секунд.</small></p></body></html>`;
+<p><small>Страница обновляется каждые 5 секунд (кроме времени, когда вы вводите данные).</small></p></body></html>`;
 }
 
 // --- HTTP -------------------------------------------------------------------
@@ -259,7 +259,38 @@ async function appRoutes(req, res, pathname) {
     return true;
   }
   if (req.method === 'GET' && pathname === '/app/pending') { send(res, 200, await pending()); return true; }
+  if (req.method === 'GET' && pathname === '/app/offline-challenge') { send(res, 200, await offlineChallenge()); return true; }
   return false;
+}
+
+/**
+ * Offline confirmation in the demo: in a real branch or ATM the bank's
+ * screen shows this QR code and the phone scans it without network. Here the
+ * app fetches the QR content once while online; the customer then turns on
+ * airplane mode, the phone computes the 8-digit code under biometrics, and the
+ * code is typed on the operator page. The phone uploads its signature when it
+ * is back online (offline confirmation v2/v3).
+ */
+async function offlineChallenge() {
+  const { authorizationId } = await pending();
+  if (!authorizationId) throw new HttpError(404, 'Нет платежа, ожидающего клиента.');
+  const challenge = await authCore('GET', `/v1/authorizations/${authorizationId}/offline-challenge`);
+  if (challenge.status !== 200) throw new HttpError(challenge.status, `Auth Core: ${challenge.text}`);
+  log(`offline QR for ${authorizationId} handed to the app`);
+  return { authorizationId, qrPayload: challenge.json.qrPayload, expiresAt: challenge.json.expiresAt };
+}
+
+/** The 8-digit code the customer reads from the phone, typed on the operator page. */
+async function submitOfflineCode({ authorizationId, code }) {
+  if (!payments.some((p) => p.authorizationId === authorizationId)) throw new HttpError(404, 'Неизвестный платёж.');
+  const digits = String(code ?? '').replace(/\s+/g, '');
+  if (!/^\d{8}$/.test(digits)) throw new HttpError(400, 'Код — 8 цифр.');
+  const result = await authCore('POST', `/v1/authorizations/${authorizationId}/offline-confirmation`, { code: digits });
+  if (result.status !== 200) throw new HttpError(result.status, `Auth Core: ${result.text}`);
+  log(`offline code for ${authorizationId}: ${result.json.status}`);
+  return result.json.status === 'PROVISIONAL'
+    ? 'Код принят: платёж ждёт подпись телефона (не исполнять). Выключите авиарежим на телефоне — приложение отправит подпись.'
+    : result.json.status === 'VERIFIED' ? 'Код принят, платёж подтверждён.' : `Код не принят (${result.json.reason ?? result.json.status}).`;
 }
 
 function handle(routes) {
@@ -281,6 +312,12 @@ const operator = createServer(handle(async (req, res, pathname) => {
   if (req.method === 'POST' && pathname === '/ops/payments') {
     let message;
     try { await createPayment(await readBody(req)); message = 'Платёж отправлен. Откройте демо-приложение на телефоне.'; } catch (e) { message = e.message; }
+    send(res, 200, await page(message), 'text/html; charset=utf-8');
+    return true;
+  }
+  if (req.method === 'POST' && pathname === '/ops/offline-code') {
+    let message;
+    try { message = await submitOfflineCode(await readBody(req)); } catch (e) { message = e.message; }
     send(res, 200, await page(message), 'text/html; charset=utf-8');
     return true;
   }

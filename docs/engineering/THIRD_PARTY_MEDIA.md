@@ -118,3 +118,16 @@ Options for the owner (not acted on, no automatic upgrade): (a) keep 153.0.0 and
 - Releases page of stasel/WebRTC fetched again: M150 (150.0.0) is "Latest"; 153.0.0 does not appear on the first page (M150 back to M137). The tags page could not be read (the site disallows automated fetching), so the existence of the 153.0.0 tag is **still unconfirmed**; a web search returned only Swift Package Index build pages that could not be opened.
 - No artifact was downloaded (Maven Central and Google Maven refused by the proxy; GitHub downloads not enabled), so no SHA-256 was computed for either binary and no licence or NOTICE file inside them was read.
 - Versions unchanged.
+
+## Verification in CI 2026-11-17 (finding D-14)
+
+The Security workflow job `WebRTC binaries (checksums, signature, licence files)` (`.github/media/check-webrtc-binaries.sh`) downloads exactly the pinned versions on a GitHub runner, which can reach Maven Central and GitHub. First run: job `133847260552` of run `44026272757`, commit `c0fae11`; the report is kept as the artifact `webrtc-binaries-report`. The job fails on a checksum mismatch or an invalid signature, so every pull request re-checks these facts.
+
+| | Android `io.github.webrtc-sdk:android:150.7871.01` | iOS `stasel/WebRTC` 153.0.0 |
+|---|---|---|
+| SHA-256 computed from the downloaded artifact | `0a1627b1a48c2bc17d9a40d62fc47bd45166f44a311e95917f147c402de379b0` (AAR) | `3e3a8946f27510133e3feed04d05fa23505bbe366e977620503bfc7986c2b78f` (`WebRTC-M153.xcframework.zip`) |
+| Publisher's checksum | Matches Maven Central's `.sha1` and `.sha256` | Matches the `binaryTarget` checksum in `Package.swift` of tag 153.0.0: **the tag exists**, and the checksum known earlier only from third-party texts is now confirmed |
+| Signature | Maven Central PGP signature of AAR and POM **valid**, key `E65BD4351D0FF0EF9C0C15FF3CCBD94F6FC0F446`, user ID `dliu1030 <dl@watercooler.fm>`. That this key belongs to the webrtc-sdk project is **not established** (no fingerprint published by the project was found) | None (SwiftPM verifies the checksum on download) |
+| Licence files inside the artifact | **None** in the AAR; the POM declares BSD-3-Clause | `WebRTC.xcframework/LICENSE` (contents not reviewed) |
+
+Status of the open items: **TPM-3 closed** (tag, checksum). **TPM-2 in part**: checksums and signature verified on every run; the signer's key is not confirmed as the project's, and Gradle dependency verification metadata is not committed. **TPM-1, TPM-4 to TPM-7 open**: source revision, licence inventory, codec patents, vulnerability review and the build-it-yourself decision remain the owner's, so the binaries stay at development approval (D-015) and the release blocker remains.
