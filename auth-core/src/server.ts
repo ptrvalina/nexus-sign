@@ -9,6 +9,7 @@ import { startWebhookWorker } from './workers/webhookWorker';
 import { startPushWorker } from './workers/pushWorker';
 import { startExpiryWorker } from './workers/expiryWorker';
 import { loadMasterKeys } from './crypto/masterKeyVault';
+import { countUnboundWebhookSecrets, unboundWebhookSecretsProblem } from './config/legacySecrets';
 
 const logger = pino({
   level: env.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -58,6 +59,9 @@ async function main(): Promise<void> {
   logger.info({ hsmAdapter: hsmAdapter.name, env: env.NODE_ENV }, 'Starting NEXUS-SIGN Auth Core');
 
   await pool.query('SELECT 1'); // fail fast if Postgres is unreachable
+  const legacy = unboundWebhookSecretsProblem(await countUnboundWebhookSecrets(pool), env.NODE_ENV);
+  if (legacy?.refuse) throw new Error(legacy.message);
+  if (legacy) logger.warn(legacy.message);
   await redis.ping(); // fail fast if Redis is unreachable
 
   const app = buildApp(hsmAdapter, logger);

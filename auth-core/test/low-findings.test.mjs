@@ -93,3 +93,15 @@ test('A security event that cannot be audited is written to the log instead of v
   await ok.recordSecurityEvent('integrity_violation', {}, {}, (line) => none.push(line));
   assert.deepEqual(none, [], 'nothing is logged when the audit row is written');
 });
+
+test('pre-2.0 unbound webhook secrets stop a production start and warn elsewhere (B-11)', async () => {
+  const { countUnboundWebhookSecrets, unboundWebhookSecretsProblem } = loadTs('config/legacySecrets.ts');
+  assert.equal(unboundWebhookSecretsProblem(0, 'production'), null);
+  assert.equal(unboundWebhookSecretsProblem(2, 'production').refuse, true);
+  assert.match(unboundWebhookSecretsProblem(2, 'production').message, /rotateSecretKeys\.js webhook/);
+  assert.equal(unboundWebhookSecretsProblem(2, 'development').refuse, false);
+  let sql = '';
+  const count = await countUnboundWebhookSecrets({ query: async (text) => { sql = text; return { rows: [{ n: 3 }] }; } });
+  assert.equal(count, 3);
+  assert.match(sql, /NOT LIKE 'k1\$%' AND webhook_secret_encrypted NOT LIKE 'v2\$%'/);
+});
