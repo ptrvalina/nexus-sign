@@ -109,7 +109,7 @@ class MainActivity : AppCompatActivity() {
         val delivery = runCatching { sdk.submitPendingOfflineSignatures() }.getOrNull()
         if (delivery != null && delivery.delivered > 0) {
             offlineCodeView.visibility = View.GONE
-            setStatus("Подпись офлайн-подтверждения отправлена (${delivery.delivered}). Банк видит платёж подтверждённым.")
+            setStatus("Подпись офлайн-подтверждения отправлена в банк (${delivery.delivered}). Итог — на странице демо-банка.")
         }
         if (current != null) return
         val pending = runCatching { bank.pending() }.getOrNull() ?: return

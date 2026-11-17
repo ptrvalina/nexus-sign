@@ -211,7 +211,7 @@ final class DemoModel: ObservableObject {
         let delivery = await sdk.submitPendingOfflineSignatures()
         if delivery.delivered > 0 {
             offlineCode = nil
-            status = "Подпись офлайн-подтверждения отправлена (\(delivery.delivered)). Банк видит платёж подтверждённым."
+            status = "Подпись офлайн-подтверждения отправлена в банк (\(delivery.delivered)). Итог — на странице демо-банка."
         }
         guard authorization == nil else { return }
         guard let pending = try? await bank.pending() else { return }
