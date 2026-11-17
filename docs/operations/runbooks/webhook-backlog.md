@@ -60,6 +60,8 @@ LIMIT 50;
 
 The admin console shows the same data: `GET /admin/api/webhook-deliveries?status=PENDING&limit=100` (statuses `PENDING`, `DELIVERED`, `FAILED`; limit at most 500).
 
+Once the cause is fixed, an operator sends a `FAILED` delivery again with `POST /admin/api/webhook-deliveries/{id}/redeliver`: it returns to `PENDING` with a new retry budget and the same `eventId`, so the bank's deduplication still applies; the request is audited as `webhook_redelivery_requested`, and a bank-scoped operator reaches only its bank's deliveries.
+
 Read the pattern:
 
 | Pattern | Likely cause |

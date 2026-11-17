@@ -80,6 +80,7 @@ export type AuditEventType =
   | 'admin_authorizations_viewed'
   | 'admin_devices_viewed'
   | 'admin_audit_log_viewed'
+  | 'webhook_redelivery_requested'
   | 'admin_approval_requested'
   | 'admin_approval_granted'
   | 'admin_approval_rejected'

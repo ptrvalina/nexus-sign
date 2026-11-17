@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { login, logout, resolveSession, InvalidAdminCredentialsError } from '../services/adminAuthService';
 import { ADMIN_SESSION_COOKIE, getSessionTokenFromRequest, requireAdminSession, requireRole, type AdminRequest } from '../middleware/adminAuth';
 import { listBankClients } from '../services/clientService';
-import { listAuditLogs, listWebhookDeliveries, getDashboardStats } from '../services/adminService';
+import { listAuditLogs, listWebhookDeliveries, getDashboardStats, redeliverWebhook } from '../services/adminService';
 import { suspendNexusIdentity } from '../services/nexusIdentityService';
 import { decideApproval, identityInScope, listApprovals, requestApproval, type AdminApproval } from '../services/adminApprovalService';
 import { recordAuditEvent } from '../services/auditService';
@@ -191,6 +191,17 @@ export function buildAdminRouter(options: { cookieSecure: boolean; hsm: HsmAdapt
           deliveredAt: d.deliveredAt?.toISOString() ?? null,
         })),
       );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/admin/api/webhook-deliveries/:deliveryId/redeliver', requireRole('operator'), async (req, res, next) => {
+    try {
+      const delivery = await redeliverWebhook(uuidSchema.parse(req.params.deliveryId), sessionOf(req as AdminRequest).clientId);
+      await recordAuditEvent('webhook_redelivery_requested', { clientId: delivery.clientId },
+        { deliveryId: req.params.deliveryId, eventId: delivery.eventId, eventType: delivery.eventType });
+      res.status(202).json({ status: 'PENDING', ...delivery });
     } catch (error) {
       next(error);
     }

@@ -138,6 +138,28 @@ describe('admin console', { skip: skipWithoutServices }, () => {
     assert.equal((await session.call('GET', '/admin/api/me')).status, 401, 'the old session ended');
   });
 
+  test('a failed webhook delivery can be sent again, by an operator of its bank only (finding A2-08)', async () => {
+    const failed = async (clientId) => (await server.db.query(
+      `INSERT INTO webhook_deliveries (event_id, client_id, event_type, payload, status, retry_count, last_error)
+       VALUES (gen_random_uuid(), $1, 'authorization.verified', '{}', 'FAILED', 8, 'HTTP 503') RETURNING id, event_id`, [clientId])).rows[0];
+    const own = await failed('bank-a');
+    const other = await failed('bank-b');
+    const a = await adminSession(server, operatorA);
+    const redeliver = (id) => a.call('POST', `/admin/api/webhook-deliveries/${id}/redeliver`);
+    const accepted = await redeliver(own.id);
+    assert.equal(accepted.status, 202, accepted.text);
+    assert.equal(accepted.json.eventId, own.event_id, 'the event ID is kept, so the bank can deduplicate');
+    const row = (await server.db.query(`SELECT retry_count, event_id FROM webhook_deliveries WHERE id = $1`, [own.id])).rows[0];
+    assert.deepEqual(row, { retry_count: 0, event_id: own.event_id });
+    const audit = await server.db.query(`SELECT actor, client_id, details FROM audit_logs WHERE event_type = 'webhook_redelivery_requested'`);
+    assert.equal(audit.rows.length, 1);
+    assert.equal(audit.rows[0].actor, 'admin:operator-a');
+    assert.equal(audit.rows[0].client_id, 'bank-a');
+    assert.equal((await redeliver(other.id)).status, 404, 'another bank\'s delivery is not visible');
+    const delivered = (await server.db.query(`INSERT INTO webhook_deliveries (event_id, client_id, event_type, payload, status) VALUES (gen_random_uuid(), 'bank-a', 'x', '{}', 'DELIVERED') RETURNING id`)).rows[0];
+    assert.equal((await redeliver(delivered.id)).status, 404, 'only FAILED deliveries are sent again');
+  });
+
   test('the database refuses an approval executed by its requester', async () => {
     const { nexusId } = await bankA.createIdentity();
     await server.db.query(`INSERT INTO admin_approvals (action, nexus_id, client_id, reason, requested_by, expires_at) VALUES ('REVOKE', $1, 'bank-a', 'r', 'platform-1', now() + interval '1 hour')`, [nexusId]);
