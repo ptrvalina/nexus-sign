@@ -23,6 +23,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  * This tests ordering, buffering, restarts and endings; it is not a media
  * test and says nothing about WebRTC on a device.
  */
+/** What every real answer carries: DTLS-SRTP needs the certificate hash. */
+private val DTLS_FINGERPRINT = "\r\na=fingerprint:sha-256 " + List(32) { "AB" }.joinToString(":")
+
 class VerificationCallControllerTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     @After fun tearDown() = scope.cancel()
@@ -91,7 +94,8 @@ class VerificationCallControllerTest {
             events.onCaptureState(cameraOn = video, microphoneOn = true)
         }
         override suspend fun createOffer(iceRestart: Boolean): String { offerCount++; log += "offer:$iceRestart"; return "v=0 offer $offerCount" }
-        override suspend fun applyAnswer(sdp: String) { log += "answer:$sdp" }
+        // Logs the first SDP line; the rest is the DTLS fingerprint.
+        override suspend fun applyAnswer(sdp: String) { log += "answer:${sdp.lines()[0]}" }
         override suspend fun addRemoteCandidate(candidate: IceCandidateInit) { log += "remote:${candidate.candidate}" }
         override fun setMicrophoneEnabled(enabled: Boolean) { log += "mic:$enabled" }
         override fun setCameraEnabled(enabled: Boolean) { log += "camera:$enabled" }
@@ -120,7 +124,7 @@ class VerificationCallControllerTest {
         until("candidate seen") { call.state.value == CallState.WaitingForOperator && relay.toOperator.size == 2 }
         delay(150)
         assertTrue("not applied before the answer", engine.log.none { it.startsWith("remote:") })
-        relay.operator(CallMessage.Answer("v=0 answer"))
+        relay.operator(CallMessage.Answer("v=0 answer" + DTLS_FINGERPRINT))
         until("answer applied") { engine.log.contains("remote:candidate:9 1 udp 1 10.0.0.9 9 typ host") }
         assertEquals(listOf("prepare", "offer:false", "answer:v=0 answer", "remote:candidate:9 1 udp 1 10.0.0.9 9 typ host"), engine.log.toList())
         assertEquals(CallState.Connecting, call.state.value)
@@ -154,13 +158,13 @@ class VerificationCallControllerTest {
         val call = VerificationCallController(relay, engine, scope, fast)
         call.start()
         until("offer") { relay.offersSent().isNotEmpty() }
-        relay.operator(CallMessage.Answer("v=0 a1"))
+        relay.operator(CallMessage.Answer("v=0 a1" + DTLS_FINGERPRINT))
         until("answer") { engine.log.contains("answer:v=0 a1") }
         relay.operator(CallMessage.Candidate(candidate(4)))
         until("candidate") { engine.log.any { it.contains("10.0.0.4") } }
         relay.replay(0)                                           // same seq again
         relay.replay(1)
-        relay.operator(CallMessage.Answer("v=0 a2"))              // no outstanding offer
+        relay.operator(CallMessage.Answer("v=0 a2" + DTLS_FINGERPRINT))              // no outstanding offer
         relay.operator(CallMessage.Offer("v=0 from operator"))     // the device always offers
         relay.operator(CallMessage.Candidate(candidate(3)), from = "device")
         until("all seen") { call.ignoredMessages >= 3 }
@@ -175,7 +179,7 @@ class VerificationCallControllerTest {
         val call = VerificationCallController(relay, engine, scope, fast)
         call.start()
         until("offer") { relay.offersSent().size == 1 }
-        relay.operator(CallMessage.Answer("v=0 a1"))
+        relay.operator(CallMessage.Answer("v=0 a1" + DTLS_FINGERPRINT))
         until("answer") { engine.log.contains("answer:v=0 a1") }
         engine.events.onConnectionState(MediaConnectionState.CONNECTED)
         until("connected") { call.state.value == CallState.Connected }
@@ -185,7 +189,7 @@ class VerificationCallControllerTest {
         assertTrue(engine.log.contains("offer:true"))
         engine.events.onLocalCandidate(candidate(5))
         until("candidate of the new offer") { relay.toOperator.last() is CallMessage.Candidate }
-        relay.operator(CallMessage.Answer("v=0 a2"))
+        relay.operator(CallMessage.Answer("v=0 a2" + DTLS_FINGERPRINT))
         until("second answer") { engine.log.contains("answer:v=0 a2") }
         engine.events.onConnectionState(MediaConnectionState.CONNECTED)
         until("connected again") { call.state.value == CallState.Connected }
@@ -196,7 +200,7 @@ class VerificationCallControllerTest {
         val call = VerificationCallController(relay, engine, scope, fast.copy(reconnectGraceMillis = 300))
         call.start()
         until("offer") { relay.offersSent().size == 1 }
-        relay.operator(CallMessage.Answer("v=0 a1"))
+        relay.operator(CallMessage.Answer("v=0 a1" + DTLS_FINGERPRINT))
         until("answer") { engine.log.contains("answer:v=0 a1") }
         engine.events.onConnectionState(MediaConnectionState.CONNECTED)
         until("connected") { call.state.value == CallState.Connected }
@@ -213,11 +217,11 @@ class VerificationCallControllerTest {
         val call = VerificationCallController(relay, engine, scope, fast.copy(maxIceRestarts = 1))
         call.start()
         until("offer") { relay.offersSent().size == 1 }
-        relay.operator(CallMessage.Answer("v=0 a1"))
+        relay.operator(CallMessage.Answer("v=0 a1" + DTLS_FINGERPRINT))
         until("answer") { engine.log.contains("answer:v=0 a1") }
         engine.events.onConnectionState(MediaConnectionState.FAILED)
         until("restart") { relay.offersSent().size == 2 }
-        relay.operator(CallMessage.Answer("v=0 a2"))
+        relay.operator(CallMessage.Answer("v=0 a2" + DTLS_FINGERPRINT))
         until("answer 2") { engine.log.contains("answer:v=0 a2") }
         engine.events.onConnectionState(MediaConnectionState.FAILED)
         until("ended") { call.isEnded }
@@ -294,7 +298,7 @@ class VerificationCallControllerTest {
             val call = VerificationCallController(relay, engine, scope, fast)
             call.start()
             until("offer") { relay.offersSent().isNotEmpty() }
-            relay.operator(CallMessage.Answer("v=0 answer"))
+            relay.operator(CallMessage.Answer("v=0 answer" + DTLS_FINGERPRINT))
             until("answer handled") { call.state.value != CallState.WaitingForOperator }
             delay(30)
             assertEquals("round $round", CallState.Connected, call.state.value)
@@ -330,6 +334,32 @@ class VerificationCallControllerTest {
         assertEquals(1, engine.releases)
     }
 
+    @Test fun `an answer without a DTLS fingerprint ends the call (finding D-14)`() = runBlocking {
+        val relay = Relay(); val engine = Engine()
+        val call = VerificationCallController(relay, engine, scope, fast)
+        call.start()
+        until("offer") { relay.offersSent().isNotEmpty() }
+        relay.operator(CallMessage.Answer("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:abc"))
+        until("ended") { call.isEnded }
+        val reason = (call.state.value as CallState.Ended).reason
+        assertTrue("failed: $reason", reason is CallEndReason.Failed && (reason.error as SecurityException).message == "the operator's answer has no DTLS fingerprint")
+        assertTrue("the answer is not applied", engine.log.none { it.startsWith("answer:") })
+        until("cancelled") { relay.cancelled == 1 }
+        assertEquals(1, engine.releases)
+    }
+
+    @Test fun `DTLS fingerprint check`() {
+        fun hash(n: Int) = List(n) { "0f" }.joinToString(":")
+        assertTrue(hasDtlsFingerprint("v=0\r\na=fingerprint:sha-256 ${hash(32)}\r\n"))
+        assertTrue(hasDtlsFingerprint("v=0\na=fingerprint:SHA-384 ${hash(48)}"))
+        assertTrue(hasDtlsFingerprint("a=fingerprint:sha-512 ${hash(64)}"))
+        assertFalse(hasDtlsFingerprint("v=0\r\n"))
+        assertFalse(hasDtlsFingerprint("a=fingerprint:sha-256 ${hash(31)}"))
+        assertFalse(hasDtlsFingerprint("a=fingerprint:sha-1 ${hash(20)}"))
+        assertFalse(hasDtlsFingerprint("a=fingerprint:sha-256 ${hash(31)}:zz"))
+        assertFalse(hasDtlsFingerprint("a=fingerprint:sha-256"))
+    }
+
     @Test fun `hanging up cancels the session once and releases media`() = runBlocking {
         val relay = Relay(); val engine = Engine()
         val call = VerificationCallController(relay, engine, scope, fast)
@@ -350,7 +380,7 @@ class VerificationCallControllerTest {
         relay.failReceives = 3
         call.start()
         until("offer") { relay.offersSent().isNotEmpty() }
-        relay.operator(CallMessage.Answer("v=0 a1"))
+        relay.operator(CallMessage.Answer("v=0 a1" + DTLS_FINGERPRINT))
         until("answer after the outage") { engine.log.contains("answer:v=0 a1") }
         assertTrue(!call.isEnded)
     }

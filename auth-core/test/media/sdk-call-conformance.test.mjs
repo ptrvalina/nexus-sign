@@ -59,7 +59,7 @@ describe('SDK call state machine against Auth Core', { skip }, () => {
     assert.deepEqual(received.map((s) => s.type).slice(0, 2), ['offer', 'candidate'], `device sent offer then candidate: ${output}`);
     assert.match(received[0].payload.sdp, /^v=0/);
     assert.equal(received[1].payload.sdpMid, '0');
-    assert.equal((await op('POST', '/signals', { type: 'answer', payload: { sdp: 'v=0 conformance answer' } })).status, 201);
+    assert.equal((await op('POST', '/signals', { type: 'answer', payload: { sdp: `v=0 conformance answer\r\na=fingerprint:sha-256 ${Array(32).fill('AB').join(':')}` } })).status, 201);
     assert.equal((await op('POST', '/signals', { type: 'candidate', payload: { candidate: 'candidate:7 1 udp 2122260223 192.0.2.20 50001 typ host', sdpMid: '0', sdpMLineIndex: 0 } })).status, 201);
     await new Promise((r) => setTimeout(r, 1500));
     assert.equal((await op('POST', '/decision', { result: 'VERIFIED' })).status, 200);

@@ -1,6 +1,9 @@
 import XCTest
 @testable import NEXUSSign
 
+/// What every real answer carries: DTLS-SRTP needs the certificate hash.
+let dtlsFingerprint = "\r\na=fingerprint:sha-256 " + Array(repeating: "AB", count: 32).joined(separator: ":")
+
 /// The call state machine against an in-memory relay with Auth Core's
 /// signalling rules and a scripted media engine (same cases as the Android
 /// SDK's VerificationCallControllerTest). Not a media test.
@@ -91,7 +94,8 @@ final class VerificationCallControllerTests: XCTestCase {
             events.captureState(cameraOn: video, microphoneOn: true)
         }
         func createOffer(iceRestart: Bool) async throws -> String { offers += 1; add("offer:\(iceRestart)"); return "v=0 offer \(offers)" }
-        func applyAnswer(sdp: String) async throws { add("answer:\(sdp)") }
+        // Logs the first SDP line; the rest is the DTLS fingerprint.
+        func applyAnswer(sdp: String) async throws { add("answer:\(sdp.components(separatedBy: "\r\n")[0])") }
         func addRemoteCandidate(_ candidate: IceCandidateInit) async throws { add("remote:\(candidate.candidate)") }
         func setMicrophoneEnabled(_ enabled: Bool) { add("mic:\(enabled)") }
         func setCameraEnabled(_ enabled: Bool) { add("camera:\(enabled)") }
@@ -125,7 +129,7 @@ final class VerificationCallControllerTests: XCTestCase {
         relay.operatorSends(.candidate(candidate(9)))
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertFalse(engine.log.contains { $0.hasPrefix("remote:") }, "held until the answer")
-        relay.operatorSends(.answer(sdp: "v=0 answer"))
+        relay.operatorSends(.answer(sdp: "v=0 answer" + dtlsFingerprint))
         try await until("candidate applied") { engine.log.last == "remote:candidate:9 1 udp 1 10.0.0.9 9 typ host" }
         XCTAssertEqual(engine.log, ["prepare", "offer:false", "answer:v=0 answer", "remote:candidate:9 1 udp 1 10.0.0.9 9 typ host"])
         engine.events.connectionState(.connected)
@@ -144,11 +148,11 @@ final class VerificationCallControllerTests: XCTestCase {
         let relay = Relay(), engine = Engine()
         let call = VerificationCallController(signalling: relay, engine: engine, options: fast)
         await call.start()
-        relay.operatorSends(.answer(sdp: "v=0 a1"))
+        relay.operatorSends(.answer(sdp: "v=0 a1" + dtlsFingerprint))
         relay.operatorSends(.candidate(candidate(4)))
         try await until("candidate") { engine.log.contains { $0.contains("10.0.0.4") } }
         relay.replay(0); relay.replay(1)
-        relay.operatorSends(.answer(sdp: "v=0 a2"))
+        relay.operatorSends(.answer(sdp: "v=0 a2" + dtlsFingerprint))
         relay.operatorSends(.offer(sdp: "v=0 from operator"))
         try await until("ignored") { await call.ignoredMessages >= 4 }
         XCTAssertEqual(engine.log.filter { $0.hasPrefix("answer:") }.count, 1)
@@ -159,14 +163,14 @@ final class VerificationCallControllerTests: XCTestCase {
         let relay = Relay(), engine = Engine()
         let call = VerificationCallController(signalling: relay, engine: engine, options: fast)
         await call.start()
-        relay.operatorSends(.answer(sdp: "v=0 a1"))
+        relay.operatorSends(.answer(sdp: "v=0 a1" + dtlsFingerprint))
         try await until("answer") { engine.log.contains("answer:v=0 a1") }
         engine.events.connectionState(.connected)
         try await until("connected") { await call.state == .connected }
         engine.events.connectionState(.disconnected)
         try await until("restart offer") { relay.offersSent == 2 }
         XCTAssertTrue(engine.log.contains("offer:true"))
-        relay.operatorSends(.answer(sdp: "v=0 a2"))
+        relay.operatorSends(.answer(sdp: "v=0 a2" + dtlsFingerprint))
         try await until("answer 2") { engine.log.contains("answer:v=0 a2") }
         engine.events.connectionState(.connected)
         try await until("connected again") { await call.state == .connected }
@@ -177,11 +181,11 @@ final class VerificationCallControllerTests: XCTestCase {
         var options = fast; options.maxIceRestarts = 1
         let call = VerificationCallController(signalling: relay, engine: engine, options: options)
         await call.start()
-        relay.operatorSends(.answer(sdp: "v=0 a1"))
+        relay.operatorSends(.answer(sdp: "v=0 a1" + dtlsFingerprint))
         try await until("answer") { engine.log.contains("answer:v=0 a1") }
         engine.events.connectionState(.failed)
         try await until("restart") { relay.offersSent == 2 }
-        relay.operatorSends(.answer(sdp: "v=0 a2"))
+        relay.operatorSends(.answer(sdp: "v=0 a2" + dtlsFingerprint))
         try await until("answer 2") { engine.log.contains("answer:v=0 a2") }
         engine.events.connectionState(.failed)
         try await until("ended") { await call.state == .ended(.connectionLost) }
@@ -215,6 +219,33 @@ final class VerificationCallControllerTests: XCTestCase {
         await call.start()
         relay.receiveError = NEXUSSignError.networkUnavailable(underlying: URLError(.notConnectedToInternet))
         try await until("expired") { await call.state == .ended(.expired) }
+    }
+
+    /// Finding D-14: an answer without a DTLS fingerprint is not applied; the
+    /// call ends and the session is closed.
+    func testAnswerWithoutDtlsFingerprintEndsTheCall() async throws {
+        let relay = Relay(), engine = Engine()
+        let call = VerificationCallController(signalling: relay, engine: engine, options: fast)
+        await call.start()
+        relay.operatorSends(.answer(sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:abc"))
+        try await until("ended") { await call.state.isEnded }
+        let state = await call.state
+        XCTAssertEqual(state, .ended(.failed(message: "the operator's answer has no DTLS fingerprint")))
+        XCTAssertFalse(engine.log.contains { $0.hasPrefix("answer:") }, "the answer is not applied")
+        try await until("cancelled") { relay.cancelled == 1 }
+        XCTAssertEqual(engine.releases, 1)
+    }
+
+    func testDtlsFingerprintCheck() {
+        let hash = { (n: Int) in Array(repeating: "0f", count: n).joined(separator: ":") }
+        XCTAssertTrue(VerificationCallController.hasDtlsFingerprint("v=0\r\na=fingerprint:sha-256 \(hash(32))\r\n"))
+        XCTAssertTrue(VerificationCallController.hasDtlsFingerprint("v=0\na=fingerprint:SHA-384 \(hash(48))"))
+        XCTAssertTrue(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-512 \(hash(64))"))
+        XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("v=0\r\n"))
+        XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-256 \(hash(31))"))
+        XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-1 \(hash(20))"))
+        XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-256 \(hash(31)):zz"))
+        XCTAssertFalse(VerificationCallController.hasDtlsFingerprint("a=fingerprint:sha-256"))
     }
 
     func testHangUpCancelsOnceAndReleasesMedia() async throws {

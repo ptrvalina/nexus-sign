@@ -111,7 +111,7 @@ class CallConformanceTest {
             events.onLocalCandidate(IceCandidateInit("candidate:1 1 udp 2122260223 192.0.2.10 50000 typ host", "0", 0))
             return "v=0\r\no=- 1 ${if (iceRestart) 2 else 1} IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
         }
-        override suspend fun applyAnswer(sdp: String) { answers += sdp; events.onConnectionState(MediaConnectionState.CONNECTED) }
+        override suspend fun applyAnswer(sdp: String) { answers += sdp.lines()[0]; events.onConnectionState(MediaConnectionState.CONNECTED) }
         override suspend fun addRemoteCandidate(candidate: IceCandidateInit) { remoteCandidates += candidate.candidate }
         override fun setMicrophoneEnabled(enabled: Boolean) = Unit
         override fun setCameraEnabled(enabled: Boolean) = Unit
