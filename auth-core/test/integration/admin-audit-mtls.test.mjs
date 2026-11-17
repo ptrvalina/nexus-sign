@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { skipWithoutServices, startAuthCore } from './support/harness.mjs';
 import { adminSession, bankSession, call, totp } from './support/actors.mjs';
+import { redisModule } from '../support/resp-redis.mjs';
 
 const fingerprint = (label) => createHash('sha256').update(label).digest('hex');
 
@@ -193,5 +194,35 @@ describe('bank certificate binding', { skip: skipWithoutServices }, () => {
     assert.equal((await tokenRequest(credsA, gateway('cert-a'))).status, 401, 'the old certificate is no longer accepted');
     assert.notEqual(run(['bank-a', 'not-hex']).status, 0);
     assert.notEqual(run(['no-such-bank', fingerprint('x')]).status, 0);
+  });
+});
+
+
+describe('admin login while the account-wide failure limit is hit (finding A2-06)', { skip: skipWithoutServices }, () => {
+  let server; let redis; let operator; let noTotp;
+  before(async () => {
+    server = await startAuthCore({ env: { ADMIN_MFA_REQUIRED: 'false' } });
+    operator = await server.createAdmin('locked-operator', 'operator');
+    noTotp = await server.createAdmin('no-totp-operator', 'operator');
+    await server.db.query(`UPDATE admin_users SET totp_secret_encrypted = NULL WHERE username = 'no-totp-operator'`);
+    const Redis = redisModule();
+    redis = new Redis(server.env.REDIS_URL);
+    // As after 50 failures from any set of addresses: only the account-wide key is locked.
+    for (const user of ['locked-operator', 'no-totp-operator']) await redis.set(`admin_login_failures_user:${user}:locked`, '1', 'EX', 900);
+  });
+  after(async () => { redis?.disconnect(); await server?.stop(); });
+
+  test('the owner still logs in with password and TOTP; guesses get 429', async () => {
+    assert.equal((await adminSession(server, operator)).login.status, 200, 'password + TOTP passes the account-wide lock');
+    const wrong = await adminSession(server, { ...operator, password: 'not-the-password' });
+    assert.equal(wrong.login.status, 429);
+    assert.ok(Number(wrong.login.headers.get('retry-after')) > 0);
+  });
+
+  test('an account without TOTP cannot pass the lock, even with the right password', async () => {
+    assert.equal(noTotp.password.length > 0, true);
+    assert.equal((await adminSession(server, noTotp)).login.status, 429);
+    await redis.del('admin_login_failures_user:no-totp-operator:locked');
+    assert.equal((await adminSession(server, noTotp)).login.status, 200, 'without the lock the password alone is enough when MFA is not required');
   });
 });

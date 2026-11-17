@@ -46,15 +46,26 @@ function approvalJson(a: AdminApproval) {
 }
 
 // Admin passwords are human-chosen. Failures are throttled per source address
-// and per username from that address; the account-wide limit is high enough
-// that a stranger cannot lock an operator out with a few wrong passwords, and
-// still stops guessing spread across many addresses.
+// and per username from that address. The account-wide limit stops guessing
+// spread across many addresses; while it is hit, only a login that also proves
+// TOTP gets through, so strangers cannot lock the operator out (A2-06).
 const byUsername = byBodyField('username');
 const throttle = loginThrottle(
   { keyPrefix: 'admin_login_failures_ip', extractKey: byIp, maxFailures: 8, windowSeconds: 300, lockoutSeconds: 900 },
   { keyPrefix: 'admin_login_failures_user_ip', extractKey: (req) => { const user = byUsername(req); return user && req.ip ? `${user}|${req.ip}` : null; }, maxFailures: 8, windowSeconds: 300, lockoutSeconds: 900 },
-  { keyPrefix: 'admin_login_failures_user', extractKey: byUsername, maxFailures: 50, windowSeconds: 3600, lockoutSeconds: 900 },
+  { keyPrefix: 'admin_login_failures_user', extractKey: byUsername, maxFailures: 50, windowSeconds: 3600, lockoutSeconds: 900, passWithSecondFactor: true },
 );
+
+/** Counting failures is part of the protection: if Redis cannot record one,
+ * the error is logged and the request fails instead of passing silently (A2-10). */
+async function recordThrottleFailure(req: Request): Promise<void> {
+  try {
+    await throttle.recordFailure(req);
+  } catch (error) {
+    req.log?.error({ err: error }, 'admin login failure could not be counted');
+    throw error;
+  }
+}
 
 /** Admin session cookie. `Secure` follows ADMIN_COOKIE_SECURE (env.ts),
  * which is on by default and turned off only for local HTTP development. */
@@ -87,16 +98,26 @@ export function buildAdminRouter(options: { cookieSecure: boolean; hsm: HsmAdapt
   router.post('/admin/api/login', throttle.guard, async (req, res, next) => {
     try {
       const body = loginSchema.parse(req.body);
-      const { sessionToken, session } = await login(body.username, body.password, body.totp);
-      await throttle.reset(req);
-      res.setHeader('Set-Cookie', sessionCookieHeader(sessionToken, 8 * 60 * 60, options.cookieSecure));
-      res.status(200).json({ username: session.username, role: session.role });
-    } catch (error) {
-      if (error instanceof InvalidAdminCredentialsError) {
-        await throttle.recordFailure(req).catch(() => undefined);
-        res.status(401).json({ error: error.message });
+      const accountLock = await throttle.secondFactorLock(req);
+      const outcome = await login(body.username, body.password, body.totp, { requireSecondFactor: accountLock > 0 })
+        .catch((error: unknown) => {
+          if (error instanceof InvalidAdminCredentialsError) return error;
+          throw error;
+        });
+      if (outcome instanceof InvalidAdminCredentialsError) {
+        await recordThrottleFailure(req);
+        if (accountLock > 0) {
+          res.setHeader('Retry-After', String(accountLock));
+          res.status(429).json({ error: 'too_many_attempts', retryAfterSeconds: accountLock });
+        } else {
+          res.status(401).json({ error: outcome.message });
+        }
         return;
       }
+      await throttle.reset(req);
+      res.setHeader('Set-Cookie', sessionCookieHeader(outcome.sessionToken, 8 * 60 * 60, options.cookieSecure));
+      res.status(200).json({ username: outcome.session.username, role: outcome.session.role });
+    } catch (error) {
       next(error);
     }
   });

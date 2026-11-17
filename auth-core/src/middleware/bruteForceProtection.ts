@@ -14,11 +14,18 @@ export interface ThrottleOptions {
   maxFailures: number;
   windowSeconds: number;
   lockoutSeconds: number;
+  /** A lock of this throttle does not stop a login that also proves a second
+   * factor: an account-wide limit must stop distributed guessing without
+   * letting strangers lock the account's owner out (finding A2-06). */
+  passWithSecondFactor?: boolean;
 }
 
 export interface LoginThrottle {
-  /** Middleware: answers 429 while any key of the request is locked. */
+  /** Middleware: answers 429 while any key of the request is locked, except
+   * keys of throttles with passWithSecondFactor. */
   guard: RequestHandler;
+  /** Seconds left on the longest passWithSecondFactor lock of the request, 0 if none. */
+  secondFactorLock(req: Request): Promise<number>;
   recordFailure(req: Request): Promise<void>;
   reset(req: Request): Promise<void>;
 }
@@ -33,6 +40,7 @@ export function loginThrottle(...throttles: ThrottleOptions[]): LoginThrottle {
     guard: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         for (const { t, lockKey } of keysOf(req)) {
+          if (t.passWithSecondFactor) continue;
           const ttl = await redis.ttl(lockKey);
           if (ttl > 0) {
             res.setHeader('Retry-After', String(ttl));
@@ -44,6 +52,13 @@ export function loginThrottle(...throttles: ThrottleOptions[]): LoginThrottle {
       } catch (error) {
         next(error);
       }
+    },
+    async secondFactorLock(req: Request): Promise<number> {
+      let longest = 0;
+      for (const { t, lockKey } of keysOf(req)) {
+        if (t.passWithSecondFactor) longest = Math.max(longest, await redis.ttl(lockKey));
+      }
+      return longest;
     },
     async recordFailure(req: Request): Promise<void> {
       for (const { t, countKey, lockKey } of keysOf(req)) {
