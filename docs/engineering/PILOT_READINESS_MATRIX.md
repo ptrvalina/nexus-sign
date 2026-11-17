@@ -11,7 +11,7 @@ The 20 conditions for READY FOR CONTROLLED BANK PILOT (section 22 of the readine
 | 5 | iOS SDK built | PASS | Built and tested for the first time in this cycle: `swift test` 49/49 with warnings as errors on `macos-15`, demo app for `iphoneos`, call module against pinned WebRTC (run `44019252340`) | — |
 | 6 | Android SDK built | PASS | CI `android-sdk`: `testDebugUnitTest lintRelease assembleRelease` (real Gradle and Android SDK build, minSdk 28 checked by Lint); `android-sdk-calls` release build against the pinned WebRTC artifact; demo APK built; call conformance against a running Auth Core | — |
 | 7 | Both SDKs checked on real devices | BLOCKED | No devices | B1, B2 in [release blockers](RELEASE_BLOCKERS.md) |
-| 8 | D-01 and D-02 closed with evidence | PARTIAL | D-02 fixed in code; vectors pass in TypeScript, Kotlin (Android unit tests), Python and Swift (iOS unit tests in CI); D-01 open with the decision "pilot with offline confirmation off" | D-02 on a device; D-01 protocol change before production |
+| 8 | D-01 and D-02 closed with evidence | PARTIAL | Both fixed in code and tested in CI: D-02 vectors in TypeScript, Kotlin, Python and Swift; D-01 by offline v3 (`offline-per-authorization`, `offline_v3` vectors) | Both on a device (the demo apps show the prompt and the offline code) |
 | 9 | All eight HSM suites executed | PASS (SoftHSM 2.7.0) | 8/8 suites, 106 tests ([HSM validation](HSM_VALIDATION.md)) | SoftHSM is not the bank's HSM (10) |
 | 10 | Bank HSM check done | BLOCKED | Procedure: [HSM acceptance](../operations/hsm-acceptance.md) | B3 |
 | 11 | All 22 HTTP suites executed | PASS | All 22 suites that start Auth Core over HTTP passed in the integration job (list in [CI validation](CI_VALIDATION.md#http-and-hsm-suites)) | — |

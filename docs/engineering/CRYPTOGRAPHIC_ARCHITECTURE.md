@@ -16,7 +16,7 @@ Every key, algorithm, signed structure and derivation NEXUS-SIGN uses, where it 
 |---|---|---|---|---|
 | Device signing key | ECDSA P-256 / SHA-256 | Secure Enclave (`.biometryCurrentSet`), Keystore (`setUserAuthenticationRequired`, `setInvalidatedByBiometricEnrollment`) | Payment and mandate signatures, recovery setup | Never leaves hardware; invalidated by a biometric change |
 | Device request key | ECDSA P-256 | As above, no biometric per use | Signing every device request (method, path, time, nonce, credential, body hash) | Never leaves hardware |
-| Device offline key | iOS: ECDH P-256 in the Secure Enclave. Android: HMAC-SHA256 key imported into the Keystore | At enrolment | Offline 8-digit codes | iOS returns the ECDH secret to the app process (finding D-01); Android never exposes it |
+| Device offline key | iOS: ECDH P-256 in the Secure Enclave. Android: HMAC-SHA256 key imported into the Keystore | At enrolment | Offline 8-digit codes | iOS returns the ECDH secret to the app process, so iOS agrees a key of Auth Core's per authorization (offline v3, finding D-01): a captured secret serves one authorization only. Android never exposes it |
 | Offline key `K` (server side) | HKDF-SHA256 over ECDH with a per-credential server key that is then discarded | Database, AES-256-GCM under `DEVICE_SECRET_ENCRYPTION_KEY` | Verifying offline codes | Whoever holds the database and that master key can compute codes; production requires v2 (device signature) so a code alone never commits |
 | Push key `K` | HKDF-SHA256 over ECDH (ephemeral server key) | Device (Keystore / Keychain), database (encrypted) | AES-256-GCM sealing of push content, HMAC receipts | As above |
 | Recovery key | ECDSA P-256 | Created on the device; private half wrapped with AES-256-GCM under `HKDF(PBKDF2(phrase, 210 000))`, stored by Auth Core | Proving possession of the phrase | 2^128 phrase space for SDK-generated phrases |
@@ -65,7 +65,7 @@ Node.js `crypto.randomBytes`/`randomUUID` (OS CSPRNG) on the server; `SecRandomC
 
 | Limit | Status |
 |---|---|
-| iOS offline secret leaves the Secure Enclave (D-01) | Open, Medium. Bounded by the production requirement of offline v2: a code alone yields `OFFLINE_PROVISIONAL`, never `VERIFIED`, and only `VERIFIED` commits. Protocol fix (per-authorization server ephemeral key) designed, not implemented |
+| iOS offline secret leaves the Secure Enclave (D-01) | **Fixed in code** (offline v3, `5f2ab00`): a fresh Auth Core key per authorization in the QR code (`NXS3.`), tested in CI (`offline-per-authorization`, vectors). A code alone still yields only `OFFLINE_PROVISIONAL`. To be confirmed on an iPhone |
 | Offline v1 codes are HMACs under a key Auth Core holds | v1 refused in production (startup blocker) |
 | The PL/pgSQL ECDSA verifier in the bank database | Tested against OpenSSL with valid and corrupted inputs; not reviewed for timing (public data only) |
 | Conversation messages are hash-chained, not sealed | By design; they authorize nothing |

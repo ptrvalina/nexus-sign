@@ -10,9 +10,9 @@ This is an **internal review**, not an external penetration test. No external te
 |---|---|---|---|---|
 | Critical | 0 | 0 | 0 | — |
 | High | 5 | 5 | 0 | None open |
-| Medium | 19 | 18 | 1 (D-01) | Documented decision below |
-| Low | 46 | 33 | 13 (10 accepted, 3 planned before production, one of them partly fixed) | [Triage of the Low findings](#triage-of-the-low-findings); none blocks a pilot alone |
-| Info | 20 | 0 | 20 | — |
+| Medium | 19 | 19 | 0 | D-01 fixed in code (offline v3), device check pending |
+| Low | 46 | 36 | 10 (all accepted, each with its reason) | [Triage of the Low findings](#triage-of-the-low-findings); none blocks a pilot alone |
+| Info | 20 | 13 | 7 (accepted or by design) | [Info findings](#info-findings) |
 
 The third cycle closed D-02 and D-07 in code and recorded N-01 to N-06. The fourth cycle (this one) ran every check for real in CI for the first time and found N-07 to N-13 (below), and added the [threat model of ten scenarios](#threat-model-ten-scenarios). "Fixed" means fixed in code and covered by a test that passed in CI, unless the row says otherwise. Since the fourth cycle every test named as evidence in this document has passed in GitHub Actions on branch `engineering/production-readiness` (runs and jobs: [CI validation](CI_VALIDATION.md)); tests marked "(CI)" in earlier cycles' rows have now run.
 
@@ -40,15 +40,16 @@ The third cycle closed D-02 and D-07 in code and recorded N-01 to N-06. The four
 | C-06 | Migrations not reproducible | Medium | ASVS V14 Configuration | Fixed | `migrations` 7, `backup-restore` 4 |
 | D-02 | Ambiguous prompt layout (payee name read as an account) | Medium | MASVS-PLATFORM, MASVS-AUTH | **Fixed in code (this cycle)**; device check pending | Labelled prompt, separators reserved, IBAN look-alike refused in Auth Core, Kotlin, Swift, sandbox; vectors (5 + 2 new); Kotlin and TypeScript and Python ran, Swift did not, no device |
 | D-07 | iOS kept dead keys after a biometric change | Low | MASVS-AUTH, MASVS-STORAGE | **Fixed in code (this cycle)**; device check pending | `KeyManager.forgetInvalidatedCredential`; [procedure](../architecture/biometric-behaviour.md) |
-| D-01 | iOS: offline ECDH secret usable by the app process | Medium | MASVS-CRYPTO, MASVS-STORAGE | **Open — decision below** | — |
+| D-01 | iOS: offline ECDH secret usable by the app process | Medium | MASVS-CRYPTO, MASVS-STORAGE | **Fixed in code** (`5f2ab00`): offline v3, a key of Auth Core's per authorization in the QR code; device check pending | `offline-per-authorization` (6, incl. a secret taken for one authorization computes no code for another), vectors `offline_v3` (TS, Swift), `DeviceProtocolTests` |
 
-## Decision on D-01 (Medium, open)
+## D-01 (Medium): fixed by offline confirmation v3
 
-**Decision: accepted for a controlled pilot with conditions; not accepted for production.**
+**Status: fixed in code and in CI (`5f2ab00`, run `44023147512`); to be confirmed on an iPhone.**
 
-- Why the risk is bounded: production refuses offline v1 (`OFFLINE_CONFIRMATION_MODE=immediate`) at startup; with v2 a code alone leaves an authorization `OFFLINE_PROVISIONAL`, which cannot be committed. Only the device signature with the biometric-bound key makes it `VERIFIED`, and the bank database verifies that signature itself. An attacker needs code execution inside the bank app process first.
-- Conditions: the bank never treats `OFFLINE_PROVISIONAL` as paid; offline confirmation stays off (`OFFLINE_CONFIRMATION_ENABLED=false`, as in the Kubernetes ConfigMap) unless the bank needs it; the iOS limitation is stated to the bank ([iOS README](../../ios-sdk/README.md)).
-- Closure: per-authorization server ephemeral key in the offline QR (protocol change in Auth Core, both SDKs and the vectors), verified on a device. Owner: engineering; before production.
+- Before: the iOS Secure Enclave returns the ECDH secret to the app process, and with one key agreed at enrolment that secret computed codes for every later transaction. Code inside the bank app that captured it once could confirm any payment offline.
+- Now: the iOS SDK enrols with `offlineKeyAgreement: PER_AUTHORIZATION`. Auth Core generates a fresh P-256 key pair for each authorization when the bank asks for the QR code (`NXS3.` carries its public key) and stores the private key encrypted and bound to the authorization (migration 035). The phone runs the ECDH against that key inside the biometric prompt. A captured secret serves only the authorization the customer was confirming. Android keeps the static agreement, because its HMAC key never leaves the Keystore.
+- Unchanged: production refuses offline v1, and every offline code still needs the device signature before the authorization is `VERIFIED` (v2/v3).
+- Device check: item F3–F6 of the [device acceptance checklist](DEVICE_ACCEPTANCE_CHECKLIST.md) on an iPhone (the demo app fetches the QR code and shows the code without network).
 
 ## New items from the third cycle
 
@@ -108,7 +109,7 @@ Every Low finding of the area reports was rechecked against the code in the four
 | D-05 | iOS compares the response with the signed bytes by UTF-16 code units, not canonical equivalence | `3be0953` | `SignedTransactionTests` |
 | D-10 | Android splits recovery phrases on Unicode White_Space, like iOS | `3be0953` | `RecoveryPhraseTest`, `RecoveryProtocolTests` |
 
-After the fourth-cycle package, the planned Lows were worked through on the same branch. Sixteen more were fixed, each with a test that ran in CI, and one (D-14) in part:
+After the fourth-cycle package, the planned Lows were worked through on the same branch. Nineteen more were fixed, each with a test that ran in CI:
 
 | ID | Fix | Commit | Test |
 |---|---|---|---|
@@ -126,9 +127,11 @@ After the fourth-cycle package, the planned Lows were worked through on the same
 | A2-08 | Console route `POST /admin/api/webhook-deliveries/:id/redeliver` (operator role, bank-scoped, audited): a `FAILED` delivery returns to `PENDING` with the same event ID. Secret rotation overlap: migration 034 keeps the replaced secret for `--webhook-overlap-hours` (default 24); deliveries carry `v1=<previous>,v1=<new>`; the reference receiver and the guide accept any matching entry | `e44f415`, `06e2d85` | `admin console` (HTTP suite), `webhook-secret-overlap` (new suite, 4), `low-findings` (unit) |
 | B-10 | The verifier binds an export to an expected identity, authorization and bank (`--expect-nexus-id`, `--expect-authorization-id`, `--expect-client-id`); every new record seals the bank's `clientId` | `b2bf43f`, `d950036` | `evidence` (unit), `evidence-outcomes` (integration) |
 | C-13 | A REVIEW is settled by two operator logins (request, then confirmation with the same outcome; the requester cannot confirm), kept in `bank.review_requests`; `createOperatorTools({ authCore })` reports the result to Auth Core | `24e0568` | `bank-db-authorization` (2), `bank-execution-processes` (Auth Core state after the resolution) |
-| D-14 (part) | Both SDKs end a call whose answer has no DTLS fingerprint (`a=fingerprint`, SHA-256/384/512, RFC 8122) and close the session. **Remaining:** relay-only ICE as a bank option; binary provenance (release blocker D-015) | `e3daad1` | `VerificationCallControllerTests`, `VerificationCallControllerTest` (2 new each); Auth Core conformance job |
+| D-14 | Both SDKs end a call whose answer has no DTLS fingerprint (`a=fingerprint`, SHA-256/384/512, RFC 8122) and close the session; relay-only ICE as a bank option (`relayOnly`, TURN URLs only, `iceTransportPolicy = relay`, refused without TURN); a Security job verifies the pinned WebRTC binaries on every run (checksums, Maven PGP signature, stasel tag checksum). **Stays a release blocker:** the owner's provenance and licence decision on the binaries (D-015, TPM-1, TPM-4 to TPM-7) | `e3daad1`, `d974ab1`, `c0fae11` | `VerificationCallControllerTests`, `VerificationCallControllerTest` (fingerprint, relay-only); job `WebRTC binaries` ([evidence](THIRD_PARTY_MEDIA.md#verification-in-ci-2026-11-17-finding-d-14)) |
+| D-06 | iOS registration state: one atomic file in Application Support, excluded from backups, per bank; state of earlier builds moved out of `UserDefaults` once | `5f2ab00` | `DurableStateTests` (6) |
+| D-11 | iOS and Android error model: dedicated cases (`invalidServerResponse`, `invalidRecoverySession`, `randomGenerationFailed`, `configurationInvalid`, `cryptographicOperationFailed`, `invalidArgument`) instead of `serverError(0/200/400)`; the internal error type is gone. **Integration impact:** a host app's exhaustive `switch` over `NEXUSSignError` needs the new cases | `5f2ab00` | `ErrorModelTests` (3), `RecoveryProtocolTest` |
 
-The 13 that remain (with the remaining part of D-14), with the decision for each. **Accepted** means the behaviour is intended or the control belongs to the bank's infrastructure, and it is documented; **Planned** means a fix is needed before production but not before a controlled pilot.
+The 10 that remain, all accepted, with the reason for each. **Accepted** means the behaviour is intended or the control belongs to the bank's infrastructure, and it is documented; **Planned** means a fix is needed before production but not before a controlled pilot.
 
 | ID | Finding (short) | Decision | Reason or plan |
 |---|---|---|---|
@@ -140,11 +143,30 @@ The 13 that remain (with the remaining part of D-14), with the decision for each
 | C-10 | No row-level security; tenant isolation in the application | Accepted for the pilot | Every query is scoped by `client_id` (tested by `security invariants` and console suites); RLS is a defence-in-depth step for multi-bank hosting |
 | C-12 | Provider outcomes: no distinct "rejected"; reference provider unauthenticated | Accepted | Reference adapter only; the bank's adapter defines outcomes ([pilot execution pack](../integration/pilot-execution-pack.md)) |
 | C-14 | Security state only in Redis (lockouts, sessions) | Accepted | Redis persistence is required in production (deployment guide); a flush logs everyone out and resets counters, it does not grant access |
-| D-06 | iOS registration state in `UserDefaults` (not atomic, backed up) | Planned | Move to the Keychain with `ThisDeviceOnly`; needs a device to test |
 | D-09 | Secure push has no replay or freshness check | Accepted | A push only invites the app to fetch the signed request; a replayed push shows nothing new |
-| D-11 | iOS error model leaks an internal type; status 0/200 for client errors | Planned | API change for the next SDK minor version |
 | D-13 | Android key bytes cleared only in the caller's copy | Accepted | `SecretKeySpec` copies by design; keys live in the Keystore, the copy is short-lived |
-| D-14 | WebRTC: ICE policy `all`, unofficial binaries (missing fingerprint now refused, above) | Planned | Provenance review of the binaries is an open release blocker (D-015); relay-only policy as a bank option |
+
+## Info findings
+
+| ID | Finding (short) | Status | Evidence or reason |
+|---|---|---|---|
+| A1-11 | A refused signature or code is HTTP 200 with `status: FAILED` | Documented | Bank backend guide states it prominently; unchanged for 1.x compatibility |
+| A1-12 | Bank `GET /v1/authorizations/{id}` spread the whole record | **Fixed** (`c0fae11`) | Explicit view of the contract's fields; offline fields added to `openapi.yaml`; key set pinned in `offline-deferred-signature` |
+| A1-13 | No bank field in the signed bytes | Accepted; mitigated | Cross-bank replay impossible (IDs scoped per bank); every evidence record now seals the bank (B-10) |
+| A1-14 | Dead `REJECTED` branch, orphan doc comments, redundant per-route gateway middleware, integrity reason in the 403 body | **Fixed** (`d974ab1`) | `error-handler` (unit); the app-wide `requireGatewayMtls` stays |
+| A2-11 | DTLS-SRTP rests on the signalling: whoever writes signals could swap fingerprints | **Fixed** (`c0fae11`) | Call code from both fingerprints on the phone and in the console; vectors `call-code-v1.json`; both real WebRTC tests compare the codes |
+| A2-12 | No contract for the 41 console routes | **Fixed** (`5455f91`) | `admin-openapi.yaml`; `check-openapi-routes.mjs` compares it with `admin.ts`; validated in CI |
+| B-13 | Unsealed metadata in exports | Documented | `evidence-format.md` names the unsealed fields; verifiers rely on the sealed payload |
+| B-14 | Evidence key has no domain separation from the health probe | Accepted | The probe signs a hash with no canonical-JSON preimage, so it cannot be used as a seal; a domain prefix belongs to the next evidence schema version |
+| B-15 | Canonical JSON follows JavaScript's key order | Documented | `evidence-format.md` states the order and that no sealed object has integer-like keys |
+| B-16 | Master keys not zeroized; the development HSM key is per process | **Fixed** (log line) / accepted | The development HSM says at start that earlier seals cannot be verified (`select-hsm-adapter`); master keys in memory documented in KEY_MANAGEMENT |
+| C-15 | Trigger functions without a fixed `search_path`; `nexus_app` had TEMP | **Fixed** (`d974ab1`) | Migration 036; `roles.sql` revokes TEMPORARY; `schema-hardening` (3) |
+| C-16 | Owner could TRUNCATE the history tables | **Fixed** (`d974ab1`) | TRUNCATE refused on the history tables, even for a superuser (`schema-hardening`) |
+| C-17 | Signed operation type not compared when the bank omitted it; stale ADR states | **Fixed** (`5455f91`) | The bank requires and compares `operationType` (`bank-db-authorization`, `bank-trust-compromise`); ADR 0013 notes the removed states. Unused columns kept (dropping them is a migration without benefit) |
+| C-18 | No backup scripts; disaster-recovery placeholders | Accepted | Backup and restore with `pg_dump`/`pg_restore` is tested (`backup-restore`, 4); the method, RPO and RTO are the bank's decisions |
+| D-16 | Android does not refuse software keys on the device | Accepted | Auth Core decides from the attestation chain; `ALLOW_SOFTWARE` is refused in production. Device check: an emulator must get 403 with production attestation settings |
+| D-17 | Orphaned and misplaced doc comments | **Fixed** (`d974ab1`) | — |
+| N-04, N-05, N-06, N-12 | See above | Accepted / mitigated | Reasons in their rows |
 
 ## Control groups covered by the review
 

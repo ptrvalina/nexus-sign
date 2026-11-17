@@ -53,7 +53,7 @@ Low and Info findings are listed in the [area reports](security-review/README.md
 | C-04 | The registry role could block credentials permanently with unsigned statements | Fixed | `8f33d81`: statements verified with the bank's trust key in the database |
 | C-05 | The lifecycle trigger checked updates only; inserts could create a verified, committed row | Fixed for authorizations | `5ba29ec`, migration 024. Credential inserts still unchecked by the database (caught by the runtime integrity check) |
 | C-06 | Migrations do not apply to an empty database; upgrade integrity cannot be shown | Fixed | `e4d269c`: baseline, migration ledger with SHA-256 checksums, sequence check, a lock against parallel runs, failure leaves no partial change; fresh install equals `schema.sql`, upgrade from rc.2 tested (`migrations`, 7 tests, rerun with 025–029) |
-| D-01 | iOS: the offline secret is usable by the app once it leaves the Secure Enclave | Open — accepted for a controlled pilot with conditions | [Decision](SECURITY_FINDINGS.md#decision-on-d-01-medium-open); protocol fix before production |
+| D-01 | iOS: the offline secret is usable by the app once it leaves the Secure Enclave | Fixed in code since (offline v3, `5f2ab00`) | [Register](SECURITY_FINDINGS.md#d-01-medium-fixed-by-offline-confirmation-v3); device check pending |
 | D-02 | Both SDKs: the prompt layout can be ambiguous | Fixed in code (third cycle); device check pending | Labelled prompt, reserved separators, IBAN look-alikes refused in Auth Core, both SDKs and the sandbox; shared vectors |
 
 ### Fixed Low findings

@@ -20,7 +20,7 @@ How NEXUS-SIGN is protected, layer by layer, and which control answers which thr
 | Party | Trusted for | Not trusted for |
 |---|---|---|
 | Secure hardware of the phone | Keeping the private keys and enforcing the biometric | — |
-| The bank app process | Showing the SDK's screens | Holding any secret that confirms a payment (D-01 is the exception on iOS) |
+| The bank app process | Showing the SDK's screens | Holding any secret that confirms a payment (on iOS an offline secret is in the app process for one authorization only: offline v3, D-01) |
 | Auth Core | Relaying, checking and sealing; availability | Deciding that money moves: the bank verifies independently |
 | The HSM | Keeping the evidence key and the KEK | — |
 | The bank backend | Creating authorizations, approving device keys, executing | Changing what the customer signed; replacing a device without a hold |
@@ -73,7 +73,7 @@ How NEXUS-SIGN is protected, layer by layer, and which control answers which thr
 | Threat | Primary control | Second line |
 |---|---|---|
 | Stolen phone | Biometric per key use; customer suspends from another device or the bank console | Bank revokes; replacement hold |
-| Malware in the app process | Keys in hardware; prompt shows signed bytes | Bank-side signature check; D-01 limits iOS offline codes to provisional |
+| Malware in the app process | Keys in hardware; prompt shows signed bytes | Bank-side signature check; offline codes are provisional until the device signature; on iOS an offline secret serves one authorization (D-01 fixed) |
 | Bank backend credentials stolen | mTLS + client scope; device replacement hold; display rules | Customer cancels the replacement; bank's own approvals |
 | Auth Core compromised | Bank verifies signatures and approvals independently | Evidence chain heads held by the bank |
 | Database tampering | Triggers, roles | Sealed evidence, offline verification, metadata binding |

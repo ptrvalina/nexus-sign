@@ -52,7 +52,11 @@ evidenceHash = hex(SHA-256(canonicalJson(sealedPayload)))
 hsmSignature = base64(DER(ECDSA-P256-SHA256(evidence key, the 32 bytes of evidenceHash)))
 ```
 
-`canonicalJson` sorts object keys recursively and uses `JSON.stringify` escaping, UTF-8, as in [protocol v1](authorization-protocol-v1.md). Auth Core refuses to seal a record if the HSM reports a different key from the one named in `sealKeyId`.
+`canonicalJson` sorts object keys recursively and uses `JSON.stringify` escaping, UTF-8, as in [protocol v1](authorization-protocol-v1.md).
+
+Two precisions for verifiers written in other languages (finding B-15): keys are sorted by UTF-16 code units (JavaScript's default sort), and JavaScript places integer-like keys (`"0"`, `"17"`) before all other keys in ascending numeric order whatever the sort. No sealed object produced by Auth Core has integer-like keys (the authorization bytes refuse them; the other sealed objects use fixed field names), so for every record Auth Core writes the result is the plain lexicographic order; a verifier should reject a sealed payload with an integer-like key rather than guess. Numbers are written as JavaScript writes them; the sealed payloads carry amounts and identifiers as strings and only small integers (`chainSequence`) as numbers.
+
+Fields of an export that are **not** sealed (finding B-13): `evidenceId`, `createdAt`, `hsmKeyVersion` and the copies of sealed values outside `sealedPayload` (`authorizationId`, `chainSequence`, `sealKeyId` and the like). A verifier relies only on `sealedPayload`, `evidenceHash` and `hsmSignature`; `scripts/verify-evidence.mjs` compares the copies of the record type, chain position and previous hash with the sealed values and reports a difference; `createdAt`, `evidenceId` and `hsmKeyVersion` are not checked by anything and must not be relied on. Auth Core refuses to seal a record if the HSM reports a different key from the one named in `sealKeyId`.
 
 ### AUTHORIZATION
 

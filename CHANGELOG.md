@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ### Security
 
+- Offline confirmation v3 (finding D-01): an iOS device enrols with `offlineKeyAgreement: PER_AUTHORIZATION`; Auth Core creates a key pair per authorization when the bank asks for the QR code (`NXS3.` carries its public key; migration 035, private key encrypted and bound to the authorization). A secret captured in the app process serves one authorization only. Android keeps the static agreement. **Integration impact:** the bank must request the QR code (`GET .../offline-challenge`) before a code can be accepted; an iOS app with this SDK refuses `NXS1.`/`NXS2.` codes.
+- Call code (finding A2-11): six digits from the DTLS fingerprints of the offer and the answer, shown by the console and by both SDKs' call screens; the operator reads it out. Vectors `call-code-v1.json`.
+- Database hardening: fixed `search_path` on every function, `TEMPORARY` revoked from `PUBLIC`, `TRUNCATE` refused on the history tables (migration 036; findings C-15, C-16).
+- The bank requires `operationType` in payment terms and compares the signed operation type (finding C-17). **Integration impact:** `bank.create_payment` refuses terms without it.
+- `GET /v1/authorizations/{id}` returns the contract's fields only (finding A1-12).
 - Dependencies: zod 4.6.7 (GHSA-mrhx-c7xc-m3w5, memory exhaustion on oversized constrained collections) and body-parser 1.20.9 (GHSA-27r3-jxmh-p828 / CVE-2026-111181, denial of service with a compressed body). Validation behaviour is unchanged except that `uuid()` now also checks the RFC 9562 version and variant; every identifier the system issues is a version-4 UUID.
 - iOS SDK: mandate terms are checked like on Android (finding N-13): canonical bytes, exactly the protocol's fields, frequency, integer limits, total not below the per-payment limit, validity in order. Before, the iOS SDK accepted 7 of the 17 invalid shared vectors, among them terms with a field it would sign without showing.
 - CI runs the eight HSM suites on SoftHSM 2.7.0 built from the pinned upstream tag; Ubuntu's SoftHSM 2.6.1 lacks `CKM_ECDSA_SHA256`, so the suites had not run.
@@ -51,6 +56,10 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ### Added
 
+- `admin-openapi.yaml`: the console API (41 routes), checked against `admin.ts` in CI (finding A2-12).
+- Verification calls: `relayOnly` option of both WebRTC engines (TURN only; finding D-14); Security job `WebRTC binaries` verifies checksums and signatures of the pinned binaries.
+- Demo apps: offline confirmation (QR fetched online, code shown without network, signature uploaded later); the demo bank's operator page takes the code.
+- iOS SDK state in one atomic file excluded from backups (finding D-06); dedicated SDK error cases on iOS and Android (finding D-11). **Integration impact:** exhaustive `switch` statements over `NEXUSSignError` need the new cases.
 - Console: `POST /admin/api/webhook-deliveries/{id}/redeliver` sends a `FAILED` webhook again with the same event ID (operator role, audited; finding A2-08).
 - `verify-evidence.mjs --expect-nexus-id`, `--expect-authorization-id` (finding B-10).
 - iOS README: App Attest entitlement and server settings (finding D-15).

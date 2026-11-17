@@ -16,7 +16,7 @@ Status of each: **BLOCKED** (needs access that is not available) unless stated.
 | B6 | Real audio and video scenarios | Bank operators + QA | BLOCKED | 15 |
 | B7 | Independent external penetration test and cryptographic review | External firm chosen by the bank | BLOCKED | 18, 19 |
 | B8 | Bank integration acceptance | Bank | BLOCKED | 17 |
-| B9 | D-01 protocol change (iOS offline secret) | NEXUS-SIGN engineering | Open, decided: not needed for a pilot with offline confirmation off; needed before production | 8 (partly) |
+| B9 | D-01 protocol change (iOS offline secret) | NEXUS-SIGN engineering | **Closed in code** (offline v3, `5f2ab00`, CI run `44023147512`); remains: confirmation on an iPhone (part of B1) | 8 (partly) |
 | B10 | Verification of Payee | Bank | Bank's function (F17) | 2 (exception) |
 
 ## Test protocols

@@ -28,14 +28,14 @@ One: checking the payee against the bank's own records (Verification of Payee) i
 | Offline confirmation v1 codes are HMACs under a key Auth Core holds | Whoever holds the database and `DEVICE_SECRET_ENCRYPTION_KEY` can compute a valid v1 code. v1 (`OFFLINE_CONFIRMATION_MODE=immediate`) is refused in production; v2 waits for the device signature |
 | Credential rows inserted directly into the database are not refused by the database | They are refused at use by the runtime integrity check against sealed enrolments; authorization inserts are refused by the database since migration 024 |
 | Migrations are forward-only | The ledger and checksums (since `e4d269c`) make installs and upgrades repeatable; there are no down migrations. Restore a backup to roll back |
-| iOS offline secret is usable by the app process once it leaves the Secure Enclave | Finding D-01, open: accepted for a controlled pilot under conditions ([decision](SECURITY_FINDINGS.md#decision-on-d-01-medium-open)); protocol fix before production |
+| iOS offline secret is usable by the app process once it leaves the Secure Enclave | Finding D-01: **fixed in code** by offline v3 ([register](SECURITY_FINDINGS.md#d-01-medium-fixed-by-offline-confirmation-v3)): the secret serves one authorization only; not yet confirmed on an iPhone |
 | The labelled confirmation prompt (D-02 fix) has not been seen on a device | Long names, translated labels and system prompt truncation need a device check |
 | DTLS-SRTP for calls is a WebRTC property, not enforced by Auth Core | Finding A2-11 |
 | Audio and video show a person; they do not identify them | No liveness or deepfake detection is claimed |
 | The in-database ECDSA verifier is PL/pgSQL | Tested against OpenSSL on generated valid and corrupted inputs; slower than native code; not reviewed for timing side channels (it handles public data only) |
 | Conversation bodies are stored in the Auth Core database in clear text | Protected like the rest of the database; not end-to-end encrypted; the bank sets retention |
 | No API rate limiting in Auth Core | Expected at the bank's gateway (finding A1-10) |
-| Low and informational review findings | 13 Low (10 accepted by design, 3 planned before production: D-06 iOS state in the Keychain, D-11 iOS error model, D-14 relay-only ICE option and the WebRTC binaries) and 20 Info findings are open ([findings register](SECURITY_FINDINGS.md)) |
+| Low and informational review findings | 10 Low and 7 Info findings remain open, all accepted with a reason ([findings register](SECURITY_FINDINGS.md)); the WebRTC binaries' provenance and licences stay a release blocker (D-015) |
 | Customer calls are recorded, not sealed | The call row is immutable once ended; calls authorize nothing |
 | Metrics and the audit export | The confirmation counter counts in the confirming transaction; the audit export needs a lag above the longest transaction |
 

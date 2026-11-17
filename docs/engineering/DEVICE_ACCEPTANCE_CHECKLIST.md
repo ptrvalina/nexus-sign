@@ -1,6 +1,6 @@
 # Device acceptance checklist
 
-What has to be shown on physical phones before release. **Status 2026-10-18: BLOCKED — nothing has been run on an iPhone or an Android phone.** Nothing in this list has been executed: this environment has no Xcode, no Android SDK, no physical devices and no TURN server reachable from a mobile network. Gate G5 stays FAIL/BLOCKED until the results table has entries. Record every run in the table at the end, with device, OS version, app build (commit) and the result of each item.
+What has to be shown on physical phones before release. **Status 2026-11-17: BLOCKED — nothing has been run on an iPhone or an Android phone yet.** The apps build in CI (Xcode for `iphoneos`, Gradle APK), but CI has no physical devices and no TURN server reachable from a mobile network. A step-by-step guide for a tester with one iPhone, one Android phone and a Mac was handed to the owner on 2026-11-17. Gate G5 stays FAIL/BLOCKED until the results table has entries. Record every run in the table at the end, with device, OS version, app build (commit) and the result of each item.
 
 Minimum for acceptance of the calls feature (each line is a checklist item below): camera and microphone permissions (E1); start and end of a call (E2, E3, E11, E12); operator refusal (E10); network loss and recovery, ICE restart (E7); TURN from an external and a mobile network (E8); app in background (E6); device revoked during a call (E18); session expiry (E13); repeated result (E23); forged result (E21); terms on the phone equal what the device signs (C1, E24); no recording (E22); release of camera, microphone and temporary resources (E25); offline confirmation v2 (F3–F8). Calls run inside the bank's app through the NEXUS-SIGN SDK (demo apps), with no separate app and no third-party branded service.
 
@@ -70,6 +70,8 @@ Minimum devices: one iPhone with Face ID (iOS 17 or later), one iPhone with Touc
 | E22 | No recording | Confirm no media files on the device (app container) and no media in Auth Core, Redis or logs; do not record the test session itself unless a separately approved test design requires it |
 | E23 | Operator decision sent twice (double click, network retry in the console) | One decision recorded; the second is refused or ignored; the plan changes once |
 | E24 | Terms on the phone during and after the call | The amount, currency, payee and IBAN on the phone's confirmation screen and biometric prompt equal the operator panel and the bank's own record; the bytes the device signs (`canonicalPayloadBase64`) carry the same values (compare with the evidence export after VERIFIED) |
+| E26 | Call code (finding A2-11) | The six digits on the phone's call screen equal the code in the operator console, in VIDEO and AUDIO calls, and after an ICE restart |
+| E27 | Relay-only option (`relayOnly: true`, finding D-14) with a TURN server | Connects; the console's WebRTC internals show the phone's candidates as `relay` only; without TURN the call is refused |
 | E25 | Resources after every ending (operator hang-up, customer hang-up, expiry, revocation, app kill) | Camera and microphone released (system indicators off), no WebRTC process or capture session left (Xcode Instruments / Android `dumpsys media.camera`), no temporary files in the app container |
 
 ## F. Offline confirmation
@@ -78,12 +80,19 @@ Minimum devices: one iPhone with Face ID (iOS 17 or later), one iPhone with Touc
 |---|---|---|
 | F1 | QR challenge within the cap | Code accepted |
 | F2 | Above `OFFLINE_CONFIRMATION_MAX_AMOUNT` | No QR offered (409); device signature works |
-| F3 | v2 (`NXS2.`), phone in airplane mode: confirm, type the code | Bank sees `PROVISIONAL`; Android shows two biometric prompts with the transaction, iOS one; record what each prompt shows |
+| F3 | Offline, phone without network (airplane mode; Android also unplugged from USB): confirm, type the code. Android uses `NXS2.`, iOS `NXS3.` with a key of Auth Core's for this authorization (finding D-01) | Bank sees `PROVISIONAL`; Android shows two biometric prompts with the transaction, iOS one; record what each prompt shows. The demo apps fetch the QR content while online ("Офлайн: получить QR") and show the code without network; the demo bank's page takes the code |
 | F4 | Then switch the network on and start the app | `submitPendingOfflineSignatures()` delivers 1; authorization `VERIFIED`, evidence `OFFLINE_SIGNED`; `verify-evidence.mjs` passes |
 | F5 | Cancel the second Android prompt after the first | No code shown; the stored signature is uploaded later and answered `RECEIVED` or 409; nothing is confirmed |
 | F6 | Kill the app after the code, before going online | The signature survives the restart and is delivered |
 | F7 | Old app (SDK 2.0.0-rc.2) with an `NXS2.` QR | QR refused (`invalid_qr`); no code |
 | F8 | Revoke the device while a confirmation is provisional | Bank receives `authorization.offline_unsigned` (`credential_not_active`) |
+
+## H. Storage on the phone (finding D-06)
+
+| # | Check | Pass when |
+|---|---|---|
+| H1 | iPhone: close the app, restart the phone, open the app | Still registered; a payment can be signed |
+| H2 | iPhone: an encrypted backup restored to another iPhone (if available) | The app there is not registered (the state file is excluded from backups; the keys never leave the Secure Enclave) |
 
 ## G. Recovery and replacement
 

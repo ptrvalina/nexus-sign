@@ -164,11 +164,20 @@ describe('real WebRTC call: phone ↔ operator console', { skip }, () => {
     assert.ok(result.received.audio > 0);
 
     await console_.click('#call-hangup-btn');
+    // Late ICE candidates of the console can arrive before the bye: read on until the bye.
     const bye = await phone.evaluate(async ({ baseUrl, sessionId: id, after }) => {
-      const path = `/v1/mobile/verification-sessions/${id}/signals?after=${after}&waitMs=5000`;
-      const headers = await window.signDevice('GET', path, '');
-      return (await (await fetch(baseUrl + path, { headers })).json()).signals.find((s) => s.type === 'bye');
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const path = `/v1/mobile/verification-sessions/${id}/signals?after=${after}&waitMs=5000`;
+        const headers = await window.signDevice('GET', path, '');
+        const batch = await (await fetch(baseUrl + path, { headers })).json();
+        const found = (batch.signals ?? []).find((s) => s.type === 'bye');
+        if (found) return found;
+        after = batch.next ?? after;
+      }
+      return null;
     }, { baseUrl: server.baseUrl, sessionId, after: result.after });
+    assert.ok(bye, 'the phone is told that the operator left');
     assert.deepEqual([bye.from, bye.payload.reason], ['operator', 'operator_left']);
     assert.equal((await bank.call('GET', `/v1/authorizations/${auth.authorizationId}/verification-plan`)).json.status, 'PENDING', 'hanging up verifies nothing');
     assert.equal(await console_.textContent('#call-indicators'), 'Camera and microphone off');
