@@ -7,7 +7,7 @@ NEXUS-SIGN runs inside the bank's controlled environment or private cloud. The m
 - PostgreSQL and Redis run locally through `auth-core/docker-compose.yml`.
 - `HSM_ADAPTER=software`, attestation off, gateway mTLS off and admin MFA off are permitted only with `NODE_ENV` `development` or `test` and `ALLOW_INSECURE_DEVELOPMENT=true` ([configuration](configuration.md#allow_insecure_development)).
 - Device attestation can be exercised with test credentials before the bank configures its production attestation policy.
-- `sandbox/` provides a self-contained environment for demonstrations and integration rehearsals; it needs Python only. To host it for banks and partners, see [sandbox/HOSTING.md](../../sandbox/HOSTING.md).
+- `sandbox/` is an isolated demonstration bank running the unchanged Auth Core with a SoftHSM test HSM, on its own Docker Compose project, network and database; it is never deployed next to a production Auth Core. See [sandbox/README.md](../../sandbox/README.md).
 
 ## Image build
 

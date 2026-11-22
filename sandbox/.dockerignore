@@ -1,8 +1,0 @@
-**/__pycache__
-**/*.pyc
-tests
-tools
-docs
-deploy
-scripts
-*.md

@@ -38,7 +38,7 @@ fi
 version=$(tr -d '[:space:]' < VERSION)
 mismatched=""
 grep -q "\"version\": \"$version\"" auth-core/package.json || mismatched="$mismatched auth-core/package.json"
-for spec in auth-core/openapi.yaml sandbox/openapi.yaml; do
+for spec in auth-core/openapi.yaml; do
   grep -q "^  version: $version\$" "$spec" || mismatched="$mismatched $spec"
 done
 grep -q "NEXUS_SIGN_SDK_VERSION = \"$version\"" android-sdk/src/main/kotlin/com/nexis/nexussign/NEXUSSignVersion.kt || mismatched="$mismatched android-sdk"

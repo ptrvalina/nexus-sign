@@ -1,0 +1,9 @@
+**
+!auth-core/package.json
+!auth-core/package-lock.json
+!auth-core/tsconfig.json
+!auth-core/src/**
+!auth-core/public/**
+!auth-core/migrations/**
+!sandbox/stack/auth-core-entrypoint.sh
+!sandbox/stack/hsm-init.cjs

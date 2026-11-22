@@ -5,7 +5,7 @@
 - [Architecture overview](architecture/overview.md): components, authorization flow, responsibility split
 - [Bank backend integration guide](integration/bank-backend-guide.md): the calls a bank backend makes, in the order a team builds them
 - SDK guides: [iOS](../ios-sdk/README.md), [Android](../android-sdk/README.md)
-- [Sandbox](../sandbox/README.md) for workshops and integration rehearsals
+- [Sandbox](../sandbox/README.md): isolated demonstration bank with the unchanged Auth Core, console and scenarios
 - [Glossary](glossary.md)
 
 ## Protocol specifications

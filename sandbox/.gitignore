@@ -1,4 +1,1 @@
-__pycache__/
-*.pyc
-tools/.device-key.json
-deploy/.env
+.state/

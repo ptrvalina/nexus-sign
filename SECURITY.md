@@ -14,7 +14,7 @@ Security fixes are made on the latest minor release. See [docs/compatibility-and
 
 In scope: Auth Core, the iOS and Android SDKs, the authorization and device protocols, credential lifecycle and recovery, adaptive verification, evidence sealing, and the deployment controls described in the documentation.
 
-The sandbox (`sandbox/`) is a demonstration and integration tool with synthetic data. It is out of scope for production security claims; issues in its hosted mode are still welcome.
+The sandbox (`sandbox/`) is a demonstration environment with test funds and invented customers, running the unchanged Auth Core with a SoftHSM test HSM. It is out of scope for production security claims; issues in it are still welcome.
 
 ## References
 

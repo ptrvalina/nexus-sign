@@ -48,7 +48,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3-yaml python3-jsonschema
           python3 scripts/validate-openapi.py openapi.yaml
           python3 scripts/validate-openapi.py admin-openapi.yaml
-          python3 scripts/validate-openapi.py ../sandbox/openapi.yaml
       - name: Kubernetes manifests follow Auth Core (production posture, probes, user)
         run: python3 ../deploy/kubernetes/check-manifests.py
 
@@ -324,12 +323,6 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Auth Core image
         run: docker build -t nexus-sign/auth-core:ci auth-core
-      - name: Sandbox image
-        run: |
-          docker build -t nexus-sign/sandbox:ci sandbox
-          docker run -d --name sbx -e HOST=0.0.0.0 -e SANDBOX_ACCESS_CODES="ci:$(openssl rand -hex 16)" -p 8787:8787 nexus-sign/sandbox:ci
-          for i in $(seq 1 20); do curl -sf http://127.0.0.1:8787/api/v1/health && exit 0; sleep 1; done
-          docker logs sbx; exit 1
 
   ios-sdk:
     name: ios-sdk / build and unit tests
@@ -452,16 +445,36 @@ jobs:
       - name: Pairing code required for enrolment tokens (no dependencies)
         run: node --test demo/bank-backend/test/*.test.mjs
 
-  sandbox:
-    name: sandbox / protocol and API tests
+  sandbox-bank:
+    name: sandbox / bank unit tests
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: sandbox
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          python-version: '3.10'  # oldest supported version
-      - name: Unit and API tests (standard library only)
-        run: python -m unittest discover -s tests -v
+          node-version: 22
+      - name: Ledger, idempotency, the bank's evidence and binding checks (no dependencies)
+        working-directory: sandbox/bank
+        run: npm test
+
+  sandbox-stack:
+    name: sandbox / isolated stack end to end (Auth Core, SoftHSM, scenarios)
+    runs-on: ubuntu-24.04
+    needs: sandbox-bank
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+      # A pull request that changes auth-core/ runs against its own Auth Core;
+      # the pin (sandbox/PINNED_AUTH_CORE) is reported, not enforced, here.
+      - name: Start the sandbox (builds Auth Core with SoftHSM 2.7.0 and the bank)
+        run: sandbox/bin/sandbox up --allow-unpinned
+      - name: End-to-end tests and every demonstration scenario against the real Auth Core
+        run: node --test sandbox/tests/e2e.test.mjs
+      - name: Logs
+        if: failure()
+        run: sandbox/bin/sandbox logs
+      - name: Remove the sandbox
+        if: always()
+        run: sandbox/bin/sandbox remove --yes
