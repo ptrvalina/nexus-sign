@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import NEXUSSign
 import NEXUSSignCalls
 
@@ -20,6 +21,9 @@ final class DemoModel: ObservableObject {
     /// Offline confirmation: the QR content fetched while online, and the code shown after Face ID / Touch ID.
     @Published private(set) var offlineQR: String?
     @Published private(set) var offlineCode: String?
+    /// The payment the shown offline code belongs to, and where its signature is.
+    @Published private(set) var offlineReference: String?
+    @Published private(set) var offlineDelivery: String?
     @Published private(set) var status = "Введите адрес сервера (https://IP-компьютера:8443) и код сопряжения со страницы демо-банка, затем нажмите «Подключиться»."
 
     private static let addressKey = "serverAddress"
@@ -27,6 +31,29 @@ final class DemoModel: ObservableObject {
     private var bank: DemoBank?
     private var authorization: NexusAuthorization?
     private var polling: Task<Void, Never>?
+    private var pollNow: CheckedContinuation<Void, Never>?
+    private var pollGeneration = 0
+    private let pathMonitor = NWPathMonitor()
+    private var online = true
+
+    init() {
+        // When the phone leaves airplane mode the waiting offline signature is
+        // sent at once, without waiting for the next poll.
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                guard let self else { return }
+                let nowOnline = path.status == .satisfied
+                defer { self.online = nowOnline }
+                if nowOnline && !self.online { self.wakePolling() }
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "NEXUSSignDemo.path"))
+    }
+
+    deinit { pathMonitor.cancel() }
+
+    /// The app came back to the foreground: deliver and look for payments now.
+    func becameActive() { wakePolling() }
 
     func connect() {
         let text = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -52,6 +79,10 @@ final class DemoModel: ObservableObject {
         registered = (try? sdk?.isRegistered()) ?? false
         authorization = nil
         payment = nil
+        offlineQR = nil
+        offlineCode = nil
+        offlineReference = nil
+        offlineDelivery = nil
         status = registered
             ? "Телефон зарегистрирован. Ожидаю платёж от банка…"
             : "Подключено. Нажмите «Зарегистрировать телефон»: ключи будут созданы в Secure Enclave."
@@ -168,6 +199,8 @@ final class DemoModel: ObservableObject {
                 let challenge = try sdk.readOfflineChallenge(qrPayload: qr)
                 let code = try await sdk.confirmOffline(challenge)
                 offlineCode = "\(code.prefix(4)) \(code.suffix(4))"
+                offlineReference = challenge.transaction.transactionReference
+                offlineDelivery = challenge.requiresDeviceSignature ? "Подпись сохранена на телефоне и ждёт сети." : nil
                 offlineQR = nil
                 authorization = nil
                 payment = nil
@@ -195,28 +228,81 @@ final class DemoModel: ObservableObject {
 
     private func startPolling() {
         polling?.cancel()
+        resumePolling() // the old loop wakes, sees the cancellation and ends
         polling = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.poll()
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                await self?.waitForNextPoll(seconds: 3)
             }
         }
+    }
+
+    /// Sleeps until the next poll, or until `wakePolling()` (network back, app in front).
+    private func waitForNextPoll(seconds: UInt64) async {
+        pollGeneration &+= 1
+        let generation = pollGeneration
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            pollNow = continuation
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                // A timer of an earlier wait must not cut a later one short.
+                guard let self, self.pollGeneration == generation else { return }
+                self.resumePolling()
+            }
+        }
+    }
+
+    private func wakePolling() { resumePolling() }
+
+    private func resumePolling() {
+        let continuation = pollNow
+        pollNow = nil
+        continuation?.resume()
     }
 
     /// Asks the demo bank whether a payment is waiting and loads it through the SDK,
     /// which checks every displayed field against the exact bytes it will sign.
     private func poll() async {
         guard let sdk, let bank, !busy, registered else { return }
-        // Offline confirmations: signatures made without network go out as soon as there is one.
+        // Offline confirmations: signatures made without network go out as soon
+        // as there is one. Every outcome is shown: a signature Auth Core refused
+        // will never confirm the payment, and the customer must know that.
         let delivery = await sdk.submitPendingOfflineSignatures()
         if delivery.delivered > 0 {
             offlineCode = nil
-            status = "Подпись офлайн-подтверждения отправлена в банк (\(delivery.delivered)). Итог — на странице демо-банка."
+            offlineDelivery = nil
+            status = "Подпись офлайн-подтверждения\(offlineReference.map { " (\($0))" } ?? "") принята Auth Core. Итог — на странице демо-банка."
+            offlineReference = nil
+        }
+        if delivery.refused > 0 {
+            offlineCode = nil
+            offlineDelivery = nil
+            status = "Auth Core не принял подпись офлайн-подтверждения\(offlineReference.map { " (\($0))" } ?? "")"
+                + " — HTTP \(delivery.lastRefusalStatusCode.map { String($0) } ?? "?")\(delivery.lastRefusalMessage.map { ": \($0)" } ?? "")."
+                + " Платёж этой подписью не подтвердится: отправьте новый платёж."
+            offlineReference = nil
+        }
+        if delivery.pending > 0 {
+            offlineDelivery = "Подпись ждёт отправки (\(delivery.pending)): \(delivery.lastRetryReason ?? "нет сети"). Уйдёт сама, как только появится связь."
         }
         guard authorization == nil else { return }
-        guard let pending = try? await bank.pending() else { return }
+        let pending: (authorizationID: String, call: VerificationChannel?)?
+        do {
+            pending = try await bank.pending()
+        } catch {
+            // Shown instead of silently waiting; while a code is on screen the
+            // instruction stays in the offline section.
+            if offlineCode == nil { show(error) }
+            return
+        }
+        guard let pending else { return }
         do {
             let loaded = try await sdk.fetchAuthorization(authorizationID: pending.authorizationID)
+            if offlineCode != nil && offlineDelivery == nil {
+                // An earlier offline code whose signature is already with Auth Core.
+                offlineCode = nil
+                offlineReference = nil
+            }
             authorization = loaded
             payment = try loaded.signedTransaction()
             requiredCall = pending.call

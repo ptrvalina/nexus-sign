@@ -26,8 +26,9 @@ final class OfflineSignatureQueueTests: XCTestCase {
         try queue.add(authorizationID: b, signature: Data("sig-b".utf8))
         try queue.add(authorizationID: c, signature: Data("sig-c".utf8))
         let answers = [a: 200, b: 503, c: 409]
-        let result = await queue.deliver { UploadOutcome.of(statusCode: answers[$0.authorizationId]!) }
-        XCTAssertEqual(result, OfflineSignatureDelivery(delivered: 1, refused: 1, pending: 1))
+        let result = await queue.deliver { UploadOutcome.of(statusCode: answers[$0.authorizationId]!, message: "m") }
+        XCTAssertEqual(result, OfflineSignatureDelivery(delivered: 1, refused: 1, pending: 1,
+                                                        lastRefusalStatusCode: 409, lastRefusalMessage: "m", lastRetryReason: "HTTP 503: m"))
         XCTAssertEqual(queue.pending().map(\.authorizationId), [b])
         XCTAssertEqual(OfflineSignatureQueue(bankID: "test", directory: directory, legacyDefaults: freshDefaults(), clock: { 1_000 }).pending().map(\.authorizationId), [b])
     }
@@ -35,7 +36,7 @@ final class OfflineSignatureQueueTests: XCTestCase {
     func testStatusClassification() {
         for code in [200, 202] { XCTAssertEqual(UploadOutcome.of(statusCode: code), .accepted) }
         for code in [400, 403, 404, 409, 422] { XCTAssertEqual(UploadOutcome.of(statusCode: code), .refused(statusCode: code)) }
-        for code in [401, 429, 500, 503] { XCTAssertEqual(UploadOutcome.of(statusCode: code), .retry) }
+        for code in [401, 429, 500, 503] { XCTAssertEqual(UploadOutcome.of(statusCode: code), .retry(reason: "HTTP \(code)")) }
     }
 
     func testOldItemsAreDroppedWithoutUpload() async throws {
@@ -48,7 +49,8 @@ final class OfflineSignatureQueueTests: XCTestCase {
         var uploads = 0
         let result = await queue.deliver { _ in uploads += 1; return .accepted }
         XCTAssertEqual(uploads, 0)
-        XCTAssertEqual(result, OfflineSignatureDelivery(delivered: 0, refused: 1, pending: 0))
+        XCTAssertEqual(result, OfflineSignatureDelivery(delivered: 0, refused: 1, pending: 0,
+                                                        lastRefusalStatusCode: -1, lastRefusalMessage: "older than the longest signature deadline"))
     }
 
     func testQRPrefixesVersionOneAndTwoCarryTheSameBytes() throws {
