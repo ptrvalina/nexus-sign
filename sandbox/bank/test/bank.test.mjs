@@ -38,7 +38,7 @@ async function setup({ faultInjection = true } = {}) {
   return { db, authCore, faults, payments, customers, anna, balance, journals, types, ledgerOk };
 }
 
-const external = { sourceAccountId: 'acc-anna-main', beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD07AG000000022589630417', amountMinor: 50000 };
+const external = { sourceAccountId: 'acc-anna-main', beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD28AG000000022589630417', amountMinor: 50000 };
 
 test('opening balances are ledger entries; the ledger sums to zero', async () => {
   const { balance, ledgerOk } = await setup();
@@ -72,7 +72,7 @@ test('a confirmed payment is executed once: verified evidence, matching terms, l
 
 test('a payment to an account of this bank is booked internally, without commission', async () => {
   const { payments, authCore, anna, balance } = await setup();
-  const { transaction } = await payments.create(anna, { sourceAccountId: 'acc-anna-main', beneficiaryName: 'x', beneficiaryIban: 'MD67VI000022241100000001', amountMinor: 1000 }, randomUUID());
+  const { transaction } = await payments.create(anna, { sourceAccountId: 'acc-anna-main', beneficiaryName: 'x', beneficiaryIban: 'MD90VI000022241100000001', amountMinor: 1000 }, randomUUID());
   assert.equal(transaction.kind, 'INTERNAL_TRANSFER');
   authCore.confirm(transaction.authorization_id);
   await payments.reconcile(transaction.id);
@@ -115,7 +115,7 @@ test('evidence sealed with a key the bank has not pinned is refused', async () =
   const device = authCore.deviceOf(anna.nexus_id);
   const evidence = forger.confirm({ ...device, enrolment: forger.device(anna.nexus_id).enrolment }, {
     authorizationId: transaction.authorization_id,
-    terms: { transactionReference: transaction.reference, operationType: 'payment', amountMinor: '50000', currency: 'MDL', beneficiary: { name: 'Ион Попеску', iban: 'MD07AG000000022589630417', fee: '1.00 MDL' } },
+    terms: { transactionReference: transaction.reference, operationType: 'payment', amountMinor: '50000', currency: 'MDL', beneficiary: { name: 'Ион Попеску', iban: 'MD28AG000000022589630417', fee: '1.00 MDL' } },
   });
   authCore.confirm(transaction.authorization_id);
   authCore.replaceEvidence(transaction.authorization_id, { ...evidence, evidencePublicKeys: forger.evidenceKeys });
@@ -169,6 +169,7 @@ test('orders are validated: funds, own account, IBAN, amount, limit', async () =
   await assert.rejects(payments.create(anna, { ...external, amountMinor: 4_999_999 }, randomUUID()), { code: 'INSUFFICIENT_FUNDS' });
   await assert.rejects(payments.create(anna, { ...external, sourceAccountId: 'acc-piotr-main' }, randomUUID()), { code: 'ACCOUNT_NOT_FOUND' });
   await assert.rejects(payments.create(anna, { ...external, beneficiaryIban: 'nonsense' }, randomUUID()), { code: 'INVALID_IBAN' });
+  await assert.rejects(payments.create(anna, { ...external, beneficiaryIban: 'MD29AG000000022589630417' }, randomUUID()), { code: 'INVALID_IBAN' }, 'wrong check digits');
   await assert.rejects(payments.create(anna, { ...external, amountMinor: -5 }, randomUUID()), { code: 'INVALID_AMOUNT' });
   await assert.rejects(payments.create(anna, external, undefined), { code: 'IDEMPOTENCY_KEY_REQUIRED' });
 });

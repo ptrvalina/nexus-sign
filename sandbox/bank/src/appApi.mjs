@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { formatMinor } from './fees.mjs';
 import { recordEvent } from './events.mjs';
-import { BankError } from './payments.mjs';
+import { BankError, validIban } from './payments.mjs';
 import { now } from './db.mjs';
 import { publicCustomer } from './customers.mjs';
 import { readBody, sendJson } from './http.mjs';
@@ -79,7 +79,7 @@ export function createAppApi({ db, bank, customers, payments }) {
       const body = await readBody(req);
       const iban = String(body.iban ?? '').replace(/\s+/g, '').toUpperCase();
       const name = String(body.name ?? '').trim().slice(0, 140);
-      if (!name || !/^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/.test(iban)) throw new BankError(400, 'INVALID', 'Укажите название и IBAN');
+      if (!name || !validIban(iban)) throw new BankError(400, 'INVALID', 'Укажите название и IBAN');
       const id = randomUUID();
       db.prepare('INSERT INTO favorites (id, customer_id, name, iban, created_at) VALUES (?, ?, ?, ?, ?)').run(id, c.id, name, iban, now());
       return { id, name, iban };

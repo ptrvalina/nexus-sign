@@ -34,17 +34,17 @@
     {
       "id": "BANK-EQUITY",
       "name": "Demo bank capital",
-      "iban": "MD00DEMO0000000000000001"
+      "iban": "MD30DE000000000000000001"
     },
     {
       "id": "BANK-FEES",
       "name": "Commission income",
-      "iban": "MD00DEMO0000000000000002"
+      "iban": "MD03DE000000000000000002"
     },
     {
       "id": "BANK-CLEARING",
       "name": "Outgoing payments clearing (no real rails)",
-      "iban": "MD00DEMO0000000000000003"
+      "iban": "MD73DE000000000000000003"
     }
   ],
   "customers": [
@@ -63,7 +63,7 @@
         {
           "id": "acc-anna-save",
           "name": "Накопительный",
-          "iban": "MD21EX000000022510987654",
+          "iban": "MD47EX000000022510987654",
           "openingMinor": 4800000
         }
       ],
@@ -79,11 +79,11 @@
       "favorites": [
         {
           "name": "Ион Попеску",
-          "iban": "MD07AG000000022589630417"
+          "iban": "MD28AG000000022589630417"
         },
         {
           "name": "Электроэнергия (тест)",
-          "iban": "MD31RN000000000000000555"
+          "iban": "MD65RN000000000000000555"
         }
       ]
     },
@@ -96,7 +96,7 @@
         {
           "id": "acc-piotr-main",
           "name": "Основной счёт",
-          "iban": "MD67VI000022241100000001",
+          "iban": "MD90VI000022241100000001",
           "openingMinor": 320000
         }
       ],
@@ -120,7 +120,7 @@
         {
           "id": "acc-scenario-main",
           "name": "Счёт сценариев",
-          "iban": "MD58ML000000002251000999",
+          "iban": "MD89ML000000002251000999",
           "openingMinor": 10000000
         }
       ],

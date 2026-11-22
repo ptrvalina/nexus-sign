@@ -24,6 +24,15 @@ export class BankError extends Error {
 const OPEN_STATES = ['AUTHORIZATION_PENDING', 'OFFLINE_PROVISIONAL'];
 const IBAN = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/;
 
+/** ISO 13616 check digits (mod 97), as Auth Core checks a beneficiary IBAN. */
+export function validIban(value) {
+  if (!IBAN.test(value)) return false;
+  const digits = (value.slice(4) + value.slice(0, 4)).replace(/[A-Z]/g, (c) => String(c.charCodeAt(0) - 55));
+  let rest = 0;
+  for (const d of digits) rest = (rest * 10 + Number(d)) % 97;
+  return rest === 1;
+}
+
 export function createPayments({ db, bank, authCore, faults }) {
   const inFlight = new Set();
 
@@ -58,7 +67,7 @@ export function createPayments({ db, bank, authCore, faults }) {
     } else {
       beneficiaryIban = String(input.beneficiaryIban ?? '').replace(/\s+/g, '').toUpperCase();
       beneficiaryName = String(input.beneficiaryName ?? '').trim();
-      if (!IBAN.test(beneficiaryIban)) throw new BankError(400, 'INVALID_IBAN', 'Неверный IBAN получателя');
+      if (!validIban(beneficiaryIban)) throw new BankError(400, 'INVALID_IBAN', 'Неверный IBAN получателя');
       if (beneficiaryName.length < 1 || beneficiaryName.length > 140) throw new BankError(400, 'INVALID_BENEFICIARY', 'Укажите получателя');
       // A payment to an account of this bank is booked internally.
       destination = db.prepare("SELECT * FROM accounts WHERE iban = ? AND kind = 'CUSTOMER'").get(beneficiaryIban) ?? null;
@@ -137,7 +146,8 @@ export function createPayments({ db, bank, authCore, faults }) {
       correlationId: row.id,
     }, row.id).catch((error) => ({ status: 0, text: error.message }));
     if (created.status !== 201 && created.status !== 200) {
-      row = setState(row, 'FAILED', { failure_reason: `Auth Core refused the authorization request (HTTP ${created.status})` });
+      const why = created.json?.error ?? created.json?.message ?? created.json?.code ?? '';
+      row = setState(row, 'FAILED', { failure_reason: `Auth Core refused the authorization request (HTTP ${created.status})${why ? `: ${String(why).slice(0, 200)}` : ''}` });
       event(row, 'CHALLENGE_REFUSED', 'AUTH_CORE', { httpStatus: created.status, body: created.json ?? created.text?.slice(0, 300) });
       return { transaction: row, replay: false };
     }

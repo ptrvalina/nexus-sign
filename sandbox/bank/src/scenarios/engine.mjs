@@ -42,7 +42,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
   async function newTransaction(ctx, customer, overrides = {}, key = randomUUID()) {
     const input = {
       sourceAccountId: account(customer.id).id,
-      beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD07AG000000022589630417', amountMinor: 5000, description: `scenario ${ctx.id}`,
+      beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD28AG000000022589630417', amountMinor: 5000, description: `scenario ${ctx.id}`,
       ...overrides,
     };
     const { transaction } = await payments.create(customer, input, key, { scenarioRunId: ctx.runId });
@@ -188,7 +188,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         const t = await newTransaction(ctx, c, {}, key);
         let code = null;
         try {
-          await payments.create(c, { sourceAccountId: account(c.id).id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD07AG000000022589630417', amountMinor: 9999, description: `scenario ${ctx.id}` }, key);
+          await payments.create(c, { sourceAccountId: account(c.id).id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD28AG000000022589630417', amountMinor: 9999, description: `scenario ${ctx.id}` }, key);
         } catch (error) { code = error.code; }
         ctx.step(`second request with the same key: ${code ?? 'accepted'}`);
         const count = db.prepare('SELECT COUNT(*) AS n FROM idempotency_keys WHERE key = ?').get(key).n;
@@ -202,7 +202,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
       async run(ctx, c) {
         const key = randomUUID();
         const t = await newTransaction(ctx, c, {}, key);
-        const again = await payments.create(c, { sourceAccountId: account(c.id).id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD07AG000000022589630417', amountMinor: 5000, description: `scenario ${ctx.id}` }, key);
+        const again = await payments.create(c, { sourceAccountId: account(c.id).id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD28AG000000022589630417', amountMinor: 5000, description: `scenario ${ctx.id}` }, key);
         ctx.step(`retry returned ${again.transaction.id === t.id ? 'the same transaction' : 'a NEW transaction'}`);
         await deliver(ctx, c);
         expectHttp(ctx, 'device signature', await device.approve(t.authorization_id), (s) => s === 200);

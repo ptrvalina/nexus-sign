@@ -53,10 +53,10 @@ test('bank app: login, accounts, cards, quote, and an order without an enrolled 
   assert.equal(accounts.status, 200);
   assert.ok(accounts.json.length >= 1);
   assert.equal((await app('GET', '/app/v1/cards', { token })).status, 200);
-  const quote = await app('POST', '/app/v1/transactions/quote', { token, body: { sourceAccountId: accounts.json[0].id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD07AG000000022589630417', amountMinor: 10000 } });
+  const quote = await app('POST', '/app/v1/transactions/quote', { token, body: { sourceAccountId: accounts.json[0].id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD28AG000000022589630417', amountMinor: 10000 } });
   assert.equal(quote.status, 200);
   assert.equal(quote.json.totalMinor, 10000 + quote.json.feeMinor);
-  const order = await app('POST', '/app/v1/transactions', { token, headers: { 'Idempotency-Key': randomUUID() }, body: { sourceAccountId: accounts.json[0].id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD07AG000000022589630417', amountMinor: 10000 } });
+  const order = await app('POST', '/app/v1/transactions', { token, headers: { 'Idempotency-Key': randomUUID() }, body: { sourceAccountId: accounts.json[0].id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD28AG000000022589630417', amountMinor: 10000 } });
   if (!login.json.customer.deviceEnrolled) assert.equal(order.json.code, 'DEVICE_NOT_ENROLLED');
 });
 
