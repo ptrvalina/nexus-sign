@@ -4,7 +4,7 @@
 
 | Item | Version identifier | Where it is defined |
 |---|---|---|
-| Release | `VERSION` at the repository root (2.0.0-rc.2) | Also `version` in `auth-core/package.json`, `info.version` in `auth-core/openapi.yaml` and `sandbox/openapi.yaml`, `NEXUSSignVersion.current` (iOS) and `NEXUS_SIGN_SDK_VERSION` (Android); `npm run check:repository` fails when they differ |
+| Release | `VERSION` at the repository root (2.0.0-rc.2) | Also `version` in `auth-core/package.json`, `info.version` in `auth-core/openapi.yaml`, `NEXUSSignVersion.current` (iOS) and `NEXUS_SIGN_SDK_VERSION` (Android); `npm run check:repository` fails when they differ |
 | Auth Core API | Path prefix `/v1` | `auth-core/openapi.yaml` |
 | Authorization protocol | `protocol_version: "1"`, `domain: "NEXUS-SIGN/TRANSACTION-AUTH"` | [authorization-protocol-v1.md](protocol/authorization-protocol-v1.md), `auth-core/test-vectors/signed-payload-v1.json` |
 | Device protocols | `NEXUS-SIGN/DEVICE-REQUEST/v1`, `NEXUS-SIGN/OFFLINE/v1`, `NEXUS-SIGN/OFFLINE-CODE/v1`, QR prefixes `NXS1.` (v1, code only) and `NXS2.` (v2, deferred device signature) | [device authentication and offline confirmation](protocol/device-authentication-and-offline-confirmation.md), `auth-core/test-vectors/device-protocols-v1.json` |
@@ -24,7 +24,7 @@ The release version follows [Semantic Versioning](https://semver.org/). Each ver
 | Item | Compatible within the version (minor or patch release) | Requires a new version |
 |---|---|---|
 | Auth Core API `/v1` | New endpoints, new optional request fields, new response fields, new error messages | Removing or renaming an endpoint or field, a new required request field, a changed meaning of a status code or field. A breaking change is published under a new path prefix (`/v2`) in a major release, with `/v1` kept for the deprecation period |
-| Authorization protocol | Nothing in the signed bytes changes | Any change to the fields, formats, encoding or signature of the signed bytes. Such a change is a new protocol version with new vectors that Auth Core, both SDKs and the sandbox pass ([CONTRIBUTING.md](../CONTRIBUTING.md)) |
+| Authorization protocol | Nothing in the signed bytes changes | Any change to the fields, formats, encoding or signature of the signed bytes. Such a change is a new protocol version with new vectors that Auth Core and both SDKs pass ([CONTRIBUTING.md](../CONTRIBUTING.md)) |
 | Device protocols | Nothing in the signed or derived bytes changes | Any change to the request signing input, the key derivation, the code derivation, the key attestation challenge or the QR format, under a new domain string |
 | Recovery protocol | Nothing in the derivation, wrapping or signing inputs changes | Any change to them, under a new protocol number and new domain strings, with new shared vectors |
 | Secure push | New message categories and new optional plaintext fields, which older SDKs ignore | Any change to the key derivation, the envelope, the associated data or the receipt, under a new domain string and envelope version |
@@ -43,7 +43,7 @@ Bank backends ignore unknown fields in Auth Core responses and in webhook bodies
 | Redis | CI runs Redis 7. Auth Core uses `GETDEL`, which requires Redis 6.2 or later | `auth-core/docker-compose.yml`, `auth-core/src/services/mobileSessionService.ts` |
 | iOS SDK | iOS 15 or later, Swift 5.9 (Xcode 15 or later), a device with a Secure Enclave and a device passcode. macOS 12 is declared only to run `swift test` | `ios-sdk/Package.swift` |
 | Android SDK | Android 9 (API 28) or later, compile SDK 34, Java 17, Kotlin 1.9.24, Android Gradle Plugin 8.5.2. A secure lock screen. Hardware-backed keys: StrongBox when present, TEE otherwise | `android-sdk/build.gradle.kts` |
-| Sandbox | Python 3.10 or later, standard library only | `sandbox/README.md` |
+| Sandbox | Docker with Compose v2; the bank needs Node.js 22.13 or later, no packages | `sandbox/README.md` |
 
 The iOS SDK is built and tested in CI on a macOS runner only.
 
@@ -63,7 +63,7 @@ Auth Core dependencies are installed only from a committed `auth-core/package-lo
 - Every enrolled device signs its requests; Auth Core 2.0.0-rc.2 issues no token to an enrolled device. Devices enrolled by an SDK before 1.2, without an authentication key, can no longer call the mobile API and are enrolled again through device replacement.
 - Offline confirmation is available only for devices enrolled while `OFFLINE_CONFIRMATION_ENABLED=true`. Devices enrolled earlier enrol again to use it.
 - Evidence records sealed before migration 009 (schema 1) have no sealed payload. `scripts/verify-evidence.mjs` reports them as unsupported and verifies the rest of the chain. Schema 2 records keep their hash and seal in schema 3 chains and are reported as `legacy_records` (no key provenance).
-- All four implementations of protocol v1 and device protocols v1 run the shared vectors in `auth-core/test-vectors/`, and Auth Core and both SDKs run the secure push and recovery protocol 2 vectors (the sandbox implements neither). A release in which any implementation fails them is not published.
+- All three implementations of protocol v1 and device protocols v1 (Auth Core, iOS SDK, Android SDK) run the shared vectors in `auth-core/test-vectors/`, and they run the secure push and recovery protocol 2 vectors. The sandbox implements no protocol of its own. A release in which any implementation fails them is not published.
 
 ## Deprecation policy
 

@@ -50,7 +50,7 @@ A credential ID is never approved again after a revocation, and never for a seco
 | Admin console | `routes/admin.ts` | — | Has no execution or commit function | none |
 | Demo bank | `demo/bank-backend` | shows Auth Core's status | Executes nothing | A note on its page that the status is no reason to execute |
 | End-to-end smoke test | `auth-core/scripts/e2e-smoke.mjs` | — | A test client that reports `COMMITTED` without executing anything | none: not an execution path |
-| Sandbox commit | `sandbox/server/main.py` `commit()` | its own simulated verification | A self-contained simulator: it does not use Auth Core, moves no money, synthetic data only | none; outside this trust model |
+| Sandbox commit | `sandbox/bank/src/payments.mjs` `authorizeAndExecute()` | the evidence from Auth Core, checked with `auth-core/scripts/lib/evidence.mjs` and the bank's pinned seal key, then the signed terms against its record | A demonstration bank with test funds and a SQLite ledger; no real payment rails | none; outside this trust model |
 | `bank-execution-check.mjs` | `auth-core/scripts` | the full decision | Its exit code can be ignored; it is not an integration | The boundary uses the library, not the CLI |
 | **A bank's real backend: operator actions, API, jobs, retries, admin tools, payment adapter** | **not in this repository** | — | **unknown** | **External: integrate `execute()` and the adapter guard; bank-side tests of every such path** |
 

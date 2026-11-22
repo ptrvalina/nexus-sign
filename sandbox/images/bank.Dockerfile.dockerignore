@@ -1,0 +1,6 @@
+**
+!auth-core/scripts/lib/evidence.mjs
+!auth-core/test/integration/support/actors.mjs
+!sandbox/config/**
+!sandbox/bank/package.json
+!sandbox/bank/src/**

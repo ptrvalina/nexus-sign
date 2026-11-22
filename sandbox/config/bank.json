@@ -1,0 +1,156 @@
+{
+  "branding": {
+    "name": "VoxTel Demo Bank",
+    "shortName": "VoxTel",
+    "primaryColor": "#3DBFA8",
+    "notice": "Демонстрационный банк для показа NEXUS-SIGN / VoxTel. Тестовые средства, вымышленные клиенты. Не является реальным банком.",
+    "secondaryColor": "#1E5A5A"
+  },
+  "currency": "MDL",
+  "policy": {
+    "version": "sandbox-2026-11",
+    "authorizationTtlSeconds": 180,
+    "fees": {
+      "INTERNAL_TRANSFER": {
+        "percentBasisPoints": 0,
+        "minMinor": 0,
+        "maxMinor": 0
+      },
+      "EXTERNAL_PAYMENT": {
+        "percentBasisPoints": 10,
+        "minMinor": 100,
+        "maxMinor": 2000
+      }
+    },
+    "limits": {
+      "maxSingleAmountMinor": 5000000
+    },
+    "escalation": {
+      "note": "Audio/video escalation is configured in milestone 4; until then a payment that needs a call is refused rather than shown as escalated.",
+      "enabled": false
+    }
+  },
+  "bankAccounts": [
+    {
+      "id": "BANK-EQUITY",
+      "name": "Demo bank capital",
+      "iban": "MD00DEMO0000000000000001"
+    },
+    {
+      "id": "BANK-FEES",
+      "name": "Commission income",
+      "iban": "MD00DEMO0000000000000002"
+    },
+    {
+      "id": "BANK-CLEARING",
+      "name": "Outgoing payments clearing (no real rails)",
+      "iban": "MD00DEMO0000000000000003"
+    }
+  ],
+  "customers": [
+    {
+      "id": "cust-anna",
+      "login": "anna",
+      "displayName": "Анна Русу",
+      "deviceKind": "PHONE",
+      "accounts": [
+        {
+          "id": "acc-anna-main",
+          "name": "Основной счёт",
+          "iban": "MD24AG000225100013104168",
+          "openingMinor": 1250000
+        },
+        {
+          "id": "acc-anna-save",
+          "name": "Накопительный",
+          "iban": "MD21EX000000022510987654",
+          "openingMinor": 4800000
+        }
+      ],
+      "cards": [
+        {
+          "id": "card-anna-1",
+          "accountId": "acc-anna-main",
+          "last4": "4417",
+          "brand": "VISA",
+          "expires": "09/29"
+        }
+      ],
+      "favorites": [
+        {
+          "name": "Ион Попеску",
+          "iban": "MD07AG000000022589630417"
+        },
+        {
+          "name": "Электроэнергия (тест)",
+          "iban": "MD31RN000000000000000555"
+        }
+      ]
+    },
+    {
+      "id": "cust-piotr",
+      "login": "piotr",
+      "displayName": "Пётр Чобану",
+      "deviceKind": "PHONE",
+      "accounts": [
+        {
+          "id": "acc-piotr-main",
+          "name": "Основной счёт",
+          "iban": "MD67VI000022241100000001",
+          "openingMinor": 320000
+        }
+      ],
+      "cards": [
+        {
+          "id": "card-piotr-1",
+          "accountId": "acc-piotr-main",
+          "last4": "9021",
+          "brand": "MASTERCARD",
+          "expires": "03/28"
+        }
+      ],
+      "favorites": []
+    },
+    {
+      "id": "cust-scenario",
+      "login": "scenario-device",
+      "displayName": "Сценарный клиент (программное тест-устройство)",
+      "deviceKind": "SOFTWARE_TEST_DEVICE",
+      "accounts": [
+        {
+          "id": "acc-scenario-main",
+          "name": "Счёт сценариев",
+          "iban": "MD58ML000000002251000999",
+          "openingMinor": 10000000
+        }
+      ],
+      "cards": [],
+      "favorites": []
+    }
+  ],
+  "products": [
+    {
+      "id": "prod-deposit",
+      "kind": "DEPOSIT",
+      "title": "Вклад «Тест 6 месяцев»",
+      "summary": "Демонстрационный продукт, ставка не применяется."
+    },
+    {
+      "id": "prod-card",
+      "kind": "CARD",
+      "title": "Карта Demo Bank",
+      "summary": "Виртуальная тестовая карта, без реальных реквизитов."
+    },
+    {
+      "id": "prod-loan",
+      "kind": "LOAN",
+      "title": "Кредит наличными (демо)",
+      "summary": "Каталог для демонстрации интерфейса; заявки не принимаются."
+    }
+  ],
+  "support": {
+    "phone": "+00 000 000 000 (демо)",
+    "email": "support@demo-bank.invalid",
+    "hours": "Демонстрационная поддержка"
+  }
+}
