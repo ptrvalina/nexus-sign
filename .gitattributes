@@ -6,3 +6,6 @@
 *.swift text eol=lf
 *.kt text eol=lf
 *.ts text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.jar binary

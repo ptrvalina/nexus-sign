@@ -1,4 +1,9 @@
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.tmp
 .idea/
 .vscode/
 .env
