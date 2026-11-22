@@ -8,7 +8,7 @@ import { evidenceKeyId, verifyEvidenceChain, verifyEvidenceRecord } from '../../
 /** Problems with the evidence record (empty when it verifies), and what was signed. */
 export function checkEvidence(record, pinnedKeys) {
   const problems = [];
-  const offeredKeys = record.evidencePublicKeys ?? (record.evidencePublicKeyPem ? [record.evidencePublicKeyPem] : []);
+  const offeredKeys = Array.isArray(record.evidencePublicKeys) ? record.evidencePublicKeys : record.evidencePublicKeyPem ? [record.evidencePublicKeyPem] : [];
   const offered = new Map(offeredKeys.map((pem) => [evidenceKeyId(pem), pem]));
   const sealKeyId = record.sealedPayload?.sealKeyId ?? null;
   // The bank verifies the HSM seal only with keys it has pinned; a key Auth

@@ -274,7 +274,8 @@ export function createPayments({ db, bank, authCore, faults }) {
 
     const pinned = new Map(db.prepare('SELECT key_id, public_key_pem FROM evidence_keys').all().map((r) => [r.key_id, r.public_key_pem]));
     if (pinned.size === 0) {
-      for (const pem of record.evidencePublicKeys ?? [record.evidencePublicKeyPem].filter(Boolean)) {
+      const offered = Array.isArray(record.evidencePublicKeys) ? record.evidencePublicKeys : record.evidencePublicKeyPem ? [record.evidencePublicKeyPem] : [];
+      for (const pem of offered) {
         const id = evidenceKeyId(pem);
         db.prepare('INSERT OR IGNORE INTO evidence_keys (key_id, public_key_pem, pinned_at) VALUES (?, ?, ?)').run(id, pem, now());
         pinned.set(id, pem);

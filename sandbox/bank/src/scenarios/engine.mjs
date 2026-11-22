@@ -52,9 +52,14 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
     return transaction;
   }
 
-  const expectHttp = (ctx, label, response, ok) => {
-    ctx.step(`${label}: HTTP ${response.status}${response.json?.code ? ` ${response.json.code}` : ''}`);
-    if (!ok(response.status)) throw new Error(`${label}: unexpected HTTP ${response.status} ${response.text?.slice(0, 200) ?? ''}`);
+  // Auth Core answers a signature with HTTP 200 and a verification result:
+  // only status VERIFIED (or ALREADY_RECORDED for a repeated upload) confirms.
+  const verdict = (r) => r.json?.status ?? r.json?.code ?? `HTTP ${r.status}`;
+  const confirmed = (r) => r.status === 200 && ['VERIFIED', 'ALREADY_RECORDED'].includes(r.json?.status);
+  const describe = (r) => `HTTP ${r.status} ${verdict(r)}${r.json?.reason ? ` (${r.json.reason})` : ''}`;
+  const expectConfirmed = (ctx, label, response) => {
+    ctx.step(`${label}: ${describe(response)}`);
+    if (!confirmed(response)) throw new Error(`${label}: not confirmed: ${describe(response)}`);
     return response;
   };
 
@@ -73,7 +78,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
       async run(ctx, c) {
         const t = await newTransaction(ctx, c, { beneficiaryIban: undefined, beneficiaryName: undefined, destinationAccountId: 'acc-anna-main', amountMinor: 2500 });
         await deliver(ctx, c);
-        expectHttp(ctx, 'device signature', await device.approve(t.authorization_id), (s) => s === 200);
+        expectConfirmed(ctx, 'device signature', await device.approve(t.authorization_id));
         const done = await waitForState(t.id, ['EXECUTED', 'FAILED']);
         return { state: done.state, journals: journalCount(t.id), pass: done.state === 'EXECUTED' && journalCount(t.id) === 1 };
       },
@@ -84,7 +89,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
       async run(ctx, c) {
         const t = await newTransaction(ctx, c, { amountMinor: 120000 });
         await deliver(ctx, c);
-        expectHttp(ctx, 'device signature', await device.approve(t.authorization_id), (s) => s === 200);
+        expectConfirmed(ctx, 'device signature', await device.approve(t.authorization_id));
         const done = await waitForState(t.id, ['EXECUTED', 'FAILED']);
         return { state: done.state, feeMinor: done.fee_minor, pass: done.state === 'EXECUTED' && done.fee_minor > 0 };
       },
@@ -96,10 +101,10 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         const t = await newTransaction(ctx, c);
         await deliver(ctx, c);
         const r = await device.signWithForeignKey(t.authorization_id);
-        ctx.step(`signature with a foreign key: HTTP ${r.status} ${r.json?.code ?? ''}`);
+        ctx.step(`signature with a foreign key: ${describe(r)}`);
         await payments.cancel(null, t.id, 'OTHER', 'SCENARIO');
         const done = payments.getTransaction(t.id);
-        return { state: done.state, authCoreStatus: r.status, pass: r.status >= 400 && r.status < 500 && done.state === 'CANCELLED' && journalCount(t.id) === 0 };
+        return { state: done.state, authCore: verdict(r), reason: r.json?.reason ?? null, pass: !confirmed(r) && done.state === 'CANCELLED' && journalCount(t.id) === 0 };
       },
     },
     {
@@ -109,10 +114,10 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         const t = await newTransaction(ctx, c);
         await deliver(ctx, c);
         const r = await device.signAlteredTerms(t.authorization_id);
-        ctx.step(`signature over altered terms: HTTP ${r.status} ${r.json?.code ?? ''}`);
+        ctx.step(`signature over altered terms: ${describe(r)}`);
         await payments.cancel(null, t.id, 'ORDER_CHANGED', 'SCENARIO');
         const done = payments.getTransaction(t.id);
-        return { state: done.state, authCoreStatus: r.status, pass: r.status >= 400 && r.status < 500 && done.state === 'CANCELLED' && journalCount(t.id) === 0 };
+        return { state: done.state, authCore: verdict(r), reason: r.json?.reason ?? null, pass: !confirmed(r) && done.state === 'CANCELLED' && journalCount(t.id) === 0 };
       },
     },
     {
@@ -123,9 +128,9 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         ctx.step('waiting 32 s for the request to expire');
         await sleep(32_000);
         const late = await device.approve(t.authorization_id).catch((error) => ({ status: 0, text: error.message }));
-        ctx.step(`late signature: HTTP ${late.status}`);
+        ctx.step(`late signature: ${describe(late)}`);
         const done = await waitForState(t.id, ['EXPIRED'], 10_000);
-        return { state: done.state, lateSignature: late.status, pass: done.state === 'EXPIRED' && late.status !== 200 && journalCount(t.id) === 0 };
+        return { state: done.state, lateSignature: verdict(late), pass: done.state === 'EXPIRED' && !confirmed(late) && journalCount(t.id) === 0 };
       },
     },
     {
@@ -134,7 +139,8 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
       async run(ctx, c) {
         const t = await newTransaction(ctx, c);
         await deliver(ctx, c);
-        expectHttp(ctx, 'decline NOT_ME', await device.decline(t.authorization_id), (s) => s === 200);
+        const declined = await device.decline(t.authorization_id);
+        ctx.step(`decline NOT_ME: ${describe(declined)}`);
         const done = await waitForState(t.id, ['REJECTED']);
         return { state: done.state, pass: done.state === 'REJECTED' && journalCount(t.id) === 0 };
       },
@@ -146,9 +152,9 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         const t = await newTransaction(ctx, c);
         await payments.cancel(null, t.id, 'CUSTOMER_REQUEST', 'SCENARIO');
         const late = await device.approve(t.authorization_id).catch((error) => ({ status: 0, text: error.message }));
-        ctx.step(`signature after cancellation: HTTP ${late.status}`);
+        ctx.step(`signature after cancellation: ${describe(late)}`);
         const done = payments.getTransaction(t.id);
-        return { state: done.state, lateSignature: late.status, pass: done.state === 'CANCELLED' && late.status !== 200 && journalCount(t.id) === 0 };
+        return { state: done.state, lateSignature: verdict(late), pass: done.state === 'CANCELLED' && !confirmed(late) && journalCount(t.id) === 0 };
       },
     },
     {
@@ -173,11 +179,11 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         await deliver(ctx, c);
         faults.dropDeviceNetwork(4000);
         const first = await device.approve(t.authorization_id).catch((error) => ({ status: 0, text: error.message }));
-        ctx.step(`attempt during the outage: HTTP ${first.status}`);
+        ctx.step(`attempt during the outage: ${describe(first)}`);
         await sleep(4500);
-        expectHttp(ctx, 'retry after the network is back', await device.approve(t.authorization_id), (s) => s === 200);
+        expectConfirmed(ctx, 'retry after the network is back', await device.approve(t.authorization_id));
         const done = await waitForState(t.id, ['EXECUTED', 'FAILED']);
-        return { firstAttempt: first.status, state: done.state, pass: first.status !== 200 && done.state === 'EXECUTED' };
+        return { firstAttempt: verdict(first), state: done.state, pass: !confirmed(first) && done.state === 'EXECUTED' };
       },
     },
     {
@@ -205,7 +211,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         const again = await payments.create(c, { sourceAccountId: account(c.id).id, beneficiaryName: 'Ион Попеску', beneficiaryIban: 'MD28AG000000022589630417', amountMinor: 5000, description: `scenario ${ctx.id}` }, key);
         ctx.step(`retry returned ${again.transaction.id === t.id ? 'the same transaction' : 'a NEW transaction'}`);
         await deliver(ctx, c);
-        expectHttp(ctx, 'device signature', await device.approve(t.authorization_id), (s) => s === 200);
+        expectConfirmed(ctx, 'device signature', await device.approve(t.authorization_id));
         const done = await waitForState(t.id, ['EXECUTED', 'FAILED']);
         return { sameTransaction: again.transaction.id === t.id, replay: again.replay, journals: journalCount(t.id), pass: again.transaction.id === t.id && again.replay && done.state === 'EXECUTED' && journalCount(t.id) === 1 };
       },
@@ -222,7 +228,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         ctx.step(`code entered at the bank: ${submitted.status}`);
         const provisional = payments.getTransaction(t.id);
         const executedEarly = journalCount(t.id) > 0;
-        expectHttp(ctx, 'deferred device signature', await device.uploadDeferredSignature(t.authorization_id, canonical), (s) => s === 200);
+        expectConfirmed(ctx, 'deferred device signature', await device.uploadDeferredSignature(t.authorization_id, canonical));
         const done = await waitForState(t.id, ['EXECUTED', 'FAILED']);
         return { afterCode: provisional.state, executedBeforeSignature: executedEarly, state: done.state, pass: provisional.state === 'OFFLINE_PROVISIONAL' && !executedEarly && done.state === 'EXECUTED' };
       },
@@ -239,12 +245,12 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         const submitted = await payments.offlineCode(t.id, code, 'SCENARIO');
         ctx.step(`code entered at the bank: ${submitted.status}`);
         const blocked = await device.uploadDeferredSignature(t.authorization_id, canonical).catch((error) => ({ status: 0, text: error.message }));
-        ctx.step(`upload while offline: HTTP ${blocked.status}`);
+        ctx.step(`upload while offline: ${describe(blocked)}`);
         const stillProvisional = payments.getTransaction(t.id).state;
         await sleep(5500);
-        expectHttp(ctx, 'upload after the network is back', await device.uploadDeferredSignature(t.authorization_id, canonical), (s) => s === 200);
+        expectConfirmed(ctx, 'upload after the network is back', await device.uploadDeferredSignature(t.authorization_id, canonical));
         const done = await waitForState(t.id, ['EXECUTED', 'FAILED']);
-        return { whileOffline: stillProvisional, state: done.state, pass: blocked.status !== 200 && stillProvisional === 'OFFLINE_PROVISIONAL' && done.state === 'EXECUTED' };
+        return { whileOffline: stillProvisional, state: done.state, pass: !confirmed(blocked) && stillProvisional === 'OFFLINE_PROVISIONAL' && done.state === 'EXECUTED' };
       },
     },
     {
@@ -262,7 +268,7 @@ export function createScenarioEngine({ db, payments, customers, device, faults, 
         const t = await newTransaction(ctx, c);
         faults.tamperEvidenceOf(t.id);
         await deliver(ctx, c);
-        expectHttp(ctx, 'device signature', await device.approve(t.authorization_id), (s) => s === 200);
+        expectConfirmed(ctx, 'device signature', await device.approve(t.authorization_id));
         const done = await waitForState(t.id, ['EXECUTED', 'FAILED']);
         return { state: done.state, reason: done.failure_reason, pass: done.state === 'FAILED' && journalCount(t.id) === 0 };
       },
