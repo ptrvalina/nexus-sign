@@ -16,16 +16,16 @@ enum UploadOutcome: Equatable {
     /// 200 VERIFIED / ALREADY_RECORDED or 202 RECEIVED.
     case accepted
     /// 409, 422, 403, 404 and other 4xx: retrying cannot succeed.
-    case refused(statusCode: Int)
+    case refused(statusCode: Int, message: String? = nil)
     /// No answer, 401, 429 or 5xx: kept and retried.
-    case retry
+    case retry(reason: String? = nil)
 
-    static func of(statusCode: Int) -> UploadOutcome {
+    static func of(statusCode: Int, message: String? = nil) -> UploadOutcome {
         switch statusCode {
         case 200..<300: return .accepted
-        case 401, 429: return .retry
-        case 400..<500: return .refused(statusCode: statusCode)
-        default: return .retry
+        case 401, 429: return .retry(reason: "HTTP \(statusCode)\(message.map { ": \($0)" } ?? "")")
+        case 400..<500: return .refused(statusCode: statusCode, message: message)
+        default: return .retry(reason: "HTTP \(statusCode)\(message.map { ": \($0)" } ?? "")")
         }
     }
 }
@@ -35,6 +35,26 @@ public struct OfflineSignatureDelivery: Equatable {
     public let delivered: Int
     public let refused: Int
     public let pending: Int
+    /// Why the last refused item was dropped: Auth Core's HTTP status, 0 for
+    /// an item that cannot be sent, -1 for one older than the longest
+    /// signature deadline. Nil when nothing was refused. Lets the app tell the
+    /// customer that the bank will not see this signature, instead of waiting.
+    public let lastRefusalStatusCode: Int?
+    /// Auth Core's error message for that refusal, when it sent one.
+    public let lastRefusalMessage: String?
+    /// Set when at least one item was kept because there was no answer (no
+    /// network, 401, 429, 5xx): it is sent again on the next call.
+    public let lastRetryReason: String?
+
+    init(delivered: Int, refused: Int, pending: Int,
+         lastRefusalStatusCode: Int? = nil, lastRefusalMessage: String? = nil, lastRetryReason: String? = nil) {
+        self.delivered = delivered
+        self.refused = refused
+        self.pending = pending
+        self.lastRefusalStatusCode = lastRefusalStatusCode
+        self.lastRefusalMessage = lastRefusalMessage
+        self.lastRetryReason = lastRetryReason
+    }
 }
 
 final class OfflineSignatureQueue {
@@ -77,19 +97,26 @@ final class OfflineSignatureQueue {
     func deliver(_ upload: (PendingOfflineSignature) async -> UploadOutcome) async -> OfflineSignatureDelivery {
         var delivered = 0
         var refused = 0
+        var refusalCode: Int?
+        var refusalMessage: String?
+        var retryReason: String?
         let now = clock()
         for item in pending() {
             if now - item.createdAtEpochSeconds > Self.maxAgeSeconds {
                 remove(item); refused += 1
+                refusalCode = -1; refusalMessage = "older than the longest signature deadline"
                 continue
             }
             switch await upload(item) {
             case .accepted: remove(item); delivered += 1
-            case .refused: remove(item); refused += 1
-            case .retry: break
+            case .refused(let statusCode, let message):
+                remove(item); refused += 1
+                refusalCode = statusCode; refusalMessage = message
+            case .retry(let reason): retryReason = reason ?? "no answer"
             }
         }
-        return OfflineSignatureDelivery(delivered: delivered, refused: refused, pending: pending().count)
+        return OfflineSignatureDelivery(delivered: delivered, refused: refused, pending: pending().count,
+                                        lastRefusalStatusCode: refusalCode, lastRefusalMessage: refusalMessage, lastRetryReason: retryReason)
     }
 
     /// If the write fails the item stays and is uploaded again later; Auth

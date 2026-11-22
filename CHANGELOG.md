@@ -15,6 +15,11 @@ All notable changes to this project are documented here. Versions follow [Semant
 - iOS SDK: mandate terms are checked like on Android (finding N-13): canonical bytes, exactly the protocol's fields, frequency, integer limits, total not below the per-payment limit, validity in order. Before, the iOS SDK accepted 7 of the 17 invalid shared vectors, among them terms with a field it would sign without showing.
 - CI runs the eight HSM suites on SoftHSM 2.7.0 built from the pinned upstream tag; Ubuntu's SoftHSM 2.6.1 lacks `CKM_ECDSA_SHA256`, so the suites had not run.
 
+### Fixed
+
+- Offline confirmation in the demo apps: a deferred signature that Auth Core refused (409/422/403/404) was dropped silently, and errors from the demo bank were swallowed, so the phone kept an old offline code on screen while the payment stayed `OFFLINE_PROVISIONAL` ("ждём подпись телефона") and new payments did not appear. The apps now show every delivery outcome (accepted, refused with the HTTP status, waiting for network) and demo-bank errors; the iOS app sends the waiting signature as soon as the network returns (`NWPathMonitor`) or the app comes to the foreground, and «Подключиться» clears a stale offline code.
+- iOS SDK: `OfflineSignatureDelivery` carries `lastRefusalStatusCode`, `lastRefusalMessage` and `lastRetryReason`, so an app can tell the customer why a signature will not confirm the payment.
+
 ### Repository
 
 - Removed `setMasterKeysForTests` from `masterKeyVault.ts`: an exported setter that replaced the loaded master keys, used by nothing (no test, script or module imports it); an unused path to replace key material does not belong in product code.

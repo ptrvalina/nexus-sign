@@ -347,14 +347,14 @@ public final class NEXUSSignSDK {
             return OfflineSignatureDelivery(delivered: 0, refused: 0, pending: offlineSignatures.pending().count)
         }
         return await offlineSignatures.deliver { item in
-            guard UUID(uuidString: item.authorizationId) != nil else { return .refused(statusCode: 0) }
+            guard UUID(uuidString: item.authorizationId) != nil else { return .refused(statusCode: 0, message: "invalid authorization ID") }
             do {
                 try await networkClient.uploadDeferredSignature(authorizationID: item.authorizationId, signatureBase64: item.signature)
                 return .accepted
-            } catch NEXUSSignError.serverError(let statusCode, _) {
-                return UploadOutcome.of(statusCode: statusCode)
+            } catch NEXUSSignError.serverError(let statusCode, let message) {
+                return UploadOutcome.of(statusCode: statusCode, message: message)
             } catch {
-                return .retry
+                return .retry(reason: error.localizedDescription)
             }
         }
     }

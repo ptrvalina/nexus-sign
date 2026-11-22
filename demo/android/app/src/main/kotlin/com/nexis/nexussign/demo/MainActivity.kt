@@ -106,13 +106,28 @@ class MainActivity : AppCompatActivity() {
     private suspend fun poll() {
         if (busy || !sdk.isRegistered()) return
         // Offline confirmations: signatures made without network go out as soon as there is one.
+        // Every outcome is shown: a refused signature never confirms the payment.
         val delivery = runCatching { sdk.submitPendingOfflineSignatures() }.getOrNull()
         if (delivery != null && delivery.delivered > 0) {
             offlineCodeView.visibility = View.GONE
-            setStatus("Подпись офлайн-подтверждения отправлена в банк (${delivery.delivered}). Итог — на странице демо-банка.")
+            setStatus("Подпись офлайн-подтверждения принята Auth Core (${delivery.delivered}). Итог — на странице демо-банка.")
+        }
+        if (delivery != null && delivery.refused > 0) {
+            offlineCodeView.visibility = View.GONE
+            setStatus("Auth Core не принял подпись офлайн-подтверждения (${delivery.refused}). Платёж этой подписью не подтвердится: отправьте новый платёж. Причина — в журнале Auth Core (deferred_signature_*).")
+        }
+        if (delivery != null && delivery.pending > 0 && offlineCodeView.visibility == View.VISIBLE) {
+            setStatus("Подпись ждёт отправки (${delivery.pending}): нет связи с сервером. Уйдёт сама, как только появится сеть.")
         }
         if (current != null) return
-        val pending = runCatching { bank.pending() }.getOrNull() ?: return
+        val answer = runCatching { bank.pending() }
+        answer.exceptionOrNull()?.let { error ->
+            // Shown instead of silently waiting, unless an offline code is on screen.
+            if (offlineCodeView.visibility != View.VISIBLE) show(error)
+            return
+        }
+        val pending = answer.getOrNull() ?: return
+        offlineCodeView.visibility = View.GONE
         try {
             // The SDK checks that every displayed field matches the exact bytes it will sign.
             current = sdk.fetchAuthorization(pending.authorizationId)

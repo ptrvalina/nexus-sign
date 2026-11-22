@@ -3,6 +3,7 @@ import NEXUSSignCalls
 
 struct ContentView: View {
     @StateObject private var model = DemoModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationView {
@@ -44,9 +45,17 @@ struct ContentView: View {
                         }
                     }
                 }
-                if let code = model.offlineCode {
-                    Section("Офлайн-код") {
-                        Text(code).font(.largeTitle.monospacedDigit().bold())
+                if model.offlineCode != nil || model.offlineDelivery != nil {
+                    Section("Офлайн-подтверждение") {
+                        if let code = model.offlineCode {
+                            Text(code).font(.largeTitle.monospacedDigit().bold())
+                        }
+                        if let reference = model.offlineReference {
+                            Text("Референс: \(reference)").font(.footnote)
+                        }
+                        if let delivery = model.offlineDelivery {
+                            Text(delivery).font(.footnote).foregroundColor(.secondary)
+                        }
                     }
                 }
                 Section {
@@ -60,6 +69,9 @@ struct ContentView: View {
             .navigationTitle("NEXUS-SIGN · демо")
         }
         .navigationViewStyle(.stack)
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { model.becameActive() }
+        }
         .fullScreenCover(isPresented: Binding(get: { model.call != nil }, set: { if !$0 { model.call = nil } })) {
             if let call = model.call { VerificationCallView(model: call) }
         }
