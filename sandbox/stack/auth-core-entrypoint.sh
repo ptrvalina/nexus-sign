@@ -14,12 +14,16 @@ HSM_DIR=/var/lib/sandbox-hsm
 CREDENTIALS=/run/sandbox-credentials
 umask 077
 
-if [ ! -f "$HSM_DIR/softhsm2.conf" ]; then
+# The token is ready only once the evidence key exists; an interrupted first
+# start is redone from scratch (the token holds nothing else).
+if [ ! -f "$HSM_DIR/.initialized" ]; then
+  rm -rf "$HSM_DIR/tokens" "$HSM_DIR/softhsm2.conf"
   mkdir -p "$HSM_DIR/tokens"
   printf 'directories.tokendir = %s/tokens\nobjectstore.backend = file\nlog.level = ERROR\n' "$HSM_DIR" > "$HSM_DIR/softhsm2.conf.tmp"
   mv "$HSM_DIR/softhsm2.conf.tmp" "$SOFTHSM2_CONF"
   /opt/softhsm/bin/softhsm2-util --init-token --free --label "$PKCS11_TOKEN_LABEL" --so-pin "$PKCS11_SO_PIN" --pin "$PKCS11_PIN" >/dev/null
   node /sandbox/hsm-init.cjs
+  touch "$HSM_DIR/.initialized"
 fi
 
 if [ ! -s "$CREDENTIALS/bank-client-secret" ]; then

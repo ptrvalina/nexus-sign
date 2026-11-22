@@ -4,9 +4,9 @@
 // start of the sandbox. SoftHSM is the sandbox's TEST HSM, not a production HSM.
 const pkcs11js = require('/app/node_modules/pkcs11js');
 
-const { PKCS11_MODULE_PATH: module, PKCS11_PIN: pin, PKCS11_TOKEN_LABEL: tokenLabel, PKCS11_EVIDENCE_KEY_LABEL: label } = process.env;
+const { PKCS11_MODULE_PATH: modulePath, PKCS11_PIN: pin, PKCS11_TOKEN_LABEL: tokenLabel, PKCS11_EVIDENCE_KEY_LABEL: label } = process.env;
 const p = new pkcs11js.PKCS11();
-p.load(module);
+p.load(modulePath);
 p.C_Initialize();
 try {
   const slot = p.C_GetSlotList(true).find((s) => p.C_GetTokenInfo(s).label.trim() === tokenLabel);
