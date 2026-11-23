@@ -457,6 +457,40 @@ jobs:
         working-directory: sandbox/bank
         run: npm test
 
+  sandbox-ios-app:
+    name: sandbox / iOS bank app build
+    runs-on: macos-15
+    needs: ios-sdk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Build the sandbox bank app for iPhone against the SDK in this repository (unsigned)
+        run: |
+          xcodebuild -project sandbox/mobile/ios/VoxTelBank.xcodeproj -scheme VoxTelBank \
+            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build
+
+  sandbox-android-app:
+    name: sandbox / Android bank app APK
+    runs-on: ubuntu-24.04
+    needs: android-sdk
+    defaults:
+      run:
+        working-directory: sandbox/mobile/android
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2, also validates the wrapper checksum
+      - name: Build the sandbox bank app against the SDK in this repository
+        run: sh ../../../android-sdk/gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: voxtel-sandbox-bank-apk
+          path: sandbox/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
   sandbox-stack:
     name: sandbox / isolated stack end to end (Auth Core, SoftHSM, scenarios)
     runs-on: ubuntu-24.04
