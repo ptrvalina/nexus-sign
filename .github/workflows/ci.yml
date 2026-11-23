@@ -48,7 +48,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3-yaml python3-jsonschema
           python3 scripts/validate-openapi.py openapi.yaml
           python3 scripts/validate-openapi.py admin-openapi.yaml
-          python3 scripts/validate-openapi.py ../sandbox/openapi.yaml
       - name: Kubernetes manifests follow Auth Core (production posture, probes, user)
         run: python3 ../deploy/kubernetes/check-manifests.py
 
@@ -324,12 +323,6 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Auth Core image
         run: docker build -t nexus-sign/auth-core:ci auth-core
-      - name: Sandbox image
-        run: |
-          docker build -t nexus-sign/sandbox:ci sandbox
-          docker run -d --name sbx -e HOST=0.0.0.0 -e SANDBOX_ACCESS_CODES="ci:$(openssl rand -hex 16)" -p 8787:8787 nexus-sign/sandbox:ci
-          for i in $(seq 1 20); do curl -sf http://127.0.0.1:8787/api/v1/health && exit 0; sleep 1; done
-          docker logs sbx; exit 1
 
   ios-sdk:
     name: ios-sdk / build and unit tests
@@ -452,16 +445,85 @@ jobs:
       - name: Pairing code required for enrolment tokens (no dependencies)
         run: node --test demo/bank-backend/test/*.test.mjs
 
-  sandbox:
-    name: sandbox / protocol and API tests
+  sandbox-bank:
+    name: sandbox / bank unit tests
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: sandbox
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          python-version: '3.10'  # oldest supported version
-      - name: Unit and API tests (standard library only)
-        run: python -m unittest discover -s tests -v
+          node-version: 22
+      - name: Ledger, idempotency, the bank's evidence and binding checks (no dependencies)
+        working-directory: sandbox/bank
+        run: npm test
+
+  sandbox-ios-app:
+    name: sandbox / iOS bank app build
+    runs-on: macos-15
+    needs: ios-sdk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Build the sandbox bank app for iPhone against the SDK in this repository (unsigned)
+        run: |
+          xcodebuild -project sandbox/mobile/ios/VoxTelBank.xcodeproj -scheme VoxTelBank \
+            -configuration Debug -sdk iphoneos -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build
+
+  sandbox-android-app:
+    name: sandbox / Android bank app APK
+    runs-on: ubuntu-24.04
+    needs: android-sdk
+    defaults:
+      run:
+        working-directory: sandbox/mobile/android
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2, also validates the wrapper checksum
+      - name: Build the sandbox bank app against the SDK in this repository
+        run: sh ../../../android-sdk/gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: voxtel-sandbox-bank-apk
+          path: sandbox/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+  sandbox-stack:
+    name: sandbox / isolated stack end to end (Auth Core, SoftHSM, scenarios)
+    runs-on: ubuntu-24.04
+    needs: sandbox-bank
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+      # A pull request that changes auth-core/ runs against its own Auth Core;
+      # the pin (sandbox/PINNED_AUTH_CORE) is reported, not enforced, here.
+      - name: Start the sandbox (builds Auth Core with SoftHSM 2.7.0 and the bank)
+        run: sandbox/bin/sandbox up --allow-unpinned
+      - name: End-to-end tests and every demonstration scenario against the real Auth Core
+        run: node --test sandbox/tests/e2e.test.mjs
+      # *.localhost names get certificates from Caddy's internal CA, so the
+      # public path (Caddy, landing page, download, console gate) runs in CI.
+      - name: Public mode behind Caddy
+        run: |
+          sandbox/bin/sandbox up --public sandbox.localhost --allow-unpinned
+          printf 'PK\003\004 test' > /tmp/test.apk && sandbox/bin/sandbox publish-apk /tmp/test.apk
+          r="--resolve sandbox.localhost:443:127.0.0.1 --resolve console.sandbox.localhost:443:127.0.0.1 -k -s -o /dev/null -w %{http_code}"
+          for i in $(seq 1 30); do [ "$(curl $r https://sandbox.localhost/healthz)" = 200 ] && break; sleep 2; done
+          test "$(curl $r https://sandbox.localhost/healthz)" = 200
+          test "$(curl $r https://sandbox.localhost/)" = 200
+          test "$(curl $r https://sandbox.localhost/download/voxtel-demo.apk)" = 200
+          test "$(curl $r https://sandbox.localhost/v1/authorizations -X POST)" = 404
+          test "$(curl $r https://console.sandbox.localhost/)" = 401
+          test "$(curl $r -u "operator:$(cat sandbox/.state/console-gate-password)" https://console.sandbox.localhost/login)" = 200
+          sandbox/bin/sandbox add-customer tester.ci "CI Tester" 500
+      - name: Logs
+        if: failure()
+        run: sandbox/bin/sandbox logs
+      - name: Remove the sandbox
+        if: always()
+        run: sandbox/bin/sandbox remove --yes

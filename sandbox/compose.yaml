@@ -1,0 +1,98 @@
+# NEXUS-SIGN sandbox: an isolated demonstration bank with its own Auth Core.
+# Start, stop, reset and remove it with sandbox/bin/sandbox, which writes the
+# sandbox's own secrets to sandbox/.state/ first and checks isolation.
+#
+# Isolation: its own project name, network, database, Redis, SoftHSM token,
+# credentials and volumes. PostgreSQL, Redis and Auth Core publish no port;
+# only the bank's console (loopback) and device port are reachable from the host.
+name: nexus-sign-sandbox
+
+x-sandbox-env: &sandbox-env
+  SANDBOX_ENVIRONMENT: sandbox
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sandbox_dba
+      POSTGRES_DB: nexus_sign_sandbox
+    # The password files are read here, as root, before the image drops to the postgres user.
+    entrypoint: ["/bin/sh", "-c", "export POSTGRES_PASSWORD=\"$$(cat /run/sandbox-state/postgres-password)\" SANDBOX_APP_DB_PASSWORD=\"$$(cat /run/sandbox-state/app-db-password)\"; exec docker-entrypoint.sh postgres"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../auth-core/src/db/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+      - ../auth-core/scripts/db/roles.sql:/docker-entrypoint-initdb.d/20-roles.sql:ro
+      - ./stack/postgres-init-app-login.sh:/docker-entrypoint-initdb.d/30-app-login.sh:ro
+      - ./.state/postgres-password:/run/sandbox-state/postgres-password:ro
+      - ./.state/app-db-password:/run/sandbox-state/app-db-password:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox_dba -d nexus_sign_sandbox"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  auth-core:
+    build:
+      context: ..
+      dockerfile: sandbox/images/auth-core.Dockerfile
+    image: nexus-sign-sandbox/auth-core:local
+    env_file: [./.state/auth-core.env]
+    environment:
+      <<: *sandbox-env
+    volumes:
+      - hsm-tokens:/var/lib/sandbox-hsm
+      - credentials:/run/sandbox-credentials
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  bank:
+    build:
+      context: ..
+      dockerfile: sandbox/images/bank.Dockerfile
+    image: nexus-sign-sandbox/bank:local
+    env_file: [./.state/bank.env]
+    environment:
+      <<: *sandbox-env
+      AUTH_CORE_URL: http://auth-core:8080
+      SANDBOX_ALLOWED_AUTH_CORE_HOSTS: auth-core
+      SANDBOX_DATA_DIR: /var/lib/sandbox-bank
+      BANK_CLIENT_SECRET_FILE: /run/sandbox-credentials/bank-client-secret
+      CONSOLE_HOST: 0.0.0.0
+      DEVICE_HOST: 0.0.0.0
+    volumes:
+      - bank-data:/var/lib/sandbox-bank
+      - credentials:/run/sandbox-credentials:ro
+      - ./.state/tls:/run/sandbox-tls:ro
+    ports:
+      - "127.0.0.1:${SANDBOX_CONSOLE_PORT:-8190}:8190"
+      - "${SANDBOX_DEVICE_BIND:-127.0.0.1}:${SANDBOX_DEVICE_PORT:-8191}:8191"
+    networks: [internal, edge]
+    restart: on-failure:5
+    depends_on:
+      auth-core: { condition: service_healthy }
+
+networks:
+  # No route out: PostgreSQL, Redis and Auth Core reach nothing but each other and the bank.
+  internal:
+    internal: true
+  # The bank's published ports only.
+  edge: {}
+
+volumes:
+  postgres-data:
+  hsm-tokens:
+  credentials:
+  bank-data:

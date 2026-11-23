@@ -1,0 +1,11 @@
+{
+  "name": "nexus-sign-sandbox-bank",
+  "private": true,
+  "description": "Sandbox demo bank for NEXUS-SIGN: ledger, bank app API, operations console, scenario engine. No dependencies.",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.mjs\""
+  }
+}

@@ -1,0 +1,311 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		C2B0000000000000000000C8 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B0000000000000000000C9 /* AppConfig.swift */; };
+		C2B0000000000000000000CA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C2B0000000000000000000CB /* Assets.xcassets */; };
+		C2B000000000000000000064 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000065 /* AppModel.swift */; };
+		C2B000000000000000000066 /* BankAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000067 /* BankAPI.swift */; };
+		C2B000000000000000000068 /* ConfirmationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000069 /* ConfirmationViews.swift */; };
+		C2B00000000000000000006A /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B00000000000000000006B /* HistoryView.swift */; };
+		C2B00000000000000000006C /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B00000000000000000006D /* HomeView.swift */; };
+		C2B00000000000000000006E /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B00000000000000000006F /* LoginView.swift */; };
+		C2B000000000000000000070 /* MoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000071 /* MoreView.swift */; };
+		C2B000000000000000000072 /* PaymentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000073 /* PaymentsView.swift */; };
+		C2B000000000000000000074 /* ProductsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000075 /* ProductsView.swift */; };
+		C2B000000000000000000076 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000077 /* Theme.swift */; };
+		C2B000000000000000000078 /* VoxTelBankApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000079 /* VoxTelBankApp.swift */; };
+		B1D000000000000000000009 /* NEXUSSign in Frameworks */ = {isa = PBXBuildFile; productRef = B1D00000000000000000000A /* NEXUSSign */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		C2B0000000000000000000C9 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		C2B0000000000000000000CB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C2B000000000000000000065 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		C2B000000000000000000067 /* BankAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankAPI.swift; sourceTree = "<group>"; };
+		C2B000000000000000000069 /* ConfirmationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationViews.swift; sourceTree = "<group>"; };
+		C2B00000000000000000006B /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		C2B00000000000000000006D /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		C2B00000000000000000006F /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		C2B000000000000000000071 /* MoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoreView.swift; sourceTree = "<group>"; };
+		C2B000000000000000000073 /* PaymentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentsView.swift; sourceTree = "<group>"; };
+		C2B000000000000000000075 /* ProductsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductsView.swift; sourceTree = "<group>"; };
+		C2B000000000000000000077 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		C2B000000000000000000079 /* VoxTelBankApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoxTelBankApp.swift; sourceTree = "<group>"; };
+		B1D00000000000000000000B /* VoxTelBank.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoxTelBank.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B1D00000000000000000000C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B1D000000000000000000009 /* NEXUSSign in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B1D00000000000000000000D = {
+			isa = PBXGroup;
+			children = (
+				B1D00000000000000000000E /* VoxTelBank */,
+				B1D00000000000000000000F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B1D00000000000000000000E /* VoxTelBank */ = {
+			isa = PBXGroup;
+			children = (
+				C2B0000000000000000000C9 /* AppConfig.swift */,
+				C2B000000000000000000065 /* AppModel.swift */,
+				C2B0000000000000000000CB /* Assets.xcassets */,
+				C2B000000000000000000067 /* BankAPI.swift */,
+				C2B000000000000000000069 /* ConfirmationViews.swift */,
+				C2B00000000000000000006B /* HistoryView.swift */,
+				C2B00000000000000000006D /* HomeView.swift */,
+				C2B00000000000000000006F /* LoginView.swift */,
+				C2B000000000000000000071 /* MoreView.swift */,
+				C2B000000000000000000073 /* PaymentsView.swift */,
+				C2B000000000000000000075 /* ProductsView.swift */,
+				C2B000000000000000000077 /* Theme.swift */,
+				C2B000000000000000000079 /* VoxTelBankApp.swift */,
+			);
+			path = VoxTelBank;
+			sourceTree = "<group>";
+		};
+		B1D00000000000000000000F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B1D00000000000000000000B /* VoxTelBank.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B1D000000000000000000010 /* VoxTelBank */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B1D000000000000000000011 /* Build configuration list for PBXNativeTarget "VoxTelBank" */;
+			buildPhases = (
+				B1D000000000000000000012 /* Sources */,
+				B1D00000000000000000000C /* Frameworks */,
+				B1D000000000000000000013 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VoxTelBank;
+			packageProductDependencies = (
+				B1D00000000000000000000A /* NEXUSSign */,
+			);
+			productName = VoxTelBank;
+			productReference = B1D00000000000000000000B /* VoxTelBank.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B1D000000000000000000014 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					B1D000000000000000000010 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = B1D000000000000000000015 /* Build configuration list for PBXProject "VoxTelBank" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = B1D00000000000000000000D;
+			packageReferences = (
+				B1D000000000000000000016 /* XCLocalSwiftPackageReference "../../../ios-sdk" */,
+			);
+			productRefGroup = B1D00000000000000000000F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B1D000000000000000000010 /* VoxTelBank */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B1D000000000000000000013 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2B0000000000000000000CA /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B1D000000000000000000012 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2B0000000000000000000C8 /* AppConfig.swift in Sources */,
+				C2B000000000000000000064 /* AppModel.swift in Sources */,
+				C2B000000000000000000066 /* BankAPI.swift in Sources */,
+				C2B000000000000000000068 /* ConfirmationViews.swift in Sources */,
+				C2B00000000000000000006A /* HistoryView.swift in Sources */,
+				C2B00000000000000000006C /* HomeView.swift in Sources */,
+				C2B00000000000000000006E /* LoginView.swift in Sources */,
+				C2B000000000000000000070 /* MoreView.swift in Sources */,
+				C2B000000000000000000072 /* PaymentsView.swift in Sources */,
+				C2B000000000000000000074 /* ProductsView.swift in Sources */,
+				C2B000000000000000000076 /* Theme.swift in Sources */,
+				C2B000000000000000000078 /* VoxTelBankApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B1D000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B1D000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		B1D000000000000000000019 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_CFBundleDisplayName = "VoxTel Demo";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID подтверждает операции ключом в Secure Enclave этого iPhone.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nexis.voxtel.sandbox.bank;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		B1D00000000000000000001A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_CFBundleDisplayName = "VoxTel Demo";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID подтверждает операции ключом в Secure Enclave этого iPhone.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nexis.voxtel.sandbox.bank;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B1D000000000000000000015 /* Build configuration list for PBXProject "VoxTelBank" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1D000000000000000000017 /* Debug */,
+				B1D000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B1D000000000000000000011 /* Build configuration list for PBXNativeTarget "VoxTelBank" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1D000000000000000000019 /* Debug */,
+				B1D00000000000000000001A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B1D000000000000000000016 /* XCLocalSwiftPackageReference "../../../ios-sdk" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../../ios-sdk";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B1D00000000000000000000A /* NEXUSSign */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NEXUSSign;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = B1D000000000000000000014 /* Project object */;
+}

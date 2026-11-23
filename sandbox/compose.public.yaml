@@ -1,0 +1,35 @@
+# Public mode (sandbox/bin/sandbox up --public DOMAIN): phones reach the
+# sandbox from anywhere over HTTPS with a Let's Encrypt certificate that
+# Caddy obtains and renews. Added on top of compose.yaml; the rest of the
+# isolation is unchanged (internal network, own database, credentials).
+#
+#   https://DOMAIN           bank app API + device endpoints + landing page with downloads
+#   https://console.DOMAIN   operations console, behind an extra HTTP login
+#
+# Nothing else is published: the console port stays on 127.0.0.1 of the server
+# (for an SSH tunnel), PostgreSQL, Redis and Auth Core stay internal.
+services:
+  bank:
+    ports: !override
+      - "127.0.0.1:${SANDBOX_CONSOLE_PORT:-8190}:8190"
+    volumes:
+      - ./.state/downloads:/run/sandbox-downloads:ro
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./.state/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge]
+    depends_on:
+      bank: { condition: service_healthy }
+
+volumes:
+  caddy-data:
+  caddy-config:

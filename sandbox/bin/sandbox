@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+# NEXUS-SIGN sandbox control. Acts only on the Docker Compose project
+# "nexus-sign-sandbox" and on sandbox/.state/; it never touches another
+# project, a global setting or a file outside sandbox/.
+#
+#   sandbox/bin/sandbox up [--allow-unpinned]   check isolation, build, start, print the addresses
+#   sandbox/bin/sandbox up --public DOMAIN [--email ADDRESS]
+#                                               public mode on a server: https://DOMAIN for phones anywhere,
+#                                               https://console.DOMAIN for the console (Let's Encrypt via Caddy)
+#   sandbox/bin/sandbox public --off            back to local mode
+#   sandbox/bin/sandbox add-customer LOGIN "NAME" [BALANCE]   a tester's own customer; prints the password once
+#   sandbox/bin/sandbox publish-apk FILE.apk    offer the Android app on the landing page
+#   sandbox/bin/sandbox testflight URL          offer the TestFlight invitation on the landing page
+#   sandbox/bin/sandbox status | logs [service]
+#   sandbox/bin/sandbox scenarios               run every demo scenario through the console API
+#   sandbox/bin/sandbox cert <LAN-IPv4>         HTTPS for the device port, reachable on the Wi-Fi (phones)
+#   sandbox/bin/sandbox cert --remove           back to plain HTTP on 127.0.0.1 (Android over USB)
+#   sandbox/bin/sandbox down                    stop; data is kept
+#   sandbox/bin/sandbox reset                   stop and delete the sandbox's data volumes (fresh demo data on next up)
+#   sandbox/bin/sandbox remove --yes            reset, delete the sandbox images and sandbox/.state/
+#   sandbox/bin/sandbox check [--allow-unpinned] isolation checks only
+#   sandbox/bin/sandbox pin                     record the Auth Core revision the sandbox was verified with
+set -euo pipefail
+
+SANDBOX_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$SANDBOX_DIR/.." && pwd)"
+STATE="$SANDBOX_DIR/.state"
+PROJECT=nexus-sign-sandbox
+COMPOSE=(docker compose -p "$PROJECT" -f "$SANDBOX_DIR/compose.yaml")
+# Public mode, once chosen with 'up --public DOMAIN', stays on until 'public --off'.
+if [ -s "$STATE/public-domain" ]; then COMPOSE+=(-f "$SANDBOX_DIR/compose.public.yaml"); fi
+PIN_FILE="$SANDBOX_DIR/PINNED_AUTH_CORE"
+# After 'cert', the device port listens on the Wi-Fi until 'cert --remove'.
+if [ -z "${SANDBOX_DEVICE_BIND:-}" ] && [ -s "$STATE/device-ip" ]; then export SANDBOX_DEVICE_BIND=0.0.0.0; fi
+
+say() { printf '%s\n' "$*"; }
+fail() { printf 'sandbox: %s\n' "$*" >&2; exit 1; }
+random() { openssl rand -base64 "${1:-32}" | tr -d '\n'; }
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+password() { openssl rand -base64 18 | tr -d '\n/+=' | cut -c1-20; }
+
+# --- secrets of this sandbox only (never reused elsewhere, never overwritten) ---
+init_state() {
+  command -v openssl >/dev/null || fail "openssl is required"
+  mkdir -p "$STATE/tls"
+  chmod 700 "$STATE"
+  ( umask 077
+    [ -s "$STATE/postgres-password" ] || password > "$STATE/postgres-password"
+    [ -s "$STATE/app-db-password" ] || password > "$STATE/app-db-password"
+    [ -s "$STATE/console-password" ] || password > "$STATE/console-password"
+    [ -s "$STATE/customer-password" ] || password > "$STATE/customer-password"
+    if [ ! -s "$STATE/auth-core.env" ]; then
+      cat > "$STATE/auth-core.env" <<EOF
+# Sandbox Auth Core. Development mode, SoftHSM test HSM. Not for any shared or production use.
+NODE_ENV=development
+ALLOW_INSECURE_DEVELOPMENT=true
+PORT=8080
+DATABASE_URL=postgres://nexus_app:$(cat "$STATE/app-db-password")@postgres:5432/nexus_sign_sandbox
+DATABASE_SSL=false
+REDIS_URL=redis://redis:6379
+REDIS_TLS_REQUIRED=false
+HSM_ADAPTER=pkcs11
+PKCS11_PIN=$(password)
+PKCS11_SO_PIN=$(password)
+REQUIRE_VALID_ATTESTATION=false
+REQUIRE_MTLS_HEADER=false
+DEVICE_REPLACEMENT_HOLD_SECONDS=120
+OFFLINE_CONFIRMATION_ENABLED=true
+OFFLINE_CONFIRMATION_MAX_AMOUNT=MDL:1000000
+OFFLINE_CONFIRMATION_MAX_PER_CREDENTIAL_PER_DAY=500
+DEVICE_SECRET_ENCRYPTION_KEY=$(random)
+WEBHOOK_SECRET_ENCRYPTION_KEY=$(random)
+ADMIN_SECRET_ENCRYPTION_KEY=$(random)
+ADMIN_COOKIE_SECURE=false
+ADMIN_MFA_REQUIRED=true
+BANK_CLIENT_ID=sandbox-bank
+EOF
+    fi
+  )
+  write_bank_env
+}
+
+write_bank_env() {
+  local revision tls=""
+  revision="$(current_revision)"
+  local public=""
+  if [ -s "$STATE/public-domain" ]; then
+    public="SANDBOX_PUBLIC_URL=https://$(cat "$STATE/public-domain")
+SANDBOX_DOWNLOADS_DIR=/run/sandbox-downloads
+CONSOLE_SECURE_COOKIES=true"
+    [ -s "$STATE/testflight-url" ] && public="$public
+SANDBOX_TESTFLIGHT_URL=$(cat "$STATE/testflight-url")"
+  elif [ -s "$STATE/tls/server.crt" ] && [ -s "$STATE/tls/server.key" ]; then
+    tls=$'DEVICE_TLS_CERT=/run/sandbox-tls/server.crt\nDEVICE_TLS_KEY=/run/sandbox-tls/server.key'
+  fi
+  ( umask 077
+    cat > "$STATE/bank.env" <<EOF
+BANK_CLIENT_ID=sandbox-bank
+CONSOLE_USERNAME=operator
+CONSOLE_PASSWORD=$(cat "$STATE/console-password")
+DEMO_CUSTOMER_PASSWORD=$(cat "$STATE/customer-password")
+SANDBOX_FAULT_INJECTION=enabled
+SANDBOX_HSM_DESCRIPTION=SoftHSM 2.7.0 (test HSM, PKCS#11) - not a production HSM
+SANDBOX_PINNED_AUTH_CORE=$revision
+$tls
+$public
+EOF
+  )
+}
+
+# --- Auth Core revision used by the sandbox ---
+current_revision() {
+  local tree dirty=""
+  tree="$(git -C "$REPO_DIR" rev-parse HEAD:auth-core 2>/dev/null || echo unknown)"
+  git -C "$REPO_DIR" diff --quiet HEAD -- auth-core 2>/dev/null || dirty="+uncommitted-changes"
+  printf 'auth-core tree %s%s (commit %s)' "$tree" "$dirty" "$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+}
+
+check_pin() {
+  local allow="$1" pinned tree
+  tree="$(git -C "$REPO_DIR" rev-parse HEAD:auth-core 2>/dev/null || echo unknown)"
+  pinned="$(sed -n 's/^tree: //p' "$PIN_FILE" 2>/dev/null || true)"
+  if [ "$tree" != "$pinned" ] || ! git -C "$REPO_DIR" diff --quiet HEAD -- auth-core; then
+    if [ "$allow" = 1 ]; then
+      say "warning: Auth Core differs from the pinned revision ($pinned); continuing (--allow-unpinned)"
+    else
+      fail "Auth Core (tree $tree) is not the revision in sandbox/PINNED_AUTH_CORE ($pinned) or has uncommitted changes. Verify the sandbox with it, then run 'sandbox/bin/sandbox pin', or pass --allow-unpinned."
+    fi
+  fi
+}
+
+# --- isolation checks: abort when isolation cannot be shown ---
+check_isolation() {
+  local allow="${1:-0}" config
+  command -v docker >/dev/null || fail "Docker is required"
+  docker info >/dev/null 2>&1 || fail "Docker is not running"
+  docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required"
+  for f in postgres-password app-db-password auth-core.env bank.env; do [ -s "$STATE/$f" ] || fail "missing $STATE/$f"; done
+  grep -q '^NODE_ENV=development$' "$STATE/auth-core.env" || fail "the sandbox Auth Core must run with NODE_ENV=development"
+  grep -q '@postgres:5432/nexus_sign_sandbox$' "$STATE/auth-core.env" || fail "DATABASE_URL must point at the sandbox database"
+  grep -q '^REDIS_URL=redis://redis:6379$' "$STATE/auth-core.env" || fail "REDIS_URL must point at the sandbox Redis"
+  if grep -Eq '^(APNS_|FCM_|WEBHOOK_URL|SMS_)' "$STATE/auth-core.env"; then fail "push, SMS or webhook endpoints are not allowed in the sandbox configuration"; fi
+  config="$("${COMPOSE[@]}" config 2>/dev/null)" || fail "compose configuration is invalid"
+  printf '%s' "$config" | grep -q "name: $PROJECT" || fail "compose project name is not $PROJECT"
+  # No host directory outside the repository is mounted.
+  if printf '%s' "$config" | grep -E '^[[:space:]]+source: /' | grep -v "source: $REPO_DIR/" | grep -q .; then
+    fail "a host path outside the repository is mounted"
+  fi
+  check_pin "$allow"
+  say "isolation checks passed (project $PROJECT; own network, database, Redis, SoftHSM token, credentials)"
+}
+
+# Public mode: Caddy in front of the bank, certificates from Let's Encrypt.
+setup_public() {
+  local domain="$1" email="$2" hash
+  [[ "$domain" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || fail "not a domain name: $domain"
+  mkdir -p "$STATE/downloads"
+  printf '%s' "$domain" > "$STATE/public-domain"
+  ( umask 077; [ -s "$STATE/console-gate-password" ] || password > "$STATE/console-gate-password" )
+  hash="$(docker run --rm caddy:2-alpine caddy hash-password --plaintext "$(cat "$STATE/console-gate-password")")"
+  {
+    printf '{\n'
+    [ -n "$email" ] && printf '\temail %s\n' "$email"
+    printf '}\n\n%s {\n\tencode gzip\n\treverse_proxy bank:8191\n}\n\n' "$domain"
+    printf 'console.%s {\n\tbasic_auth {\n\t\toperator %s\n\t}\n\treverse_proxy bank:8190\n}\n' "$domain" "$hash"
+  } > "$STATE/Caddyfile"
+  say "public mode: https://$domain (phones) and https://console.$domain (console)"
+}
+
+check_public() {
+  local domain ip
+  domain="$(cat "$STATE/public-domain")"
+  ip="$( (getent hosts "$domain" 2>/dev/null || dscacheutil -q host -a name "$domain" 2>/dev/null) | awk '/^[0-9]/ {print $1; exit} /ip_address/ {print $2; exit}')"
+  [ -n "$ip" ] || say "warning: $domain does not resolve yet. Point DNS A records for $domain and console.$domain at this server; Caddy obtains the certificates once they resolve."
+  [ -s "$STATE/Caddyfile" ] || fail "missing $STATE/Caddyfile: run 'sandbox/bin/sandbox up --public $domain' again"
+}
+
+print_access() {
+  local port="${SANDBOX_CONSOLE_PORT:-8190}" dport="${SANDBOX_DEVICE_PORT:-8191}" scheme=http host="${SANDBOX_DEVICE_BIND:-127.0.0.1}"
+  [ -s "$STATE/tls/server.crt" ] && scheme=https
+  [ -s "$STATE/device-ip" ] && host="$(cat "$STATE/device-ip")"
+  say ""
+  if [ -s "$STATE/public-domain" ]; then
+    local domain; domain="$(cat "$STATE/public-domain")"
+    say "Phones:         https://$domain   (landing page with downloads; the bank address in the app)"
+    say "Bank console:   https://console.$domain   first login operator / $(cat "$STATE/console-gate-password"), then operator / $(cat "$STATE/console-password")"
+    say "Demo customers: anna, piotr / $(cat "$STATE/customer-password");  testers: sandbox/bin/sandbox add-customer LOGIN \"NAME\""
+    say "Test HSM:       SoftHSM 2.7.0 inside the sandbox Auth Core container"
+    return
+  fi
+  say "Bank console:   http://127.0.0.1:$port   (operator / $(cat "$STATE/console-password"))"
+  say "Device port:    $scheme://$host:$dport   (bank app address; customers anna, piotr / $(cat "$STATE/customer-password"))"
+  say "Test HSM:       SoftHSM 2.7.0 inside the sandbox Auth Core container"
+  say "Auth Core:      internal only (not published); the bank and the phones reach it through the device port"
+  say "Secrets:        $STATE (only this sandbox uses them)"
+}
+
+api() { # method path
+  curl -sf -u "operator:$(cat "$STATE/console-password")" -X "$1" "http://127.0.0.1:${SANDBOX_CONSOLE_PORT:-8190}$2"
+}
+
+run_scenarios() {
+  local ids failed=0
+  ids="$(api GET /api/scenarios | node -e 'for (const s of JSON.parse(require("fs").readFileSync(0))) if (s.available) console.log(s.id)')"
+  printf '%-28s %s\n' SCENARIO RESULT
+  for id in $ids; do
+    local run state=RUNNING json
+    run="$(api POST "/api/scenarios/$id/run" | node -pe 'JSON.parse(require("fs").readFileSync(0)).runId')"
+    for _ in $(seq 1 120); do
+      json="$(api GET "/api/scenarios/runs/$run")"
+      state="$(printf '%s' "$json" | node -pe 'JSON.parse(require("fs").readFileSync(0)).state')"
+      [ "$state" != RUNNING ] && break
+      sleep 1
+    done
+    printf '%-28s %s\n' "$id" "$state"
+    if [ "$state" != PASSED ]; then failed=1; printf '%s\n' "$json" | node -pe 'const r=JSON.parse(require("fs").readFileSync(0)); JSON.stringify({actual:r.actual,steps:r.steps.map(s=>s.text)},null,2)' >&2; fi
+  done
+  api GET /api/ledger/check; echo
+  return $failed
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  up)
+    allow=0 domain="" email=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --allow-unpinned) allow=1 ;;
+        --public) domain="${2:-}"; shift ;;
+        --email) email="${2:-}"; shift ;;
+        *) fail "unknown option $1" ;;
+      esac
+      shift
+    done
+    init_state
+    if [ -n "$domain" ]; then
+      command -v docker >/dev/null || fail "Docker is required"
+      setup_public "$domain" "$email"
+      COMPOSE=(docker compose -p "$PROJECT" -f "$SANDBOX_DIR/compose.yaml" -f "$SANDBOX_DIR/compose.public.yaml")
+      write_bank_env
+    fi
+    check_isolation "$allow"
+    [ -s "$STATE/public-domain" ] && check_public
+    "${COMPOSE[@]}" up -d --build --wait
+    print_access
+    ;;
+  check) init_state; check_isolation "$([ "${1:-}" = "--allow-unpinned" ] && echo 1 || echo 0)" ;;
+  status) "${COMPOSE[@]}" ps ;;
+  logs) "${COMPOSE[@]}" logs --tail 200 "$@" ;;
+  scenarios) run_scenarios ;;
+  cert)
+    if [ "${1:-}" = "--remove" ]; then
+      rm -rf "$STATE/tls" "$STATE/device-ip"; init_state
+      say "certificate removed: after 'up' the device port is plain HTTP on 127.0.0.1 only (Android over USB with adb reverse)"
+      exit 0
+    fi
+    ip="${1:-}"
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "usage: sandbox cert <IPv4 address of this computer on the Wi-Fi>"
+    mkdir -p "$STATE/tls"; cd "$STATE/tls"; umask 077
+    # Explicit config files: works with OpenSSL and with the LibreSSL of macOS.
+    printf '[req]\ndistinguished_name = dn\nx509_extensions = ext\nprompt = no\n[dn]\nCN = NEXUS-SIGN Sandbox CA %s\n[ext]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign,cRLSign\nsubjectKeyIdentifier = hash\n' "$(date +%Y-%m-%d)" > ca.cnf
+    printf '[ext]\nsubjectAltName = IP:%s,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage = serverAuth\nkeyUsage = critical,digitalSignature\nbasicConstraints = critical,CA:FALSE\n' "$ip" > server.cnf
+    openssl ecparam -name prime256v1 -genkey -noout -out ca.key
+    openssl req -x509 -new -key ca.key -sha256 -days 365 -config ca.cnf -out ca.crt
+    openssl ecparam -name prime256v1 -genkey -noout -out server.key
+    openssl req -new -key server.key -subj "/CN=$ip" -out server.csr
+    openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 -sha256 -extfile server.cnf -extensions ext -out server.crt 2>/dev/null
+    rm -f server.csr ca.srl ca.cnf server.cnf; chmod 644 ca.crt server.crt server.key
+    init_state   # also writes bank.env with the certificate
+    printf '%s' "$ip" > "$STATE/device-ip"
+    say "Device port certificate for $ip written to $STATE/tls. Install $STATE/tls/ca.crt on the phones and trust it; then run"
+    say "  sandbox/bin/sandbox up"
+    say "and use https://$ip:${SANDBOX_DEVICE_PORT:-8191} as the bank address in the app."
+    ;;
+  public)
+    [ "${1:-}" = "--off" ] || fail "usage: sandbox/bin/sandbox public --off"
+    "${COMPOSE[@]}" down
+    rm -f "$STATE/public-domain" "$STATE/Caddyfile"
+    write_bank_env
+    say "local mode again: run 'sandbox/bin/sandbox up'"
+    ;;
+  add-customer)
+    [ $# -ge 2 ] || fail 'usage: sandbox/bin/sandbox add-customer LOGIN "NAME" [BALANCE, default 10000]'
+    balance="${3:-10000}"
+    [[ "$balance" =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || fail "balance: a number such as 10000 or 2500.50"
+    body="$(LOGIN="$1" NAME="$2" BALANCE="$balance" python3 -c 'import json, os; print(json.dumps({"login": os.environ["LOGIN"], "displayName": os.environ["NAME"], "openingMinor": round(float(os.environ["BALANCE"]) * 100)}))')"
+    answer="$(curl -s -u "operator:$(cat "$STATE/console-password")" -H 'Content-Type: application/json' -d "$body" "http://127.0.0.1:${SANDBOX_CONSOLE_PORT:-8190}/api/customers")"
+    ANSWER="$answer" URL="$([ -s "$STATE/public-domain" ] && echo "https://$(cat "$STATE/public-domain")" || echo "")" python3 -c '
+import json, os, sys
+try:
+    a = json.loads(os.environ.get("ANSWER") or "{}")
+except ValueError:
+    a = {}
+if not a.get("password"):
+    sys.exit("sandbox: " + (a.get("error") or "the bank did not answer: is the sandbox running?"))
+print("Login:    " + a["login"])
+print("Password: " + a["password"])
+if os.environ["URL"]:
+    print("Bank address in the app: " + os.environ["URL"])
+    print("Download: " + os.environ["URL"] + "/")'
+    ;;
+  publish-apk)
+    file="${1:-}"
+    [ -f "$file" ] || fail "usage: sandbox/bin/sandbox publish-apk path/to/app.apk"
+    [ "$(head -c 2 "$file")" = "PK" ] || fail "$file is not an APK"
+    mkdir -p "$STATE/downloads"
+    cp "$file" "$STATE/downloads/voxtel-demo.apk.tmp" && mv "$STATE/downloads/voxtel-demo.apk.tmp" "$STATE/downloads/voxtel-demo.apk"
+    chmod 644 "$STATE/downloads/voxtel-demo.apk"
+    say "published: $( [ -s "$STATE/public-domain" ] && echo "https://$(cat "$STATE/public-domain")/download/voxtel-demo.apk" || echo "$STATE/downloads/voxtel-demo.apk (shown in public mode)")"
+    ;;
+  testflight)
+    url="${1:-}"
+    [[ "$url" =~ ^https://testflight\.apple\.com/join/[A-Za-z0-9]+$ ]] || fail "usage: sandbox/bin/sandbox testflight https://testflight.apple.com/join/XXXXXXXX"
+    printf '%s' "$url" > "$STATE/testflight-url"
+    write_bank_env
+    "${COMPOSE[@]}" up -d --wait bank
+    say "landing page now offers $url"
+    ;;
+  down) "${COMPOSE[@]}" down ;;
+  reset) "${COMPOSE[@]}" down --volumes --remove-orphans; say "sandbox data removed; 'up' starts with fresh demo data" ;;
+  remove)
+    [ "${1:-}" = "--yes" ] || fail "remove deletes the sandbox's containers, volumes, images and $STATE: run 'sandbox/bin/sandbox remove --yes'"
+    "${COMPOSE[@]}" down --volumes --remove-orphans --rmi local
+    docker image rm nexus-sign-sandbox/auth-core:local nexus-sign-sandbox/bank:local >/dev/null 2>&1 || true
+    rm -rf "$STATE"
+    say "sandbox removed"
+    ;;
+  pin)
+    git -C "$REPO_DIR" diff --quiet HEAD -- auth-core || fail "auth-core/ has uncommitted changes: commit them first"
+    {
+      echo "# Auth Core revision the sandbox was verified with. Updated by 'sandbox/bin/sandbox pin'."
+      echo "tree: $(git -C "$REPO_DIR" rev-parse HEAD:auth-core)"
+      echo "commit: $(git -C "$REPO_DIR" rev-parse HEAD)"
+      echo "evidence-verifier-sha256: $(sha256 "$REPO_DIR/auth-core/scripts/lib/evidence.mjs")"
+      echo "test-device-sha256: $(sha256 "$REPO_DIR/auth-core/test/integration/support/actors.mjs")"
+      echo "softhsm-commit: 13e6e86b83748fef74046dbf0c91f664b7acc1c3"
+    } > "$PIN_FILE"
+    cat "$PIN_FILE"
+    ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

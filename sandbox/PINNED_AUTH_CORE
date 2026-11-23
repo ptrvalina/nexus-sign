@@ -1,0 +1,6 @@
+# Auth Core revision the sandbox was verified with. Updated by 'sandbox/bin/sandbox pin'.
+tree: 8f7975d8c3deafed9bf831eb6ee57bf12b66b626
+commit: 79be73c72c7df7b3e8ef005aeed810a68a92fe49
+evidence-verifier-sha256: 7c1dac0a10bf02a8910cc593cb202b752015bde1feddbe109a6a6ff450058408
+test-device-sha256: c491b65883b9f5edfabf4d071ace60c3ec79f47623e1eb92358cf0601647c32f
+softhsm-commit: 13e6e86b83748fef74046dbf0c91f664b7acc1c3

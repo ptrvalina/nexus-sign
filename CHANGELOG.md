@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Versions follow [Semant
 
 ## [Unreleased]
 
+### Sandbox (replaced)
+
+- `sandbox/` is now an isolated demonstration bank instead of the Python simulator, which had its own implementation of the protocol. It contains no protocol or cryptography code of its own:
+  - It runs the unchanged Auth Core of the checkout, with SoftHSM 2.7.0 as its test HSM, on its own Docker Compose project, internal network, PostgreSQL, Redis, credentials and volumes.
+  - It adds a demo bank: customers, accounts, cards, a double-entry ledger, commission, idempotency, notifications, receipts and an append-only audit log.
+  - The bank executes a payment only after verifying the sealed evidence with `auth-core/scripts/lib/evidence.mjs` and its pinned seal key, and comparing the signed terms with its own record.
+  - It has a bank app API, an operations console with timelines built from recorded events, and a scenario engine: 15 demonstration scenarios run against the real Auth Core; audio and video escalation follow in milestone 4.
+  - `sandbox/bin/sandbox` starts, checks isolation, stops, resets and removes it, and records the Auth Core revision it was verified with (`sandbox/PINNED_AUTH_CORE`).
+- Tooling: CI replaces the sandbox jobs with `sandbox / bank unit tests` and `sandbox / isolated stack end to end`; `check-repository.sh` no longer checks a sandbox OpenAPI version; Dependabot watches `sandbox/images`. No product source, SDK, protocol fixture, migration or production configuration changed.
+
 ### Security
 
 - Offline confirmation v3 (finding D-01): an iOS device enrols with `offlineKeyAgreement: PER_AUTHORIZATION`; Auth Core creates a key pair per authorization when the bank asks for the QR code (`NXS3.` carries its public key; migration 035, private key encrypted and bound to the authorization). A secret captured in the app process serves one authorization only. Android keeps the static agreement. **Integration impact:** the bank must request the QR code (`GET .../offline-challenge`) before a code can be accepted; an iOS app with this SDK refuses `NXS1.`/`NXS2.` codes.
