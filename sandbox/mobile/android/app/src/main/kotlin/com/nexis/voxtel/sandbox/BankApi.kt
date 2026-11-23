@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Client of the sandbox bank's app API (/app/v1/*, sandbox/bank/src/appApi.mjs).
+ * Client of the sandbox bank's app API (/app/v1/..., sandbox/bank/src/appApi.mjs).
  * Everything the app shows comes from here; a payment is shown as done only
  * when the bank reports the transaction as EXECUTED.
  */

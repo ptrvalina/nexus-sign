@@ -24,6 +24,7 @@ PIN_FILE="$SANDBOX_DIR/PINNED_AUTH_CORE"
 say() { printf '%s\n' "$*"; }
 fail() { printf 'sandbox: %s\n' "$*" >&2; exit 1; }
 random() { openssl rand -base64 "${1:-32}" | tr -d '\n'; }
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 password() { openssl rand -base64 18 | tr -d '\n/+=' | cut -c1-20; }
 
 # --- secrets of this sandbox only (never reused elsewhere, never overwritten) ---
@@ -122,7 +123,7 @@ check_isolation() {
   config="$("${COMPOSE[@]}" config 2>/dev/null)" || fail "compose configuration is invalid"
   printf '%s' "$config" | grep -q "name: $PROJECT" || fail "compose project name is not $PROJECT"
   # No host directory outside the repository is mounted.
-  if printf '%s' "$config" | grep -E '^\s+source: /' | grep -v "source: $REPO_DIR/" | grep -q .; then
+  if printf '%s' "$config" | grep -E '^[[:space:]]+source: /' | grep -v "source: $REPO_DIR/" | grep -q .; then
     fail "a host path outside the repository is mounted"
   fi
   check_pin "$allow"
@@ -181,16 +182,18 @@ case "$cmd" in
     ip="${1:-}"
     [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "usage: sandbox cert <IPv4 address of this computer on the Wi-Fi>"
     mkdir -p "$STATE/tls"; cd "$STATE/tls"; umask 077
+    # Explicit config files: works with OpenSSL and with the LibreSSL of macOS.
+    printf '[req]\ndistinguished_name = dn\nx509_extensions = ext\nprompt = no\n[dn]\nCN = NEXUS-SIGN Sandbox CA %s\n[ext]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign,cRLSign\nsubjectKeyIdentifier = hash\n' "$(date +%Y-%m-%d)" > ca.cnf
+    printf '[ext]\nsubjectAltName = IP:%s,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage = serverAuth\nkeyUsage = critical,digitalSignature\nbasicConstraints = critical,CA:FALSE\n' "$ip" > server.cnf
     openssl ecparam -name prime256v1 -genkey -noout -out ca.key
-    openssl req -x509 -new -key ca.key -sha256 -days 365 -subj "/CN=NEXUS-SIGN Sandbox CA $(date +%Y-%m-%d)" \
-      -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -out ca.crt
+    openssl req -x509 -new -key ca.key -sha256 -days 365 -config ca.cnf -out ca.crt
     openssl ecparam -name prime256v1 -genkey -noout -out server.key
     openssl req -new -key server.key -subj "/CN=$ip" -out server.csr
-    printf 'subjectAltName=IP:%s,DNS:localhost\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature\nbasicConstraints=critical,CA:FALSE\n' "$ip" > server.ext
-    openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 -sha256 -extfile server.ext -out server.crt 2>/dev/null
-    rm -f server.csr server.ext ca.srl; chmod 644 ca.crt server.crt server.key
+    openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 -sha256 -extfile server.cnf -extensions ext -out server.crt 2>/dev/null
+    rm -f server.csr ca.srl ca.cnf server.cnf; chmod 644 ca.crt server.crt server.key
+    init_state   # also writes bank.env with the certificate
     say "Device port certificate for $ip written to $STATE/tls. Install ca.crt on the iPhone and trust it; then:"
-    say "  SANDBOX_DEVICE_BIND=$ip sandbox/bin/sandbox up"
+    say "  SANDBOX_DEVICE_BIND=0.0.0.0 sandbox/bin/sandbox up   (the phone then uses https://$ip:${SANDBOX_DEVICE_PORT:-8191})"
     ;;
   down) "${COMPOSE[@]}" down ;;
   reset) "${COMPOSE[@]}" down --volumes --remove-orphans; say "sandbox data removed; 'up' starts with fresh demo data" ;;
@@ -207,8 +210,8 @@ case "$cmd" in
       echo "# Auth Core revision the sandbox was verified with. Updated by 'sandbox/bin/sandbox pin'."
       echo "tree: $(git -C "$REPO_DIR" rev-parse HEAD:auth-core)"
       echo "commit: $(git -C "$REPO_DIR" rev-parse HEAD)"
-      echo "evidence-verifier-sha256: $(sha256sum "$REPO_DIR/auth-core/scripts/lib/evidence.mjs" | cut -d' ' -f1)"
-      echo "test-device-sha256: $(sha256sum "$REPO_DIR/auth-core/test/integration/support/actors.mjs" | cut -d' ' -f1)"
+      echo "evidence-verifier-sha256: $(sha256 "$REPO_DIR/auth-core/scripts/lib/evidence.mjs")"
+      echo "test-device-sha256: $(sha256 "$REPO_DIR/auth-core/test/integration/support/actors.mjs")"
       echo "softhsm-commit: 13e6e86b83748fef74046dbf0c91f664b7acc1c3"
     } > "$PIN_FILE"
     cat "$PIN_FILE"
