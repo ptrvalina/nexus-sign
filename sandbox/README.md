@@ -74,6 +74,16 @@ The demo customers are `anna` and `piotr`, with the password printed by `up`. Th
 
 An Android phone on USB can instead use `adb reverse tcp:8191 tcp:8191` and the address `http://127.0.0.1:8191`, when no certificate has been made.
 
+## Public mode (testers anywhere)
+
+On a server with a domain, `sandbox/bin/sandbox up --public demo.example.com --email you@example.com` puts Caddy in front of the bank:
+- `https://demo.example.com` serves the bank app API, the device endpoints and a landing page with the app downloads;
+- `https://console.demo.example.com` serves the console, behind an extra HTTP login.
+
+Let's Encrypt certificates are obtained and renewed automatically. PostgreSQL, Redis and Auth Core stay internal.
+
+Testers get their own customers (`add-customer`, or the console). The Android APK is published with `publish-apk`, and the TestFlight link with `testflight`. Release builds come from the workflow `sandbox apps (release)`. The guide in Russian is [docs/PUBLIC.ru.md](docs/PUBLIC.ru.md).
+
 ## How a payment is executed
 
 1. The app sends the order. The bank validates it (own account, IBAN, amount, limit, funds), calculates the commission, and records the transaction (`TRANSACTION_CREATED`). It does this idempotently per customer and `Idempotency-Key`.
