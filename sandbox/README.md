@@ -60,18 +60,19 @@ The bank also refuses to start unless `SANDBOX_ENVIRONMENT=sandbox` is set, its 
 - System health
 - Scenarios
 
-**Bank app:** the device port serves two things:
-
+**Bank apps:** native apps for iPhone (`mobile/ios`, SwiftUI) and Android (`mobile/android`, Kotlin) built from the mockups in `design/mockups/`. They include the NEXUS-SIGN SDK of this repository (unchanged) and talk to the device port only:
 - the app API, `/app/v1/*`: login, accounts, history, cards (freeze, block), favorites, products, notifications, quotes, payments with `Idempotency-Key`, cancellation, receipts, the waiting confirmation, and QR (offline) challenges;
 - the Auth Core endpoints a device calls, forwarded byte for byte.
 
-The native iOS and Android bank apps are milestones 2 and 3. Their visual reference is in `design/mockups/`. The demo customers are `anna` and `piotr`, with the password printed by `up`.
+The demo customers are `anna` and `piotr`, with the password printed by `up`. The step-by-step guide in Russian (Mac, iPhone, Android, demonstration script, troubleshooting) is [docs/INSTRUCTION.ru.md](docs/INSTRUCTION.ru.md).
 
-**iPhone on the same Wi-Fi:** the SDK requires HTTPS on any address other than localhost.
+**Phones on the same Wi-Fi:** the SDKs require HTTPS on any address other than the phone itself.
 
 1. Run `sandbox/bin/sandbox cert <your computer's Wi-Fi IPv4>`.
-2. Install `sandbox/.state/tls/ca.crt` on the iPhone and trust it.
-3. Start with `SANDBOX_DEVICE_BIND=<that IP> sandbox/bin/sandbox up`.
+2. Install `sandbox/.state/tls/ca.crt` on the phone and trust it.
+3. Run `sandbox/bin/sandbox up` (after `cert`, the device port listens on the Wi-Fi until `cert --remove`); the app's bank address is `https://<that IP>:8191`.
+
+An Android phone on USB can instead use `adb reverse tcp:8191 tcp:8191` and the address `http://127.0.0.1:8191`, when no certificate has been made.
 
 ## How a payment is executed
 
@@ -114,7 +115,6 @@ Fault injection (`SANDBOX_FAULT_INJECTION=enabled`) exists only in the sandbox b
 
 ## Not in this milestone
 
-- **Native apps.** iOS and Android: milestones 2 and 3.
 - **Push.** APNs needs a paid Apple Developer membership and FCM needs a Firebase project, so the app polls the bank instead. Delivery is recorded when the app picks up the request.
 - **SMS fallback.** Auth Core has no SMS channel, so none is offered.
 - **Audio and video escalation.** Milestone 4. Auth Core supports calls with a bank operator or a verification provider; automatic escalation and a robot provider are not built yet.

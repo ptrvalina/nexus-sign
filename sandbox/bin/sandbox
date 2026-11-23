@@ -6,7 +6,8 @@
 #   sandbox/bin/sandbox up [--allow-unpinned]   check isolation, build, start, print the addresses
 #   sandbox/bin/sandbox status | logs [service]
 #   sandbox/bin/sandbox scenarios               run every demo scenario through the console API
-#   sandbox/bin/sandbox cert <LAN-IPv4>         HTTPS for the device port (iPhone on the same Wi-Fi)
+#   sandbox/bin/sandbox cert <LAN-IPv4>         HTTPS for the device port, reachable on the Wi-Fi (phones)
+#   sandbox/bin/sandbox cert --remove           back to plain HTTP on 127.0.0.1 (Android over USB)
 #   sandbox/bin/sandbox down                    stop; data is kept
 #   sandbox/bin/sandbox reset                   stop and delete the sandbox's data volumes (fresh demo data on next up)
 #   sandbox/bin/sandbox remove --yes            reset, delete the sandbox images and sandbox/.state/
@@ -20,6 +21,8 @@ STATE="$SANDBOX_DIR/.state"
 PROJECT=nexus-sign-sandbox
 COMPOSE=(docker compose -p "$PROJECT" -f "$SANDBOX_DIR/compose.yaml")
 PIN_FILE="$SANDBOX_DIR/PINNED_AUTH_CORE"
+# After 'cert', the device port listens on the Wi-Fi until 'cert --remove'.
+if [ -z "${SANDBOX_DEVICE_BIND:-}" ] && [ -s "$STATE/device-ip" ]; then export SANDBOX_DEVICE_BIND=0.0.0.0; fi
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'sandbox: %s\n' "$*" >&2; exit 1; }
@@ -131,13 +134,14 @@ check_isolation() {
 }
 
 print_access() {
-  local port="${SANDBOX_CONSOLE_PORT:-8190}" dport="${SANDBOX_DEVICE_PORT:-8191}" scheme=http
+  local port="${SANDBOX_CONSOLE_PORT:-8190}" dport="${SANDBOX_DEVICE_PORT:-8191}" scheme=http host="${SANDBOX_DEVICE_BIND:-127.0.0.1}"
   [ -s "$STATE/tls/server.crt" ] && scheme=https
+  [ -s "$STATE/device-ip" ] && host="$(cat "$STATE/device-ip")"
   say ""
   say "Bank console:   http://127.0.0.1:$port   (operator / $(cat "$STATE/console-password"))"
-  say "Device port:    $scheme://${SANDBOX_DEVICE_BIND:-127.0.0.1}:$dport   (bank app; customers anna, piotr / $(cat "$STATE/customer-password"))"
+  say "Device port:    $scheme://$host:$dport   (bank app address; customers anna, piotr / $(cat "$STATE/customer-password"))"
   say "Test HSM:       SoftHSM 2.7.0 inside the sandbox Auth Core container"
-  say "Auth Core:      not published; admin login in the 'credentials' volume (sandbox/bin/sandbox logs auth-core)"
+  say "Auth Core:      internal only (not published); the bank and the phones reach it through the device port"
   say "Secrets:        $STATE (only this sandbox uses them)"
 }
 
@@ -179,6 +183,11 @@ case "$cmd" in
   logs) "${COMPOSE[@]}" logs --tail 200 "$@" ;;
   scenarios) run_scenarios ;;
   cert)
+    if [ "${1:-}" = "--remove" ]; then
+      rm -rf "$STATE/tls" "$STATE/device-ip"; init_state
+      say "certificate removed: after 'up' the device port is plain HTTP on 127.0.0.1 only (Android over USB with adb reverse)"
+      exit 0
+    fi
     ip="${1:-}"
     [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "usage: sandbox cert <IPv4 address of this computer on the Wi-Fi>"
     mkdir -p "$STATE/tls"; cd "$STATE/tls"; umask 077
@@ -192,8 +201,10 @@ case "$cmd" in
     openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 365 -sha256 -extfile server.cnf -extensions ext -out server.crt 2>/dev/null
     rm -f server.csr ca.srl ca.cnf server.cnf; chmod 644 ca.crt server.crt server.key
     init_state   # also writes bank.env with the certificate
-    say "Device port certificate for $ip written to $STATE/tls. Install ca.crt on the iPhone and trust it; then:"
-    say "  SANDBOX_DEVICE_BIND=0.0.0.0 sandbox/bin/sandbox up   (the phone then uses https://$ip:${SANDBOX_DEVICE_PORT:-8191})"
+    printf '%s' "$ip" > "$STATE/device-ip"
+    say "Device port certificate for $ip written to $STATE/tls. Install $STATE/tls/ca.crt on the phones and trust it; then run"
+    say "  sandbox/bin/sandbox up"
+    say "and use https://$ip:${SANDBOX_DEVICE_PORT:-8191} as the bank address in the app."
     ;;
   down) "${COMPOSE[@]}" down ;;
   reset) "${COMPOSE[@]}" down --volumes --remove-orphans; say "sandbox data removed; 'up' starts with fresh demo data" ;;
