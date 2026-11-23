@@ -275,7 +275,7 @@ class BankActivity : AppCompatActivity() {
     private fun push(current: () -> Unit, next: () -> Unit) { backStack.addLast(current); next() }
 
     private fun showLogin() {
-        val serverField = edit("Адрес банка", prefs.getString("server", "http://127.0.0.1:8191") ?: "")
+        val serverField = edit("Адрес банка", prefs.getString("server", BuildConfig.DEFAULT_SERVER) ?: "")
         val loginField = edit("Email/логин", "")
         val passwordField = edit("Пароль", "", password = true)
         val screen = column(dp(24)).apply {

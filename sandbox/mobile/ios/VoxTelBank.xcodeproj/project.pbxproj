@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C2B0000000000000000000C8 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B0000000000000000000C9 /* AppConfig.swift */; };
+		C2B0000000000000000000CA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C2B0000000000000000000CB /* Assets.xcassets */; };
 		C2B000000000000000000064 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000065 /* AppModel.swift */; };
 		C2B000000000000000000066 /* BankAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000067 /* BankAPI.swift */; };
 		C2B000000000000000000068 /* ConfirmationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B000000000000000000069 /* ConfirmationViews.swift */; };
@@ -22,6 +24,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C2B0000000000000000000C9 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		C2B0000000000000000000CB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C2B000000000000000000065 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		C2B000000000000000000067 /* BankAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankAPI.swift; sourceTree = "<group>"; };
 		C2B000000000000000000069 /* ConfirmationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationViews.swift; sourceTree = "<group>"; };
@@ -59,7 +63,9 @@
 		B1D00000000000000000000E /* VoxTelBank */ = {
 			isa = PBXGroup;
 			children = (
+				C2B0000000000000000000C9 /* AppConfig.swift */,
 				C2B000000000000000000065 /* AppModel.swift */,
+				C2B0000000000000000000CB /* Assets.xcassets */,
 				C2B000000000000000000067 /* BankAPI.swift */,
 				C2B000000000000000000069 /* ConfirmationViews.swift */,
 				C2B00000000000000000006B /* HistoryView.swift */,
@@ -146,6 +152,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C2B0000000000000000000CA /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -156,6 +163,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C2B0000000000000000000C8 /* AppConfig.swift in Sources */,
 				C2B000000000000000000064 /* AppModel.swift in Sources */,
 				C2B000000000000000000066 /* BankAPI.swift in Sources */,
 				C2B000000000000000000068 /* ConfirmationViews.swift in Sources */,
@@ -216,7 +224,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_CFBundleDisplayName = "VoxTel Demo";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID подтверждает операции ключом в Secure Enclave этого iPhone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -240,7 +250,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_CFBundleDisplayName = "VoxTel Demo";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Face ID подтверждает операции ключом в Secure Enclave этого iPhone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

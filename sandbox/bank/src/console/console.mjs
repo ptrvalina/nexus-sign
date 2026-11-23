@@ -8,6 +8,7 @@ import { recentEvents, transactionEvents, TIMELINE } from '../events.mjs';
 import { formatMinor } from '../fees.mjs';
 import { recordEvent } from '../events.mjs';
 import { checkChain } from '../evidenceCheck.mjs';
+import { addCustomer, resetPassword } from '../seed.mjs';
 import { BankError } from '../payments.mjs';
 import { badge, page, table, time } from './layout.mjs';
 
@@ -73,13 +74,27 @@ ${message ? `<p class="m">${e(message)}</p>` : ''}<label>Пользовател�
     ]));
   }
 
-  function customersPage(res, s) {
-    const rows = db.prepare('SELECT * FROM customers ORDER BY id').all();
-    view(res, s, '/customers', 'Клиенты', table(['Клиент', 'Логин', 'Устройство', 'NEXUS ID', 'Credential'], rows.map((c) => [
+  function customersPage(res, s, message = '') {
+    const rows = db.prepare('SELECT * FROM customers ORDER BY created_at, id').all();
+    const form = `<h2>Новый тестовый клиент</h2>
+<form method="post" action="/customers/new">${csrfField(s)}
+Логин <input name="login" placeholder="ivan" required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}" size="14">
+Имя <input name="displayName" placeholder="Иван Петров" required size="22">
+Остаток, ${e(config.bank.currency)} <input name="opening" value="10000" size="9" inputmode="decimal">
+<button>Создать</button></form>
+<p class="note">Каждому тестировщику — свой клиент: свой счёт с тестовыми средствами, своя карта. Пароль показывается один раз.</p>`;
+    view(res, s, '/customers', 'Клиенты', `${message}${form}<h2>Клиенты</h2>` + table(['Клиент', 'Логин', 'Устройство', 'NEXUS ID', 'Credential'], rows.map((c) => [
       `<a href="/customers/${e(c.id)}">${e(c.display_name)}</a>`, `<code>${e(c.login)}</code>`,
       c.device_kind === 'SOFTWARE_TEST_DEVICE' ? '<span class="badge muted">программное тест-устройство</span>' : 'телефон клиента',
       c.nexus_id ? `<code>${e(c.nexus_id)}</code>` : '—', c.credential_id ? `<code>${e(c.credential_id)}</code>` : '<span class="note">не подключено</span>',
     ])));
+  }
+
+  /** The new login and its one-time password, as a block to send to the tester. */
+  function credentialsMessage(login, password, title) {
+    const app = config.publicUrl ? `Адрес банка в приложении: ${config.publicUrl}\nСкачать приложение: ${config.publicUrl}/` : 'Адрес банка: порт устройств песочницы';
+    return `<div class="msg"><b>${e(title)}</b><pre>${e(`${config.bank.branding.name} (демо)\nЛогин: ${login}\nПароль: ${password}\n${app}`)}</pre>
+<span class="note">Скопируйте и отправьте тестировщику. Пароль больше нигде не показывается.</span></div>`;
   }
 
   async function customerPage(res, s, id) {
@@ -94,6 +109,7 @@ ${message ? `<p class="m">${e(message)}</p>` : ''}<label>Пользовател�
 <h2>Карты</h2>${table(['Карта', 'Счёт', 'Срок', 'Статус'], cards.map((k) => [`${e(k.brand)} •••• ${e(k.last4)}`, `<code>${e(k.account_id)}</code>`, e(k.expires), badge(k.status === 'ACTIVE' ? 'EXECUTED' : 'CANCELLED').replace(/EXECUTED|CANCELLED/, e(k.status))]))}
 <h2>Устройства в Auth Core</h2>${devices?.status === 200 ? table(['Credential', 'Платформа', 'Уровень защиты', 'Аттестация', 'Состояние', 'Подключено'], (devices.json.devices ?? []).map((d) => [
       `<code>${e(d.credentialId)}</code>`, e(d.platform), e(d.securityLevel), e(d.attestationStatus), e(d.state), time(d.enrolledAt)])) : '<p class="note">Нет NEXUS ID или Auth Core не ответил.</p>'}
+${c.device_kind === 'PHONE' ? `<h2>Доступ</h2><form method="post" action="/customers/${e(c.id)}/reset-password">${csrfField(s)}<button class="secondary">Выдать новый пароль</button></form>` : ''}
 ${c.nexus_id ? `<h2>Цепочка доказательств</h2><form method="post" action="/customers/${e(c.id)}/verify-chain">${csrfField(s)}<button>Проверить цепочку закреплёнными ключами</button></form>` : ''}
 <h2>Транзакции</h2>${transactionsTable(tx)}`;
     view(res, s, '/customers', c.display_name, body);
@@ -246,6 +262,14 @@ ${r.transaction_id ? ` · <a href="/transactions/${e(r.transaction_id)}">тра�
       const health = await authCore.health();
       return sendJson(res, health.ok ? 200 : 503, { authCore: health, pinnedRevision: config.pinnedRevision, hsm: config.hsmDescription });
     }
+    if (req.method === 'POST' && path === '/api/customers') {
+      const body = await readBody(req);
+      try {
+        return sendJson(res, 201, addCustomer(db, config.bank, body));
+      } catch (error) {
+        return sendJson(res, 400, { code: 'INVALID', error: error.message });
+      }
+    }
     if (req.method === 'GET' && path === '/api/scenarios') return sendJson(res, 200, scenarios.list().map(({ run, ...rest }) => rest));
     if (req.method === 'POST' && (m = /^\/api\/scenarios\/([^/]+)\/run$/.exec(path))) return sendJson(res, 202, { runId: await scenarios.run(m[1]) });
     if (req.method === 'GET' && (m = /^\/api\/scenarios\/runs\/([^/]+)$/.exec(path))) {
@@ -310,6 +334,23 @@ ${r.transaction_id ? ` · <a href="/transactions/${e(r.transaction_id)}">тра�
         return transactionPage(res, s, m[1], message);
       }
       if ((m = /^\/customers\/([^/]+)\/verify-chain$/.exec(path))) return verifyChainPage(res, s, m[1]);
+      if (path === '/customers/new') {
+        try {
+          const opening = Math.round(Number(String(body.opening ?? '0').replace(',', '.')) * 100);
+          const created = addCustomer(db, config.bank, { login: body.login, displayName: body.displayName, openingMinor: opening });
+          return customersPage(res, s, credentialsMessage(created.login, created.password, `Клиент ${created.displayName} создан`));
+        } catch (error) {
+          return customersPage(res, s, `<div class="msg">${e(error.message)}</div>`);
+        }
+      }
+      if ((m = /^\/customers\/([^/]+)\/reset-password$/.exec(path))) {
+        try {
+          const reset = resetPassword(db, m[1]);
+          return customersPage(res, s, credentialsMessage(reset.login, reset.password, 'Новый пароль выдан; прежний больше не действует'));
+        } catch (error) {
+          return customersPage(res, s, `<div class="msg">${e(error.message)}</div>`);
+        }
+      }
       if ((m = /^\/scenarios\/([^/]+)\/run$/.exec(path))) {
         try {
           const runId = await scenarios.run(m[1]);

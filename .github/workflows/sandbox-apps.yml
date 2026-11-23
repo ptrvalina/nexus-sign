@@ -1,0 +1,118 @@
+# Release builds of the sandbox bank apps for testers anywhere:
+#   Android: a signed APK (artifact "voxtel-demo-apk"), published on the sandbox
+#            landing page with `sandbox/bin/sandbox publish-apk`.
+#   iPhone:  an App Store build uploaded to App Store Connect for TestFlight.
+# Run by hand: Actions → "sandbox apps (release)" → Run workflow.
+# Setup (secrets, App Store Connect): sandbox/docs/PUBLIC.ru.md.
+name: sandbox apps (release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: Public sandbox address built into the apps (https://…)
+        required: true
+      platforms:
+        description: Which apps to build
+        type: choice
+        options: [both, android, ios]
+        default: both
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    if: inputs.platforms != 'ios'
+    name: Android signed APK
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: sandbox/mobile/android
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Check inputs and secrets
+        env:
+          SERVER: ${{ inputs.server }}
+          KEYSTORE: ${{ secrets.VOXTEL_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          [[ "$SERVER" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo "::error::server must be https://domain"; exit 1; }
+          [ -n "$KEYSTORE" ] || { echo "::error::secret VOXTEL_ANDROID_KEYSTORE_BASE64 is missing (see sandbox/docs/PUBLIC.ru.md)"; exit 1; }
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      - name: Build the release APK
+        env:
+          SERVER: ${{ inputs.server }}
+          KEYSTORE: ${{ secrets.VOXTEL_ANDROID_KEYSTORE_BASE64 }}
+          VOXTEL_KEYSTORE_PASSWORD: ${{ secrets.VOXTEL_ANDROID_KEYSTORE_PASSWORD }}
+          VOXTEL_KEY_ALIAS: ${{ secrets.VOXTEL_ANDROID_KEY_ALIAS }}
+          VOXTEL_KEY_PASSWORD: ${{ secrets.VOXTEL_ANDROID_KEY_PASSWORD }}
+        run: |
+          export VOXTEL_KEYSTORE_FILE="$RUNNER_TEMP/voxtel.jks"
+          printf '%s' "$KEYSTORE" | base64 -d > "$VOXTEL_KEYSTORE_FILE"
+          sh ../../../android-sdk/gradlew --no-daemon assembleRelease \
+            -PsandboxServer="$SERVER" -PversionCode="${{ github.run_number }}" -PversionName="1.0.${{ github.run_number }}"
+          rm -f "$VOXTEL_KEYSTORE_FILE"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk | head -3
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: voxtel-demo-apk
+          path: sandbox/mobile/android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+  ios:
+    if: inputs.platforms != 'android'
+    name: iPhone build to TestFlight
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Check inputs and secrets
+        env:
+          SERVER: ${{ inputs.server }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          KEY: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+        run: |
+          [[ "$SERVER" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || { echo "::error::server must be https://domain"; exit 1; }
+          for v in TEAM KEY_ID ISSUER KEY; do [ -n "${!v}" ] || { echo "::error::an Apple secret is missing ($v); see sandbox/docs/PUBLIC.ru.md"; exit 1; }; done
+      - name: Build the bank address into the app
+        env:
+          SERVER: ${{ inputs.server }}
+        run: |
+          sed -i '' "s#static let defaultServer = \".*\"#static let defaultServer = \"$SERVER\"#" sandbox/mobile/ios/VoxTelBank/AppConfig.swift
+          grep defaultServer sandbox/mobile/ios/VoxTelBank/AppConfig.swift
+      - name: Archive and upload to App Store Connect
+        env:
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          KEY: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          BUNDLE_ID: ${{ vars.VOXTEL_IOS_BUNDLE_ID || 'com.nexis.voxtel.sandbox.bank' }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/AuthKey_$KEY_ID.p8"
+          printf '%s\n' "$KEY" > "$KEY_PATH"
+          AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$KEY_PATH" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER")
+          xcodebuild -project sandbox/mobile/ios/VoxTelBank.xcodeproj -scheme VoxTelBank -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/VoxTelBank.xcarchive" \
+            DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" MARKETING_VERSION=1.0 \
+            "${AUTH[@]}" archive
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/VoxTelBank.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" "${AUTH[@]}"
+          rm -f "$KEY_PATH"
+          echo "Uploaded build ${{ github.run_number }}. It appears in App Store Connect → TestFlight after Apple processes it (5–30 minutes)."

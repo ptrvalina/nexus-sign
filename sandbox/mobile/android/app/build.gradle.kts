@@ -3,6 +3,11 @@ plugins {
     kotlin("android")
 }
 
+// Release builds (.github/workflows/sandbox-apps.yml) pass the public sandbox
+// address and the signing key; a local debug build keeps the defaults.
+val defaultServer = (findProperty("sandboxServer") as String?) ?: "http://127.0.0.1:8191"
+val releaseKeystore = System.getenv("VOXTEL_KEYSTORE_FILE")
+
 android {
     namespace = "com.nexis.voxtel.sandbox"
     compileSdk = 34
@@ -11,8 +16,31 @@ android {
         applicationId = "com.nexis.voxtel.sandbox.bank"
         minSdk = 28
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = ((findProperty("versionCode") as String?) ?: "1").toInt()
+        versionName = (findProperty("versionName") as String?) ?: "1.0"
+        buildConfigField("String", "DEFAULT_SERVER", "\"$defaultServer\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("VOXTEL_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("VOXTEL_KEY_ALIAS")
+                keyPassword = System.getenv("VOXTEL_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 
     compileOptions {

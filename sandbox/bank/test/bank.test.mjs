@@ -211,3 +211,29 @@ test('configuration fails closed outside the sandbox', () => {
   assert.throws(() => loadConfig({ ...base, BANK_DB_PATH: '/var/lib/bank.sqlite' }), /inside SANDBOX_DATA_DIR/);
   assert.throws(() => loadConfig({ ...base, BANK_CLIENT_SECRET: '' }), /BANK_CLIENT_SECRET/);
 });
+
+test('a tester customer gets a valid IBAN, test funds as a ledger entry, a card and a one-time password', async () => {
+  const { db, customers, ledgerOk } = await setup();
+  const { addCustomer, resetPassword } = await import('../src/seed.mjs');
+  const { validIban } = await import('../src/payments.mjs');
+  const created = addCustomer(db, bankConfig, { login: 'Tester.One', displayName: 'Тестировщик', openingMinor: 250000 });
+  assert.equal(created.login, 'tester.one');
+  const account = db.prepare('SELECT * FROM accounts WHERE customer_id = ?').get(created.id);
+  assert.ok(validIban(account.iban), account.iban);
+  assert.equal(account.iban.length, 24);
+  assert.equal(account.balance_minor, 250000);
+  assert.ok(db.prepare('SELECT 1 FROM cards WHERE account_id = ?').get(account.id));
+  assert.ok(ledgerOk());
+  assert.equal(customers.login('tester.one', created.password).customer.login, 'tester.one');
+  assert.throws(() => addCustomer(db, bankConfig, { login: 'tester.one', displayName: 'X Y' }), /занят/);
+  assert.throws(() => addCustomer(db, bankConfig, { login: 'a', displayName: 'X Y' }), /логин/);
+  const reset = resetPassword(db, created.id);
+  assert.throws(() => customers.login('tester.one', created.password), { code: 'BAD_CREDENTIALS' });
+  assert.ok(customers.login('tester.one', reset.password).token);
+});
+
+test('public addresses must be https', () => {
+  const base = { SANDBOX_ENVIRONMENT: 'sandbox', AUTH_CORE_URL: 'http://auth-core:8080', SANDBOX_DATA_DIR: '/tmp/sbx', BANK_CLIENT_ID: 'b', BANK_CLIENT_SECRET: 's', CONSOLE_PASSWORD: 'p', DEMO_CUSTOMER_PASSWORD: 'd' };
+  assert.equal(loadConfig({ ...base, SANDBOX_PUBLIC_URL: 'https://demo.example.com/' }).publicUrl, 'https://demo.example.com');
+  assert.throws(() => loadConfig({ ...base, SANDBOX_PUBLIC_URL: 'http://demo.example.com' }), /https/);
+});

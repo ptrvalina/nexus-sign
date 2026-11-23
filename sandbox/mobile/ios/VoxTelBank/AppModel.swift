@@ -23,7 +23,7 @@ enum PaymentProgress: Equatable {
 final class AppModel: ObservableObject {
     static let serverKey = "sandbox.server"
 
-    @Published var serverAddress = UserDefaults.standard.string(forKey: AppModel.serverKey) ?? "https://192.168.0.118:8191"
+    @Published var serverAddress = UserDefaults.standard.string(forKey: AppModel.serverKey) ?? AppConfig.defaultServer
     @Published private(set) var bank: BankInfo?
     @Published private(set) var profile: Profile?
     @Published private(set) var accounts: [Account] = []

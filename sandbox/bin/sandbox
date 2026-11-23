@@ -4,6 +4,13 @@
 # project, a global setting or a file outside sandbox/.
 #
 #   sandbox/bin/sandbox up [--allow-unpinned]   check isolation, build, start, print the addresses
+#   sandbox/bin/sandbox up --public DOMAIN [--email ADDRESS]
+#                                               public mode on a server: https://DOMAIN for phones anywhere,
+#                                               https://console.DOMAIN for the console (Let's Encrypt via Caddy)
+#   sandbox/bin/sandbox public --off            back to local mode
+#   sandbox/bin/sandbox add-customer LOGIN "NAME" [BALANCE]   a tester's own customer; prints the password once
+#   sandbox/bin/sandbox publish-apk FILE.apk    offer the Android app on the landing page
+#   sandbox/bin/sandbox testflight URL          offer the TestFlight invitation on the landing page
 #   sandbox/bin/sandbox status | logs [service]
 #   sandbox/bin/sandbox scenarios               run every demo scenario through the console API
 #   sandbox/bin/sandbox cert <LAN-IPv4>         HTTPS for the device port, reachable on the Wi-Fi (phones)
@@ -20,6 +27,8 @@ REPO_DIR="$(cd "$SANDBOX_DIR/.." && pwd)"
 STATE="$SANDBOX_DIR/.state"
 PROJECT=nexus-sign-sandbox
 COMPOSE=(docker compose -p "$PROJECT" -f "$SANDBOX_DIR/compose.yaml")
+# Public mode, once chosen with 'up --public DOMAIN', stays on until 'public --off'.
+if [ -s "$STATE/public-domain" ]; then COMPOSE+=(-f "$SANDBOX_DIR/compose.public.yaml"); fi
 PIN_FILE="$SANDBOX_DIR/PINNED_AUTH_CORE"
 # After 'cert', the device port listens on the Wi-Fi until 'cert --remove'.
 if [ -z "${SANDBOX_DEVICE_BIND:-}" ] && [ -s "$STATE/device-ip" ]; then export SANDBOX_DEVICE_BIND=0.0.0.0; fi
@@ -74,7 +83,14 @@ EOF
 write_bank_env() {
   local revision tls=""
   revision="$(current_revision)"
-  if [ -s "$STATE/tls/server.crt" ] && [ -s "$STATE/tls/server.key" ]; then
+  local public=""
+  if [ -s "$STATE/public-domain" ]; then
+    public="SANDBOX_PUBLIC_URL=https://$(cat "$STATE/public-domain")
+SANDBOX_DOWNLOADS_DIR=/run/sandbox-downloads
+CONSOLE_SECURE_COOKIES=true"
+    [ -s "$STATE/testflight-url" ] && public="$public
+SANDBOX_TESTFLIGHT_URL=$(cat "$STATE/testflight-url")"
+  elif [ -s "$STATE/tls/server.crt" ] && [ -s "$STATE/tls/server.key" ]; then
     tls=$'DEVICE_TLS_CERT=/run/sandbox-tls/server.crt\nDEVICE_TLS_KEY=/run/sandbox-tls/server.key'
   fi
   ( umask 077
@@ -87,6 +103,7 @@ SANDBOX_FAULT_INJECTION=enabled
 SANDBOX_HSM_DESCRIPTION=SoftHSM 2.7.0 (test HSM, PKCS#11) - not a production HSM
 SANDBOX_PINNED_AUTH_CORE=$revision
 $tls
+$public
 EOF
   )
 }
@@ -133,11 +150,44 @@ check_isolation() {
   say "isolation checks passed (project $PROJECT; own network, database, Redis, SoftHSM token, credentials)"
 }
 
+# Public mode: Caddy in front of the bank, certificates from Let's Encrypt.
+setup_public() {
+  local domain="$1" email="$2" hash
+  [[ "$domain" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || fail "not a domain name: $domain"
+  mkdir -p "$STATE/downloads"
+  printf '%s' "$domain" > "$STATE/public-domain"
+  ( umask 077; [ -s "$STATE/console-gate-password" ] || password > "$STATE/console-gate-password" )
+  hash="$(docker run --rm caddy:2-alpine caddy hash-password --plaintext "$(cat "$STATE/console-gate-password")")"
+  {
+    printf '{\n'
+    [ -n "$email" ] && printf '\temail %s\n' "$email"
+    printf '}\n\n%s {\n\tencode gzip\n\treverse_proxy bank:8191\n}\n\n' "$domain"
+    printf 'console.%s {\n\tbasic_auth {\n\t\toperator %s\n\t}\n\treverse_proxy bank:8190\n}\n' "$domain" "$hash"
+  } > "$STATE/Caddyfile"
+  say "public mode: https://$domain (phones) and https://console.$domain (console)"
+}
+
+check_public() {
+  local domain ip
+  domain="$(cat "$STATE/public-domain")"
+  ip="$( (getent hosts "$domain" 2>/dev/null || dscacheutil -q host -a name "$domain" 2>/dev/null) | awk '/^[0-9]/ {print $1; exit} /ip_address/ {print $2; exit}')"
+  [ -n "$ip" ] || say "warning: $domain does not resolve yet. Point DNS A records for $domain and console.$domain at this server; Caddy obtains the certificates once they resolve."
+  [ -s "$STATE/Caddyfile" ] || fail "missing $STATE/Caddyfile: run 'sandbox/bin/sandbox up --public $domain' again"
+}
+
 print_access() {
   local port="${SANDBOX_CONSOLE_PORT:-8190}" dport="${SANDBOX_DEVICE_PORT:-8191}" scheme=http host="${SANDBOX_DEVICE_BIND:-127.0.0.1}"
   [ -s "$STATE/tls/server.crt" ] && scheme=https
   [ -s "$STATE/device-ip" ] && host="$(cat "$STATE/device-ip")"
   say ""
+  if [ -s "$STATE/public-domain" ]; then
+    local domain; domain="$(cat "$STATE/public-domain")"
+    say "Phones:         https://$domain   (landing page with downloads; the bank address in the app)"
+    say "Bank console:   https://console.$domain   first login operator / $(cat "$STATE/console-gate-password"), then operator / $(cat "$STATE/console-password")"
+    say "Demo customers: anna, piotr / $(cat "$STATE/customer-password");  testers: sandbox/bin/sandbox add-customer LOGIN \"NAME\""
+    say "Test HSM:       SoftHSM 2.7.0 inside the sandbox Auth Core container"
+    return
+  fi
   say "Bank console:   http://127.0.0.1:$port   (operator / $(cat "$STATE/console-password"))"
   say "Device port:    $scheme://$host:$dport   (bank app address; customers anna, piotr / $(cat "$STATE/customer-password"))"
   say "Test HSM:       SoftHSM 2.7.0 inside the sandbox Auth Core container"
@@ -172,9 +222,25 @@ run_scenarios() {
 cmd="${1:-}"; shift || true
 case "$cmd" in
   up)
-    allow=0; [ "${1:-}" = "--allow-unpinned" ] && allow=1
+    allow=0 domain="" email=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --allow-unpinned) allow=1 ;;
+        --public) domain="${2:-}"; shift ;;
+        --email) email="${2:-}"; shift ;;
+        *) fail "unknown option $1" ;;
+      esac
+      shift
+    done
     init_state
+    if [ -n "$domain" ]; then
+      command -v docker >/dev/null || fail "Docker is required"
+      setup_public "$domain" "$email"
+      COMPOSE=(docker compose -p "$PROJECT" -f "$SANDBOX_DIR/compose.yaml" -f "$SANDBOX_DIR/compose.public.yaml")
+      write_bank_env
+    fi
     check_isolation "$allow"
+    [ -s "$STATE/public-domain" ] && check_public
     "${COMPOSE[@]}" up -d --build --wait
     print_access
     ;;
@@ -205,6 +271,50 @@ case "$cmd" in
     say "Device port certificate for $ip written to $STATE/tls. Install $STATE/tls/ca.crt on the phones and trust it; then run"
     say "  sandbox/bin/sandbox up"
     say "and use https://$ip:${SANDBOX_DEVICE_PORT:-8191} as the bank address in the app."
+    ;;
+  public)
+    [ "${1:-}" = "--off" ] || fail "usage: sandbox/bin/sandbox public --off"
+    "${COMPOSE[@]}" down
+    rm -f "$STATE/public-domain" "$STATE/Caddyfile"
+    write_bank_env
+    say "local mode again: run 'sandbox/bin/sandbox up'"
+    ;;
+  add-customer)
+    [ $# -ge 2 ] || fail 'usage: sandbox/bin/sandbox add-customer LOGIN "NAME" [BALANCE, default 10000]'
+    balance="${3:-10000}"
+    [[ "$balance" =~ ^[0-9]+([.][0-9]{1,2})?$ ]] || fail "balance: a number such as 10000 or 2500.50"
+    body="$(LOGIN="$1" NAME="$2" BALANCE="$balance" python3 -c 'import json, os; print(json.dumps({"login": os.environ["LOGIN"], "displayName": os.environ["NAME"], "openingMinor": round(float(os.environ["BALANCE"]) * 100)}))')"
+    answer="$(curl -s -u "operator:$(cat "$STATE/console-password")" -H 'Content-Type: application/json' -d "$body" "http://127.0.0.1:${SANDBOX_CONSOLE_PORT:-8190}/api/customers")"
+    ANSWER="$answer" URL="$([ -s "$STATE/public-domain" ] && echo "https://$(cat "$STATE/public-domain")" || echo "")" python3 -c '
+import json, os, sys
+try:
+    a = json.loads(os.environ.get("ANSWER") or "{}")
+except ValueError:
+    a = {}
+if not a.get("password"):
+    sys.exit("sandbox: " + (a.get("error") or "the bank did not answer: is the sandbox running?"))
+print("Login:    " + a["login"])
+print("Password: " + a["password"])
+if os.environ["URL"]:
+    print("Bank address in the app: " + os.environ["URL"])
+    print("Download: " + os.environ["URL"] + "/")'
+    ;;
+  publish-apk)
+    file="${1:-}"
+    [ -f "$file" ] || fail "usage: sandbox/bin/sandbox publish-apk path/to/app.apk"
+    [ "$(head -c 2 "$file")" = "PK" ] || fail "$file is not an APK"
+    mkdir -p "$STATE/downloads"
+    cp "$file" "$STATE/downloads/voxtel-demo.apk.tmp" && mv "$STATE/downloads/voxtel-demo.apk.tmp" "$STATE/downloads/voxtel-demo.apk"
+    chmod 644 "$STATE/downloads/voxtel-demo.apk"
+    say "published: $( [ -s "$STATE/public-domain" ] && echo "https://$(cat "$STATE/public-domain")/download/voxtel-demo.apk" || echo "$STATE/downloads/voxtel-demo.apk (shown in public mode)")"
+    ;;
+  testflight)
+    url="${1:-}"
+    [[ "$url" =~ ^https://testflight\.apple\.com/join/[A-Za-z0-9]+$ ]] || fail "usage: sandbox/bin/sandbox testflight https://testflight.apple.com/join/XXXXXXXX"
+    printf '%s' "$url" > "$STATE/testflight-url"
+    write_bank_env
+    "${COMPOSE[@]}" up -d --wait bank
+    say "landing page now offers $url"
     ;;
   down) "${COMPOSE[@]}" down ;;
   reset) "${COMPOSE[@]}" down --volumes --remove-orphans; say "sandbox data removed; 'up' starts with fresh demo data" ;;

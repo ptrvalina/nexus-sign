@@ -506,6 +506,21 @@ jobs:
         run: sandbox/bin/sandbox up --allow-unpinned
       - name: End-to-end tests and every demonstration scenario against the real Auth Core
         run: node --test sandbox/tests/e2e.test.mjs
+      # *.localhost names get certificates from Caddy's internal CA, so the
+      # public path (Caddy, landing page, download, console gate) runs in CI.
+      - name: Public mode behind Caddy
+        run: |
+          sandbox/bin/sandbox up --public sandbox.localhost --allow-unpinned
+          printf 'PK\003\004 test' > /tmp/test.apk && sandbox/bin/sandbox publish-apk /tmp/test.apk
+          r="--resolve sandbox.localhost:443:127.0.0.1 --resolve console.sandbox.localhost:443:127.0.0.1 -k -s -o /dev/null -w %{http_code}"
+          for i in $(seq 1 30); do [ "$(curl $r https://sandbox.localhost/healthz)" = 200 ] && break; sleep 2; done
+          test "$(curl $r https://sandbox.localhost/healthz)" = 200
+          test "$(curl $r https://sandbox.localhost/)" = 200
+          test "$(curl $r https://sandbox.localhost/download/voxtel-demo.apk)" = 200
+          test "$(curl $r https://sandbox.localhost/v1/authorizations -X POST)" = 404
+          test "$(curl $r https://console.sandbox.localhost/)" = 401
+          test "$(curl $r -u "operator:$(cat sandbox/.state/console-gate-password)" https://console.sandbox.localhost/login)" = 200
+          sandbox/bin/sandbox add-customer tester.ci "CI Tester" 500
       - name: Logs
         if: failure()
         run: sandbox/bin/sandbox logs

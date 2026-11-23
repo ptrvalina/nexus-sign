@@ -24,6 +24,7 @@ import { createScenarioEngine } from './scenarios/engine.mjs';
 import { createSoftwareDevice } from './scenarios/device.mjs';
 import { errorBody, errorStatus, escapeHtml, log, sendHtml, sendJson } from './http.mjs';
 import { recordEvent } from './events.mjs';
+import { createPublicPages } from './public.mjs';
 
 let config;
 try {
@@ -45,6 +46,7 @@ const customers = createCustomers({ db, authCore });
 const appApi = createAppApi({ db, bank: config.bank, customers, payments });
 const device = createSoftwareDevice({ dataDir: config.dataDir, deviceBaseUrl: `${config.device.tlsCert ? 'https' : 'http'}://127.0.0.1:${config.device.port}` });
 const scenarios = createScenarioEngine({ db, payments, customers, device, faults, authCore });
+const publicPages = createPublicPages(config);
 const consoleHandler = createConsole({ db, config, payments, scenarios, authCore, faults });
 
 // Device endpoints of Auth Core. POST /v1/mobile/sessions is the bank's (it needs the bank token) and is not forwarded.
@@ -80,6 +82,8 @@ const deviceHandler = async (req, res) => {
     }
     if (DEVICE_PATHS.some((p) => p.test(pathname))) return forwardToAuthCore(req, res);
     if (req.method === 'GET' && pathname === '/healthz') return sendJson(res, 200, { ok: true });
+    if (req.method === 'GET' && pathname === '/') return publicPages.landing(res);
+    if (req.method === 'GET' && pathname.startsWith('/download/') && publicPages.download(res, pathname.slice('/download/'.length))) return;
     if (!(await appApi(req, res, pathname))) sendJson(res, 404, { code: 'NOT_FOUND' });
   } catch (error) {
     if (errorStatus(error) >= 500) log('error', 'device port request failed', { path: pathname, error: error.message });

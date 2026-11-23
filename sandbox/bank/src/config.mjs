@@ -20,6 +20,13 @@ function required(env, name) {
   return value;
 }
 
+function publicUrl(value) {
+  if (!value) return null;
+  const url = new URL(value);
+  if (url.protocol !== 'https:') throw new ConfigError(`${value}: public addresses must be https`);
+  return url.toString().replace(/\/$/, '');
+}
+
 function port(env, name, fallback) {
   const value = Number(env[name] ?? fallback);
   if (!Number.isInteger(value) || value < 1 || value > 65535) throw new ConfigError(`${name} must be a TCP port`);
@@ -71,6 +78,11 @@ export function loadConfig(env = process.env) {
     faultInjection: env.SANDBOX_FAULT_INJECTION === 'enabled',
     reconcileIntervalMs: Number(env.RECONCILE_INTERVAL_MS ?? 1000),
     hsmDescription: env.SANDBOX_HSM_DESCRIPTION ?? 'not reported',
+    // Public mode (sandbox/bin/sandbox up --public DOMAIN): the address phones use, the
+    // TestFlight invitation and the directory with the Android APK offered on the landing page.
+    publicUrl: publicUrl(env.SANDBOX_PUBLIC_URL),
+    testflightUrl: publicUrl(env.SANDBOX_TESTFLIGHT_URL),
+    downloadsDir: env.SANDBOX_DOWNLOADS_DIR || null,
     pinnedRevision: env.SANDBOX_PINNED_AUTH_CORE ?? 'not reported',
   };
 }
